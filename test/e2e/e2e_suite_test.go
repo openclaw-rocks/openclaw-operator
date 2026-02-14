@@ -112,6 +112,9 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
 				},
 				Spec: openclawv1alpha1.OpenClawInstanceSpec{
 					Image: openclawv1alpha1.ImageSpec{
