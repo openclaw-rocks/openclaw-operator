@@ -372,7 +372,7 @@ See the full [roadmap](ROADMAP.md) for details.
 
 ## Don't Want to Self-Host?
 
-[OpenClaw.rocks](https://openclaw.rocks) offers fully managed hosting starting at **EUR 10/mo**. No Kubernetes cluster required. Setup, updates, and 24/7 uptime handled for you.
+[OpenClaw.rocks](https://openclaw.rocks) offers fully managed hosting starting at **EUR 15/mo**. No Kubernetes cluster required. Setup, updates, and 24/7 uptime handled for you.
 
 ## Contributing
 
