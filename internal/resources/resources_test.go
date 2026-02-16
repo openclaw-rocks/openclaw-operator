@@ -4025,3 +4025,302 @@ func TestBuildInitScript_JSON_Overwrite_NoBusyboxRegression(t *testing.T) {
 		t.Errorf("JSON overwrite should use cp, got: %q", script)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Feature: Runtime dependency init containers (pnpm, Python/uv)
+// ---------------------------------------------------------------------------
+
+func TestBuildStatefulSet_RuntimeDeps_Pnpm(t *testing.T) {
+	instance := newTestInstance("pnpm")
+	instance.Spec.RuntimeDeps.Pnpm = true
+
+	sts := BuildStatefulSet(instance)
+	initContainers := sts.Spec.Template.Spec.InitContainers
+
+	// Should have init-pnpm container
+	var pnpmContainer *corev1.Container
+	for i := range initContainers {
+		if initContainers[i].Name == "init-pnpm" {
+			pnpmContainer = &initContainers[i]
+			break
+		}
+	}
+	if pnpmContainer == nil {
+		t.Fatal("init-pnpm container not found")
+	}
+
+	// Should use the OpenClaw image (has Node.js + corepack)
+	if pnpmContainer.Image != GetImage(instance) {
+		t.Errorf("init-pnpm image = %q, want %q", pnpmContainer.Image, GetImage(instance))
+	}
+
+	// Should mount data volume
+	assertVolumeMount(t, pnpmContainer.VolumeMounts, "data", "/home/openclaw/.openclaw")
+	// Should mount pnpm-tmp volume
+	assertVolumeMount(t, pnpmContainer.VolumeMounts, "pnpm-tmp", "/tmp")
+
+	// Script should check for existing install (idempotent)
+	script := pnpmContainer.Command[2]
+	if !strings.Contains(script, "already installed") {
+		t.Error("pnpm init script should check for existing install")
+	}
+	if !strings.Contains(script, "corepack enable pnpm") {
+		t.Error("pnpm init script should use corepack")
+	}
+
+	// Security context
+	if pnpmContainer.SecurityContext.ReadOnlyRootFilesystem == nil || *pnpmContainer.SecurityContext.ReadOnlyRootFilesystem {
+		t.Error("init-pnpm should have writable root filesystem")
+	}
+	if pnpmContainer.SecurityContext.RunAsNonRoot == nil || !*pnpmContainer.SecurityContext.RunAsNonRoot {
+		t.Error("init-pnpm should run as non-root")
+	}
+
+	// pnpm-tmp volume should exist
+	pnpmTmpVol := findVolume(sts.Spec.Template.Spec.Volumes, "pnpm-tmp")
+	if pnpmTmpVol == nil {
+		t.Fatal("pnpm-tmp volume not found")
+	}
+	if pnpmTmpVol.EmptyDir == nil {
+		t.Error("pnpm-tmp should be an emptyDir volume")
+	}
+
+	// PATH should be extended in main container
+	mainContainer := sts.Spec.Template.Spec.Containers[0]
+	var pathEnv *corev1.EnvVar
+	for i := range mainContainer.Env {
+		if mainContainer.Env[i].Name == "PATH" {
+			pathEnv = &mainContainer.Env[i]
+			break
+		}
+	}
+	if pathEnv == nil {
+		t.Fatal("PATH env var not found in main container")
+	}
+	if !strings.Contains(pathEnv.Value, RuntimeDepsLocalBin) {
+		t.Errorf("PATH should contain %q, got %q", RuntimeDepsLocalBin, pathEnv.Value)
+	}
+}
+
+func TestBuildStatefulSet_RuntimeDeps_Python(t *testing.T) {
+	instance := newTestInstance("python")
+	instance.Spec.RuntimeDeps.Python = true
+
+	sts := BuildStatefulSet(instance)
+	initContainers := sts.Spec.Template.Spec.InitContainers
+
+	// Should have init-python container
+	var pythonContainer *corev1.Container
+	for i := range initContainers {
+		if initContainers[i].Name == "init-python" {
+			pythonContainer = &initContainers[i]
+			break
+		}
+	}
+	if pythonContainer == nil {
+		t.Fatal("init-python container not found")
+	}
+
+	// Should use the uv image
+	if pythonContainer.Image != UvImage {
+		t.Errorf("init-python image = %q, want %q", pythonContainer.Image, UvImage)
+	}
+
+	// Should mount data volume
+	assertVolumeMount(t, pythonContainer.VolumeMounts, "data", "/home/openclaw/.openclaw")
+	// Should mount python-tmp volume
+	assertVolumeMount(t, pythonContainer.VolumeMounts, "python-tmp", "/tmp")
+
+	// Script should check for existing install (idempotent)
+	script := pythonContainer.Command[2]
+	if !strings.Contains(script, "already installed") {
+		t.Error("python init script should check for existing install")
+	}
+	if !strings.Contains(script, "uv python install 3.12") {
+		t.Error("python init script should install Python 3.12")
+	}
+	if !strings.Contains(script, "cp /usr/local/bin/uv") {
+		t.Error("python init script should copy uv binary")
+	}
+
+	// Security context
+	if pythonContainer.SecurityContext.ReadOnlyRootFilesystem == nil || *pythonContainer.SecurityContext.ReadOnlyRootFilesystem {
+		t.Error("init-python should have writable root filesystem")
+	}
+	if pythonContainer.SecurityContext.RunAsNonRoot == nil || !*pythonContainer.SecurityContext.RunAsNonRoot {
+		t.Error("init-python should run as non-root")
+	}
+
+	// python-tmp volume should exist
+	pythonTmpVol := findVolume(sts.Spec.Template.Spec.Volumes, "python-tmp")
+	if pythonTmpVol == nil {
+		t.Fatal("python-tmp volume not found")
+	}
+
+	// PATH should be extended in main container
+	mainContainer := sts.Spec.Template.Spec.Containers[0]
+	var pathEnv *corev1.EnvVar
+	for i := range mainContainer.Env {
+		if mainContainer.Env[i].Name == "PATH" {
+			pathEnv = &mainContainer.Env[i]
+			break
+		}
+	}
+	if pathEnv == nil {
+		t.Fatal("PATH env var not found in main container")
+	}
+}
+
+func TestBuildStatefulSet_RuntimeDeps_Both(t *testing.T) {
+	instance := newTestInstance("both-deps")
+	instance.Spec.RuntimeDeps.Pnpm = true
+	instance.Spec.RuntimeDeps.Python = true
+
+	sts := BuildStatefulSet(instance)
+	initContainers := sts.Spec.Template.Spec.InitContainers
+
+	var hasPnpm, hasPython bool
+	var pnpmIdx, pythonIdx int
+	for i, c := range initContainers {
+		if c.Name == "init-pnpm" {
+			hasPnpm = true
+			pnpmIdx = i
+		}
+		if c.Name == "init-python" {
+			hasPython = true
+			pythonIdx = i
+		}
+	}
+	if !hasPnpm {
+		t.Error("init-pnpm not found")
+	}
+	if !hasPython {
+		t.Error("init-python not found")
+	}
+	if hasPnpm && hasPython && pnpmIdx >= pythonIdx {
+		t.Error("init-pnpm should come before init-python")
+	}
+
+	// Both tmp volumes should exist
+	if findVolume(sts.Spec.Template.Spec.Volumes, "pnpm-tmp") == nil {
+		t.Error("pnpm-tmp volume not found")
+	}
+	if findVolume(sts.Spec.Template.Spec.Volumes, "python-tmp") == nil {
+		t.Error("python-tmp volume not found")
+	}
+}
+
+func TestBuildStatefulSet_RuntimeDeps_None(t *testing.T) {
+	instance := newTestInstance("no-deps")
+	// RuntimeDeps defaults to zero value (both false)
+
+	sts := BuildStatefulSet(instance)
+	initContainers := sts.Spec.Template.Spec.InitContainers
+
+	for _, c := range initContainers {
+		if c.Name == "init-pnpm" || c.Name == "init-python" {
+			t.Errorf("unexpected runtime dep init container: %s", c.Name)
+		}
+	}
+
+	// No runtime dep tmp volumes
+	if findVolume(sts.Spec.Template.Spec.Volumes, "pnpm-tmp") != nil {
+		t.Error("pnpm-tmp volume should not exist")
+	}
+	if findVolume(sts.Spec.Template.Spec.Volumes, "python-tmp") != nil {
+		t.Error("python-tmp volume should not exist")
+	}
+
+	// No PATH override
+	mainContainer := sts.Spec.Template.Spec.Containers[0]
+	for _, e := range mainContainer.Env {
+		if e.Name == "PATH" {
+			t.Error("PATH env var should not be set when no runtime deps")
+		}
+	}
+}
+
+func TestBuildStatefulSet_RuntimeDeps_InitContainerOrder(t *testing.T) {
+	instance := newTestInstance("order")
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
+	}
+	instance.Spec.RuntimeDeps.Pnpm = true
+	instance.Spec.RuntimeDeps.Python = true
+	instance.Spec.Skills = []string{"some-skill"}
+	instance.Spec.InitContainers = []corev1.Container{
+		{Name: "user-init", Image: "busybox:1.37"},
+	}
+
+	sts := BuildStatefulSet(instance)
+	initContainers := sts.Spec.Template.Spec.InitContainers
+
+	expected := []string{"init-config", "init-pnpm", "init-python", "init-skills", "user-init"}
+	if len(initContainers) != len(expected) {
+		t.Fatalf("expected %d init containers, got %d: %v", len(expected), len(initContainers),
+			func() []string {
+				names := make([]string, len(initContainers))
+				for i, c := range initContainers {
+					names[i] = c.Name
+				}
+				return names
+			}())
+	}
+	for i, name := range expected {
+		if initContainers[i].Name != name {
+			t.Errorf("initContainers[%d] = %q, want %q", i, initContainers[i].Name, name)
+		}
+	}
+}
+
+func TestBuildStatefulSet_RuntimeDeps_Pnpm_CABundle(t *testing.T) {
+	instance := newTestInstance("pnpm-ca")
+	instance.Spec.RuntimeDeps.Pnpm = true
+	instance.Spec.Security.CABundle = &openclawv1alpha1.CABundleSpec{
+		ConfigMapName: "my-ca",
+		Key:           "ca.crt",
+	}
+
+	sts := BuildStatefulSet(instance)
+	var pnpmContainer *corev1.Container
+	for i := range sts.Spec.Template.Spec.InitContainers {
+		if sts.Spec.Template.Spec.InitContainers[i].Name == "init-pnpm" {
+			pnpmContainer = &sts.Spec.Template.Spec.InitContainers[i]
+			break
+		}
+	}
+	if pnpmContainer == nil {
+		t.Fatal("init-pnpm container not found")
+	}
+
+	// Should have CA bundle mount
+	assertVolumeMount(t, pnpmContainer.VolumeMounts, "ca-bundle", "/etc/ssl/certs/custom-ca-bundle.crt")
+
+	// Should have NODE_EXTRA_CA_CERTS env
+	var hasCAEnv bool
+	for _, e := range pnpmContainer.Env {
+		if e.Name == "NODE_EXTRA_CA_CERTS" {
+			hasCAEnv = true
+			break
+		}
+	}
+	if !hasCAEnv {
+		t.Error("init-pnpm should have NODE_EXTRA_CA_CERTS when CA bundle is configured")
+	}
+}
+
+func TestConfigHash_ChangesWithRuntimeDeps(t *testing.T) {
+	instance := newTestInstance("hash-rd")
+
+	sts1 := BuildStatefulSet(instance)
+	hash1 := sts1.Spec.Template.Annotations["openclaw.rocks/config-hash"]
+
+	instance.Spec.RuntimeDeps.Pnpm = true
+
+	sts2 := BuildStatefulSet(instance)
+	hash2 := sts2.Spec.Template.Annotations["openclaw.rocks/config-hash"]
+
+	if hash1 == hash2 {
+		t.Error("config hash should change when runtime deps are enabled")
+	}
+}

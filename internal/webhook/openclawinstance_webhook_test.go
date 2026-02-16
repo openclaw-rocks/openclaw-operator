@@ -1203,6 +1203,38 @@ func TestValidateCreate_InitContainers_ReservedName_InitSkills(t *testing.T) {
 	}
 }
 
+func TestValidateCreate_InitContainers_ReservedName_InitPnpm(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.InitContainers = []corev1.Container{
+		{Name: "init-pnpm", Image: "busybox:1.37"},
+	}
+
+	_, err := v.ValidateCreate(context.Background(), instance)
+	if err == nil {
+		t.Fatal("expected error for reserved init container name 'init-pnpm'")
+	}
+	if !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("error should mention reserved, got: %v", err)
+	}
+}
+
+func TestValidateCreate_InitContainers_ReservedName_InitPython(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.InitContainers = []corev1.Container{
+		{Name: "init-python", Image: "busybox:1.37"},
+	}
+
+	_, err := v.ValidateCreate(context.Background(), instance)
+	if err == nil {
+		t.Fatal("expected error for reserved init container name 'init-python'")
+	}
+	if !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("error should mention reserved, got: %v", err)
+	}
+}
+
 func TestValidateCreate_InitContainers_EmptyName(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()

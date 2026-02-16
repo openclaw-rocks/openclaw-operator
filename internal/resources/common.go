@@ -42,6 +42,12 @@ const (
 	// DefaultCABundleKey is the default key in a ConfigMap or Secret for the CA bundle
 	DefaultCABundleKey = "ca-bundle.crt"
 
+	// UvImage is the image used for Python/uv runtime dependency installation
+	UvImage = "ghcr.io/astral-sh/uv:0.6"
+
+	// RuntimeDepsLocalBin is the path where runtime dependency binaries are installed on the PVC
+	RuntimeDepsLocalBin = "/home/openclaw/.openclaw/.local/bin"
+
 	// AppName is the application name used in labels
 	AppName = "openclaw"
 

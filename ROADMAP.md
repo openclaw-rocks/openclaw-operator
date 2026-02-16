@@ -33,9 +33,7 @@
 - Auto-generated gateway token auth (bypasses Bonjour/mDNS pairing)
 - `OPENCLAW_DISABLE_BONJOUR=1` set unconditionally
 
-## In Progress
-
-### v0.10.0 (Phase 2+3 — [#84](https://github.com/openclaw-rocks/k8s-operator/pull/84))
+### v0.10.0 (Phase 2+3)
 - ServiceAccount annotations for IRSA / GCP Workload Identity
 - Custom CA bundle injection (`spec.security.caBundle`)
 - Extra volumes and volume mounts (`spec.extraVolumes`, `spec.extraVolumeMounts`)
@@ -46,6 +44,8 @@
 - Custom init containers (`spec.initContainers`)
 - JSON5 config support (`spec.config.format: json5`)
 - Docs: model fallback chains, custom AI providers (Ollama/vLLM), External Secrets Operator
+- Runtime dependency init containers — `spec.runtimeDeps.pnpm` and `spec.runtimeDeps.python` ([#89](https://github.com/openclaw-rocks/k8s-operator/issues/89))
+- Ollama sidecar pattern (documented example + NetworkPolicy rules)
 
 ## Planned
 
@@ -54,8 +54,6 @@
 - Comprehensive conformance test suite
 - Performance benchmarks and optimization
 - Operator SDK scorecard compliance
-- Ollama sidecar pattern (documented example + NetworkPolicy rules)
-- Runtime dependency init containers (pnpm, Python/uv for skills)
 
 ### Future
 - Multi-cluster federation

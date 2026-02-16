@@ -284,6 +284,14 @@ func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecre
 		})
 	}
 
+	// Prepend runtime deps bin directory to PATH so pnpm/python are discoverable
+	if instance.Spec.RuntimeDeps.Pnpm || instance.Spec.RuntimeDeps.Python {
+		env = append(env, corev1.EnvVar{
+			Name:  "PATH",
+			Value: RuntimeDepsLocalBin + ":/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		})
+	}
+
 	return append(env, instance.Spec.Env...)
 }
 
@@ -364,6 +372,14 @@ func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance) []corev1.C
 			},
 			VolumeMounts: mounts,
 		})
+	}
+
+	// Runtime dependency init containers (run before skills so skills can use pnpm/python)
+	if instance.Spec.RuntimeDeps.Pnpm {
+		initContainers = append(initContainers, buildPnpmInitContainer(instance))
+	}
+	if instance.Spec.RuntimeDeps.Python {
+		initContainers = append(initContainers, buildPythonInitContainer(instance))
 	}
 
 	// Skills init container (only if skills are defined)
@@ -515,6 +531,132 @@ func buildSkillsInitContainer(instance *openclawv1alpha1.OpenClawInstance) *core
 			RunAsNonRoot:             Ptr(true),
 			Capabilities: &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
+			},
+		},
+		VolumeMounts: mounts,
+	}
+}
+
+// buildPnpmInitContainer creates the init container that installs pnpm via corepack.
+func buildPnpmInitContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
+	script := `set -e
+INSTALL_DIR=/home/openclaw/.openclaw/.local
+mkdir -p "$INSTALL_DIR/bin"
+if [ -x "$INSTALL_DIR/bin/pnpm" ]; then echo "pnpm already installed"; exit 0; fi
+export COREPACK_HOME="$INSTALL_DIR/corepack"
+corepack enable pnpm --install-directory "$INSTALL_DIR/bin"
+pnpm --version`
+
+	mounts := []corev1.VolumeMount{
+		{Name: "data", MountPath: "/home/openclaw/.openclaw"},
+		{Name: "pnpm-tmp", MountPath: "/tmp"},
+	}
+
+	env := []corev1.EnvVar{
+		{Name: "HOME", Value: "/tmp"},
+		{Name: "NPM_CONFIG_CACHE", Value: "/tmp/.npm"},
+	}
+
+	// CA bundle for pnpm init (may make network calls)
+	if cab := instance.Spec.Security.CABundle; cab != nil {
+		key := cab.Key
+		if key == "" {
+			key = DefaultCABundleKey
+		}
+		mounts = append(mounts, corev1.VolumeMount{
+			Name:      "ca-bundle",
+			MountPath: "/etc/ssl/certs/custom-ca-bundle.crt",
+			SubPath:   key,
+			ReadOnly:  true,
+		})
+		env = append(env, corev1.EnvVar{
+			Name:  "NODE_EXTRA_CA_CERTS",
+			Value: "/etc/ssl/certs/custom-ca-bundle.crt",
+		})
+	}
+
+	return corev1.Container{
+		Name:                     "init-pnpm",
+		Image:                    GetImage(instance),
+		Command:                  []string{"sh", "-c", script},
+		ImagePullPolicy:          getPullPolicy(instance),
+		Env:                      env,
+		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
+		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: Ptr(false),
+			ReadOnlyRootFilesystem:   Ptr(false), // corepack writes to node internals
+			RunAsNonRoot:             Ptr(true),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+			SeccompProfile: &corev1.SeccompProfile{
+				Type: corev1.SeccompProfileTypeRuntimeDefault,
+			},
+		},
+		VolumeMounts: mounts,
+	}
+}
+
+// buildPythonInitContainer creates the init container that installs Python 3.12 and uv.
+func buildPythonInitContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
+	script := `set -e
+INSTALL_DIR=/home/openclaw/.openclaw/.local
+mkdir -p "$INSTALL_DIR/bin"
+if [ -x "$INSTALL_DIR/bin/python3" ]; then echo "Python already installed"; exit 0; fi
+export UV_PYTHON_INSTALL_DIR="$INSTALL_DIR/python"
+uv python install 3.12
+ln -sf "$INSTALL_DIR/python/"cpython-3.12*/bin/python3 "$INSTALL_DIR/bin/python3"
+ln -sf "$INSTALL_DIR/python/"cpython-3.12*/bin/python3 "$INSTALL_DIR/bin/python"
+cp /usr/local/bin/uv "$INSTALL_DIR/bin/uv"
+python3 --version
+uv --version`
+
+	mounts := []corev1.VolumeMount{
+		{Name: "data", MountPath: "/home/openclaw/.openclaw"},
+		{Name: "python-tmp", MountPath: "/tmp"},
+	}
+
+	env := []corev1.EnvVar{
+		{Name: "HOME", Value: "/tmp"},
+		{Name: "XDG_CACHE_HOME", Value: "/tmp/.cache"},
+	}
+
+	// CA bundle for uv python install (downloads from the internet)
+	if cab := instance.Spec.Security.CABundle; cab != nil {
+		key := cab.Key
+		if key == "" {
+			key = DefaultCABundleKey
+		}
+		mounts = append(mounts, corev1.VolumeMount{
+			Name:      "ca-bundle",
+			MountPath: "/etc/ssl/certs/custom-ca-bundle.crt",
+			SubPath:   key,
+			ReadOnly:  true,
+		})
+		env = append(env, corev1.EnvVar{
+			Name:  "SSL_CERT_FILE",
+			Value: "/etc/ssl/certs/custom-ca-bundle.crt",
+		})
+	}
+
+	return corev1.Container{
+		Name:                     "init-python",
+		Image:                    UvImage,
+		Command:                  []string{"sh", "-c", script},
+		ImagePullPolicy:          corev1.PullIfNotPresent,
+		Env:                      env,
+		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
+		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: Ptr(false),
+			ReadOnlyRootFilesystem:   Ptr(false), // uv needs writable paths
+			RunAsNonRoot:             Ptr(true),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+			SeccompProfile: &corev1.SeccompProfile{
+				Type: corev1.SeccompProfileTypeRuntimeDefault,
 			},
 		},
 		VolumeMounts: mounts,
@@ -694,6 +836,24 @@ func buildVolumes(instance *openclawv1alpha1.OpenClawInstance) []corev1.Volume {
 	if len(instance.Spec.Skills) > 0 {
 		volumes = append(volumes, corev1.Volume{
 			Name: "skills-tmp",
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		})
+	}
+
+	// Runtime dep tmp volumes
+	if instance.Spec.RuntimeDeps.Pnpm {
+		volumes = append(volumes, corev1.Volume{
+			Name: "pnpm-tmp",
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		})
+	}
+	if instance.Spec.RuntimeDeps.Python {
+		volumes = append(volumes, corev1.Volume{
+			Name: "python-tmp",
 			VolumeSource: corev1.VolumeSource{
 				EmptyDir: &corev1.EmptyDirVolumeSource{},
 			},
@@ -986,6 +1146,10 @@ func calculateConfigHash(instance *openclawv1alpha1.OpenClawInstance) string {
 	if len(instance.Spec.InitContainers) > 0 {
 		icData, _ := json.Marshal(instance.Spec.InitContainers)
 		h.Write(icData)
+	}
+	if instance.Spec.RuntimeDeps.Pnpm || instance.Spec.RuntimeDeps.Python {
+		rdData, _ := json.Marshal(instance.Spec.RuntimeDeps)
+		h.Write(rdData)
 	}
 	return hex.EncodeToString(h.Sum(nil)[:8])
 }

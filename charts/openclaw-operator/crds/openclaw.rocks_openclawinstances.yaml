@@ -4926,6 +4926,20 @@ spec:
                   When set, the operator restores PVC data from this path before creating the StatefulSet.
                   Cleared automatically after successful restore.
                 type: string
+              runtimeDeps:
+                description: |-
+                  RuntimeDeps configures built-in init containers that install runtime
+                  dependencies (pnpm, Python) for MCP servers and skills.
+                properties:
+                  pnpm:
+                    description: Pnpm installs pnpm via corepack for npm-based MCP
+                      servers and skills.
+                    type: boolean
+                  python:
+                    description: Python installs Python 3.12 and uv for Python-based
+                      MCP servers and skills.
+                    type: boolean
+                type: object
               security:
                 description: Security specifies security-related configuration
                 properties:
@@ -8695,6 +8709,10 @@ spec:
                   deployment:
                     description: Deployment is the name of the legacy Deployment (deprecated,
                       used during migration)
+                    type: string
+                  gatewayTokenSecret:
+                    description: GatewayTokenSecret is the name of the auto-generated
+                      gateway token Secret
                     type: string
                   networkPolicy:
                     description: NetworkPolicy is the name of the managed NetworkPolicy

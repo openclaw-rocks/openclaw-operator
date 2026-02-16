@@ -103,6 +103,11 @@ type OpenClawInstanceSpec struct {
 	// +optional
 	RestoreFrom string `json:"restoreFrom,omitempty"`
 
+	// RuntimeDeps configures built-in init containers that install runtime
+	// dependencies (pnpm, Python) for MCP servers and skills.
+	// +optional
+	RuntimeDeps RuntimeDepsSpec `json:"runtimeDeps,omitempty"`
+
 	// AutoUpdate configures automatic version updates from the OCI registry
 	// +optional
 	AutoUpdate AutoUpdateSpec `json:"autoUpdate,omitempty"`
@@ -716,6 +721,18 @@ type AutoUpdateSpec struct {
 	// +kubebuilder:default="10m"
 	// +optional
 	HealthCheckTimeout string `json:"healthCheckTimeout,omitempty"`
+}
+
+// RuntimeDepsSpec configures built-in init containers that install runtime
+// dependencies to the data PVC for use by MCP servers and skills.
+type RuntimeDepsSpec struct {
+	// Pnpm installs pnpm via corepack for npm-based MCP servers and skills.
+	// +optional
+	Pnpm bool `json:"pnpm,omitempty"`
+
+	// Python installs Python 3.12 and uv for Python-based MCP servers and skills.
+	// +optional
+	Python bool `json:"python,omitempty"`
 }
 
 // AutoUpdateStatus tracks the state of automatic version updates
