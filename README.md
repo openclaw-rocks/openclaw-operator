@@ -45,6 +45,7 @@ The operator reconciles this into a fully managed stack of 9+ Kubernetes resourc
 | **Secure** | Hardened by default | Non-root (UID 1000), all capabilities dropped, seccomp RuntimeDefault, default-deny NetworkPolicy, validating webhook |
 | **Observable** | Built-in metrics | Prometheus metrics, ServiceMonitor integration, structured JSON logging, Kubernetes events |
 | **Flexible** | Provider-agnostic config | Use any AI provider (Anthropic, OpenAI, or others) via environment variables and inline or external config |
+| **Auto-Update** | OCI registry polling | Opt-in version tracking: checks the registry for new semver releases, backs up first, then rolls out — hands-free |
 | **Resilient** | Self-healing lifecycle | PodDisruptionBudgets, health probes, automatic config rollouts via content hashing, 5-minute drift detection |
 | **Backup/Restore** | B2-backed snapshots | Automatic backup to Backblaze B2 on instance deletion; restore into a new instance from any snapshot |
 | **Workspace Seeding** | Initial files & dirs | Pre-populate the workspace with files and directories before the agent starts |
@@ -212,6 +213,42 @@ spec:
 
 When enabled, the operator automatically injects a `CHROMIUM_URL` environment variable into the main container and configures shared memory, security contexts, and health probes for the sidecar.
 
+### Auto-update
+
+Opt into automatic version tracking so the operator detects new releases and rolls them out without manual intervention:
+
+```yaml
+spec:
+  autoUpdate:
+    enabled: true
+    checkInterval: "24h"       # how often to poll the registry (1h–168h)
+    backupBeforeUpdate: true   # back up the PVC before applying an update
+```
+
+When enabled, the operator:
+
+1. **Resolves `latest` on creation** — if `spec.image.tag` is `latest`, the operator queries the OCI registry for the highest stable semver tag and pins the instance to it
+2. **Polls for new versions** — on each `checkInterval`, the operator checks the registry for newer semver tags
+3. **Backs up first** (optional) — if `backupBeforeUpdate` is true and persistence is enabled, a B2 backup job runs before updating
+4. **Applies the update** — patches `spec.image.tag` to the new version, triggering a StatefulSet rolling update
+
+Update progress is tracked in `status.autoUpdate`:
+
+```bash
+kubectl get openclawinstance my-agent -o jsonpath='{.status.autoUpdate}' | jq .
+```
+
+```json
+{
+  "currentVersion": "2026.2.15",
+  "latestVersion": "2026.2.15",
+  "lastCheckTime": "2026-02-16T10:30:00Z",
+  "lastUpdateTime": "2026-02-16T10:30:05Z"
+}
+```
+
+Auto-update is a no-op for digest-pinned images (`spec.image.digest`). The operator only considers stable releases (no pre-release tags).
+
 ### All configuration options
 
 | Field | Description | Default |
@@ -238,6 +275,9 @@ When enabled, the operator automatically injects a `CHROMIUM_URL` environment va
 | `spec.availability.podDisruptionBudget.enabled` | PDB | `true` |
 | `spec.workspace.initialFiles` | Files to create in workspace before start | `[]` |
 | `spec.workspace.initialDirectories` | Directories to create in workspace before start | `[]` |
+| `spec.autoUpdate.enabled` | Automatic version updates | `false` |
+| `spec.autoUpdate.checkInterval` | Registry poll interval (Go duration) | `24h` |
+| `spec.autoUpdate.backupBeforeUpdate` | Backup PVC before updating | `true` |
 | `spec.restoreFrom` | B2 backup path to restore workspace from | - |
 
 See the [full example](config/samples/openclaw_v1alpha1_openclawinstance_full.yaml) for every available field, or the [API reference](docs/api-reference.md) for detailed documentation.
@@ -264,6 +304,8 @@ The operator follows a **secure-by-default** philosophy. Every instance ships wi
 | NetworkPolicy disabled | Warning | Deployment proceeds with a warning |
 | Ingress without TLS | Warning | Deployment proceeds with a warning |
 | Chromium without digest pinning | Warning | Deployment proceeds with a warning |
+| Auto-update with digest pin | Warning | Digest overrides auto-update; updates won't apply |
+| Invalid `checkInterval` | Error | Must be a valid Go duration between 1h and 168h |
 
 ### Custom network rules
 
@@ -292,6 +334,8 @@ spec:
 | `openclaw_reconcile_total` | Counter | Reconciliations by result (success/error) |
 | `openclaw_reconcile_duration_seconds` | Histogram | Reconciliation latency |
 | `openclaw_instance_phase` | Gauge | Current phase per instance |
+| `openclaw_autoupdate_checks_total` | Counter | Auto-update version checks by result |
+| `openclaw_autoupdate_applied_total` | Counter | Successful auto-updates applied |
 
 ### ServiceMonitor
 
@@ -327,7 +371,7 @@ status:
   canvasEndpoint: my-agent.default.svc:18793
 ```
 
-Phases: `Pending` → `Restoring` → `Provisioning` → `Running` | `BackingUp` | `Degraded` | `Failed` | `Terminating`
+Phases: `Pending` → `Restoring` → `Provisioning` → `Running` | `Updating` | `BackingUp` | `Degraded` | `Failed` | `Terminating`
 
 ## Deployment Guides
 
@@ -365,7 +409,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development guide.
 
 ## Roadmap
 
-- **v0.10+**: Multi-cluster support, HPA integration, cert-manager integration
+- **v0.10+**: Semver constraints for auto-update, multi-cluster support, HPA integration, cert-manager integration
 - **v1.0.0**: API graduation to v1, conformance test suite, CNCF Artifact Hub listing
 
 See the full [roadmap](ROADMAP.md) for details.
