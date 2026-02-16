@@ -3221,7 +3221,6 @@ func TestBuildStatefulSet_SkillsOnly_NoConfigInitContainer(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
 // secret.go tests — gateway token Secret
 // ---------------------------------------------------------------------------
 
@@ -3518,5 +3517,333 @@ func TestBuildStatefulSet_NoGatewayTokenSecretName(t *testing.T) {
 		if env.Name == "OPENCLAW_GATEWAY_TOKEN" {
 			t.Error("OPENCLAW_GATEWAY_TOKEN should not be present when no secret name is provided")
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Feature: fsGroupChangePolicy
+// ---------------------------------------------------------------------------
+
+func TestBuildStatefulSet_FSGroupChangePolicy_Default(t *testing.T) {
+	instance := newTestInstance("fsgcp-default")
+	sts := BuildStatefulSet(instance)
+	psc := sts.Spec.Template.Spec.SecurityContext
+	if psc.FSGroupChangePolicy != nil {
+		t.Errorf("FSGroupChangePolicy should be nil by default, got %v", *psc.FSGroupChangePolicy)
+	}
+}
+
+func TestBuildStatefulSet_FSGroupChangePolicy_OnRootMismatch(t *testing.T) {
+	instance := newTestInstance("fsgcp-onroot")
+	policy := corev1.FSGroupChangeOnRootMismatch
+	instance.Spec.Security.PodSecurityContext = &openclawv1alpha1.PodSecurityContextSpec{
+		FSGroupChangePolicy: &policy,
+	}
+
+	sts := BuildStatefulSet(instance)
+	psc := sts.Spec.Template.Spec.SecurityContext
+	if psc.FSGroupChangePolicy == nil {
+		t.Fatal("FSGroupChangePolicy should not be nil")
+	}
+	if *psc.FSGroupChangePolicy != corev1.FSGroupChangeOnRootMismatch {
+		t.Errorf("FSGroupChangePolicy = %v, want OnRootMismatch", *psc.FSGroupChangePolicy)
+	}
+}
+
+func TestBuildStatefulSet_FSGroupChangePolicy_Always(t *testing.T) {
+	instance := newTestInstance("fsgcp-always")
+	policy := corev1.FSGroupChangeAlways
+	instance.Spec.Security.PodSecurityContext = &openclawv1alpha1.PodSecurityContextSpec{
+		FSGroupChangePolicy: &policy,
+	}
+
+	sts := BuildStatefulSet(instance)
+	psc := sts.Spec.Template.Spec.SecurityContext
+	if psc.FSGroupChangePolicy == nil {
+		t.Fatal("FSGroupChangePolicy should not be nil")
+	}
+	if *psc.FSGroupChangePolicy != corev1.FSGroupChangeAlways {
+		t.Errorf("FSGroupChangePolicy = %v, want Always", *psc.FSGroupChangePolicy)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Feature: SA annotations
+// ---------------------------------------------------------------------------
+
+func TestBuildServiceAccount_NoAnnotations(t *testing.T) {
+	instance := newTestInstance("sa-no-ann")
+	sa := BuildServiceAccount(instance)
+	if len(sa.Annotations) > 0 {
+		t.Errorf("expected nil/empty annotations, got %v", sa.Annotations)
+	}
+}
+
+func TestBuildServiceAccount_WithAnnotations(t *testing.T) {
+	instance := newTestInstance("sa-ann")
+	instance.Spec.Security.RBAC.ServiceAccountAnnotations = map[string]string{
+		"eks.amazonaws.com/role-arn":     "arn:aws:iam::123456789:role/my-role",
+		"iam.gke.io/gcp-service-account": "my-sa@my-project.iam.gserviceaccount.com",
+	}
+
+	sa := BuildServiceAccount(instance)
+	if len(sa.Annotations) != 2 {
+		t.Fatalf("expected 2 annotations, got %d", len(sa.Annotations))
+	}
+	if sa.Annotations["eks.amazonaws.com/role-arn"] != "arn:aws:iam::123456789:role/my-role" {
+		t.Error("IRSA annotation not found")
+	}
+	if sa.Annotations["iam.gke.io/gcp-service-account"] != "my-sa@my-project.iam.gserviceaccount.com" {
+		t.Error("GKE WI annotation not found")
+	}
+}
+
+func TestBuildServiceAccount_AnnotationsDoNotAffectLabels(t *testing.T) {
+	instance := newTestInstance("sa-ann-labels")
+	instance.Spec.Security.RBAC.ServiceAccountAnnotations = map[string]string{
+		"test": "value",
+	}
+
+	sa := BuildServiceAccount(instance)
+	if sa.Labels["app.kubernetes.io/name"] != "openclaw" {
+		t.Error("labels should still be set when annotations are present")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Feature: Extra volumes/mounts
+// ---------------------------------------------------------------------------
+
+func TestBuildStatefulSet_ExtraVolumes_None(t *testing.T) {
+	instance := newTestInstance("no-extras")
+	sts := BuildStatefulSet(instance)
+	for _, v := range sts.Spec.Template.Spec.Volumes {
+		if v.Name == "my-extra" {
+			t.Error("should not have extra volumes when none configured")
+		}
+	}
+}
+
+func TestBuildStatefulSet_ExtraVolumes(t *testing.T) {
+	instance := newTestInstance("extras")
+	instance.Spec.ExtraVolumes = []corev1.Volume{
+		{
+			Name: "ssh-keys",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{SecretName: "ssh-secret"},
+			},
+		},
+	}
+	instance.Spec.ExtraVolumeMounts = []corev1.VolumeMount{
+		{Name: "ssh-keys", MountPath: "/home/openclaw/.ssh", ReadOnly: true},
+	}
+
+	sts := BuildStatefulSet(instance)
+
+	// Check volume exists
+	vol := findVolume(sts.Spec.Template.Spec.Volumes, "ssh-keys")
+	if vol == nil {
+		t.Fatal("extra volume 'ssh-keys' not found")
+	}
+	if vol.Secret == nil || vol.Secret.SecretName != "ssh-secret" {
+		t.Error("extra volume should reference ssh-secret")
+	}
+
+	// Check mount exists on main container
+	main := sts.Spec.Template.Spec.Containers[0]
+	assertVolumeMount(t, main.VolumeMounts, "ssh-keys", "/home/openclaw/.ssh")
+}
+
+func TestBuildStatefulSet_ExtraVolumes_DontInterfereWithExisting(t *testing.T) {
+	instance := newTestInstance("extras-coexist")
+	instance.Spec.ExtraVolumes = []corev1.Volume{
+		{
+			Name: "custom-vol",
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		},
+	}
+
+	sts := BuildStatefulSet(instance)
+	volumes := sts.Spec.Template.Spec.Volumes
+
+	// Existing volumes should still be present
+	if findVolume(volumes, "data") == nil {
+		t.Error("data volume should still exist")
+	}
+	if findVolume(volumes, "tmp") == nil {
+		t.Error("tmp volume should still exist")
+	}
+	if findVolume(volumes, "custom-vol") == nil {
+		t.Error("extra volume should be appended")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Feature: CA bundle injection
+// ---------------------------------------------------------------------------
+
+func TestBuildStatefulSet_CABundle_Nil(t *testing.T) {
+	instance := newTestInstance("no-ca")
+	sts := BuildStatefulSet(instance)
+
+	if findVolume(sts.Spec.Template.Spec.Volumes, "ca-bundle") != nil {
+		t.Error("ca-bundle volume should not exist when CABundle is nil")
+	}
+}
+
+func TestBuildStatefulSet_CABundle_ConfigMap(t *testing.T) {
+	instance := newTestInstance("ca-cm")
+	instance.Spec.Security.CABundle = &openclawv1alpha1.CABundleSpec{
+		ConfigMapName: "my-ca-bundle",
+		Key:           "custom-ca.crt",
+	}
+
+	sts := BuildStatefulSet(instance)
+
+	// Volume
+	vol := findVolume(sts.Spec.Template.Spec.Volumes, "ca-bundle")
+	if vol == nil {
+		t.Fatal("ca-bundle volume not found")
+	}
+	if vol.ConfigMap == nil {
+		t.Fatal("ca-bundle volume should use ConfigMap")
+	}
+	if vol.ConfigMap.Name != "my-ca-bundle" {
+		t.Errorf("ca-bundle configmap = %q, want %q", vol.ConfigMap.Name, "my-ca-bundle")
+	}
+
+	// Main container mount + env
+	main := sts.Spec.Template.Spec.Containers[0]
+	assertVolumeMount(t, main.VolumeMounts, "ca-bundle", "/etc/ssl/certs/custom-ca-bundle.crt")
+
+	foundEnv := false
+	for _, env := range main.Env {
+		if env.Name == "NODE_EXTRA_CA_CERTS" {
+			foundEnv = true
+			if env.Value != "/etc/ssl/certs/custom-ca-bundle.crt" {
+				t.Errorf("NODE_EXTRA_CA_CERTS = %q, want /etc/ssl/certs/custom-ca-bundle.crt", env.Value)
+			}
+		}
+	}
+	if !foundEnv {
+		t.Error("NODE_EXTRA_CA_CERTS env var not found on main container")
+	}
+}
+
+func TestBuildStatefulSet_CABundle_Secret(t *testing.T) {
+	instance := newTestInstance("ca-secret")
+	instance.Spec.Security.CABundle = &openclawv1alpha1.CABundleSpec{
+		SecretName: "ca-secret",
+	}
+
+	sts := BuildStatefulSet(instance)
+
+	vol := findVolume(sts.Spec.Template.Spec.Volumes, "ca-bundle")
+	if vol == nil {
+		t.Fatal("ca-bundle volume not found")
+	}
+	if vol.Secret == nil {
+		t.Fatal("ca-bundle volume should use Secret")
+	}
+	if vol.Secret.SecretName != "ca-secret" {
+		t.Errorf("ca-bundle secret = %q, want %q", vol.Secret.SecretName, "ca-secret")
+	}
+}
+
+func TestBuildStatefulSet_CABundle_DefaultKey(t *testing.T) {
+	instance := newTestInstance("ca-default-key")
+	instance.Spec.Security.CABundle = &openclawv1alpha1.CABundleSpec{
+		ConfigMapName: "my-ca",
+		// Key not set — should default to "ca-bundle.crt"
+	}
+
+	sts := BuildStatefulSet(instance)
+	main := sts.Spec.Template.Spec.Containers[0]
+
+	// Find the ca-bundle mount and check subPath
+	for _, m := range main.VolumeMounts {
+		if m.Name == "ca-bundle" {
+			if m.SubPath != "ca-bundle.crt" {
+				t.Errorf("subPath = %q, want %q", m.SubPath, "ca-bundle.crt")
+			}
+			return
+		}
+	}
+	t.Error("ca-bundle volume mount not found")
+}
+
+func TestBuildStatefulSet_CABundle_WithChromium(t *testing.T) {
+	instance := newTestInstance("ca-chromium")
+	instance.Spec.Chromium.Enabled = true
+	instance.Spec.Security.CABundle = &openclawv1alpha1.CABundleSpec{
+		ConfigMapName: "my-ca",
+		Key:           "ca.crt",
+	}
+
+	sts := BuildStatefulSet(instance)
+
+	// Find chromium container
+	var chromium *corev1.Container
+	for i := range sts.Spec.Template.Spec.Containers {
+		if sts.Spec.Template.Spec.Containers[i].Name == "chromium" {
+			chromium = &sts.Spec.Template.Spec.Containers[i]
+			break
+		}
+	}
+	if chromium == nil {
+		t.Fatal("chromium container not found")
+	}
+
+	// Check mount
+	assertVolumeMount(t, chromium.VolumeMounts, "ca-bundle", "/etc/ssl/certs/custom-ca-bundle.crt")
+
+	// Check env
+	foundEnv := false
+	for _, env := range chromium.Env {
+		if env.Name == "NODE_EXTRA_CA_CERTS" {
+			foundEnv = true
+		}
+	}
+	if !foundEnv {
+		t.Error("NODE_EXTRA_CA_CERTS env var not found on chromium container")
+	}
+}
+
+func TestBuildStatefulSet_CABundle_InitSkills(t *testing.T) {
+	instance := newTestInstance("ca-skills")
+	instance.Spec.Skills = []string{"some-skill"}
+	instance.Spec.Security.CABundle = &openclawv1alpha1.CABundleSpec{
+		ConfigMapName: "my-ca",
+		Key:           "ca.crt",
+	}
+
+	sts := BuildStatefulSet(instance)
+
+	// Find init-skills container
+	var initSkills *corev1.Container
+	for i := range sts.Spec.Template.Spec.InitContainers {
+		if sts.Spec.Template.Spec.InitContainers[i].Name == "init-skills" {
+			initSkills = &sts.Spec.Template.Spec.InitContainers[i]
+			break
+		}
+	}
+	if initSkills == nil {
+		t.Fatal("init-skills container not found")
+	}
+
+	// Check mount
+	assertVolumeMount(t, initSkills.VolumeMounts, "ca-bundle", "/etc/ssl/certs/custom-ca-bundle.crt")
+
+	// Check env
+	foundEnv := false
+	for _, env := range initSkills.Env {
+		if env.Name == "NODE_EXTRA_CA_CERTS" {
+			foundEnv = true
+		}
+	}
+	if !foundEnv {
+		t.Error("NODE_EXTRA_CA_CERTS env var not found on init-skills container")
 	}
 }

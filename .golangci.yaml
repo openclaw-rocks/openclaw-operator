@@ -63,6 +63,11 @@ issues:
         - dupl
         - goconst
         - gosec
+    # SA5011 false positive: staticcheck doesn't track t.Fatal() as a terminator
+    - path: _test\.go
+      text: "SA5011"
+      linters:
+        - staticcheck
     # Generated files
     - path: zz_generated
       linters:

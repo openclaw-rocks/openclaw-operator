@@ -128,6 +128,9 @@ func buildPodSecurityContext(instance *openclawv1alpha1.OpenClawInstance) *corev
 		} else {
 			psc.FSGroup = Ptr(int64(1000))
 		}
+		if spec.FSGroupChangePolicy != nil {
+			psc.FSGroupChangePolicy = spec.FSGroupChangePolicy
+		}
 		if spec.RunAsNonRoot != nil {
 			psc.RunAsNonRoot = spec.RunAsNonRoot
 		}
@@ -223,6 +226,27 @@ func buildMainContainer(instance *openclawv1alpha1.OpenClawInstance, gatewayToke
 			},
 		},
 	}
+
+	// Add CA bundle mount and env if configured
+	if cab := instance.Spec.Security.CABundle; cab != nil {
+		key := cab.Key
+		if key == "" {
+			key = DefaultCABundleKey
+		}
+		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+			Name:      "ca-bundle",
+			MountPath: "/etc/ssl/certs/custom-ca-bundle.crt",
+			SubPath:   key,
+			ReadOnly:  true,
+		})
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "NODE_EXTRA_CA_CERTS",
+			Value: "/etc/ssl/certs/custom-ca-bundle.crt",
+		})
+	}
+
+	// Add extra volume mounts from spec
+	container.VolumeMounts = append(container.VolumeMounts, instance.Spec.ExtraVolumeMounts...)
 
 	// Add probes
 	container.LivenessProbe = buildLivenessProbe(instance)
@@ -424,15 +448,40 @@ func buildSkillsInitContainer(instance *openclawv1alpha1.OpenClawInstance) *core
 		return nil
 	}
 
+	mounts := []corev1.VolumeMount{
+		{Name: "data", MountPath: "/home/openclaw/.openclaw"},
+		{Name: "skills-tmp", MountPath: "/tmp"},
+	}
+
+	env := []corev1.EnvVar{
+		{Name: "HOME", Value: "/tmp"},
+		{Name: "NPM_CONFIG_CACHE", Value: "/tmp/.npm"},
+	}
+
+	// CA bundle for skills install (makes network calls)
+	if cab := instance.Spec.Security.CABundle; cab != nil {
+		key := cab.Key
+		if key == "" {
+			key = DefaultCABundleKey
+		}
+		mounts = append(mounts, corev1.VolumeMount{
+			Name:      "ca-bundle",
+			MountPath: "/etc/ssl/certs/custom-ca-bundle.crt",
+			SubPath:   key,
+			ReadOnly:  true,
+		})
+		env = append(env, corev1.EnvVar{
+			Name:  "NODE_EXTRA_CA_CERTS",
+			Value: "/etc/ssl/certs/custom-ca-bundle.crt",
+		})
+	}
+
 	return &corev1.Container{
-		Name:            "init-skills",
-		Image:           GetImage(instance),
-		Command:         []string{"sh", "-c", script},
-		ImagePullPolicy: getPullPolicy(instance),
-		Env: []corev1.EnvVar{
-			{Name: "HOME", Value: "/tmp"},
-			{Name: "NPM_CONFIG_CACHE", Value: "/tmp/.npm"},
-		},
+		Name:                     "init-skills",
+		Image:                    GetImage(instance),
+		Command:                  []string{"sh", "-c", script},
+		ImagePullPolicy:          getPullPolicy(instance),
+		Env:                      env,
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 		SecurityContext: &corev1.SecurityContext{
@@ -443,10 +492,7 @@ func buildSkillsInitContainer(instance *openclawv1alpha1.OpenClawInstance) *core
 				Drop: []corev1.Capability{"ALL"},
 			},
 		},
-		VolumeMounts: []corev1.VolumeMount{
-			{Name: "data", MountPath: "/home/openclaw/.openclaw"},
-			{Name: "skills-tmp", MountPath: "/tmp"},
-		},
+		VolumeMounts: mounts,
 	}
 }
 
@@ -486,6 +532,37 @@ func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.
 		image = repo + "@" + instance.Spec.Chromium.Image.Digest
 	}
 
+	chromiumMounts := []corev1.VolumeMount{
+		{
+			Name:      "chromium-tmp",
+			MountPath: "/tmp",
+		},
+		{
+			Name:      "chromium-shm",
+			MountPath: "/dev/shm",
+		},
+	}
+
+	var chromiumEnv []corev1.EnvVar
+
+	// Add CA bundle mount and env if configured
+	if cab := instance.Spec.Security.CABundle; cab != nil {
+		key := cab.Key
+		if key == "" {
+			key = DefaultCABundleKey
+		}
+		chromiumMounts = append(chromiumMounts, corev1.VolumeMount{
+			Name:      "ca-bundle",
+			MountPath: "/etc/ssl/certs/custom-ca-bundle.crt",
+			SubPath:   key,
+			ReadOnly:  true,
+		})
+		chromiumEnv = append(chromiumEnv, corev1.EnvVar{
+			Name:  "NODE_EXTRA_CA_CERTS",
+			Value: "/etc/ssl/certs/custom-ca-bundle.crt",
+		})
+	}
+
 	return corev1.Container{
 		Name:                     "chromium",
 		Image:                    image,
@@ -511,17 +588,9 @@ func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.
 				Protocol:      corev1.ProtocolTCP,
 			},
 		},
-		Resources: buildChromiumResourceRequirements(instance),
-		VolumeMounts: []corev1.VolumeMount{
-			{
-				Name:      "chromium-tmp",
-				MountPath: "/tmp",
-			},
-			{
-				Name:      "chromium-shm",
-				MountPath: "/dev/shm",
-			},
-		},
+		Resources:    buildChromiumResourceRequirements(instance),
+		Env:          chromiumEnv,
+		VolumeMounts: chromiumMounts,
 	}
 }
 
@@ -645,8 +714,38 @@ func buildVolumes(instance *openclawv1alpha1.OpenClawInstance) []corev1.Volume {
 		)
 	}
 
+	// CA bundle volume
+	if cab := instance.Spec.Security.CABundle; cab != nil {
+		if cab.ConfigMapName != "" {
+			volumes = append(volumes, corev1.Volume{
+				Name: "ca-bundle",
+				VolumeSource: corev1.VolumeSource{
+					ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: cab.ConfigMapName,
+						},
+						DefaultMode: &defaultMode,
+					},
+				},
+			})
+		} else if cab.SecretName != "" {
+			volumes = append(volumes, corev1.Volume{
+				Name: "ca-bundle",
+				VolumeSource: corev1.VolumeSource{
+					Secret: &corev1.SecretVolumeSource{
+						SecretName:  cab.SecretName,
+						DefaultMode: &defaultMode,
+					},
+				},
+			})
+		}
+	}
+
 	// Custom sidecar volumes
 	volumes = append(volumes, instance.Spec.SidecarVolumes...)
+
+	// Extra volumes (available to main container via ExtraVolumeMounts)
+	volumes = append(volumes, instance.Spec.ExtraVolumes...)
 
 	return volumes
 }

@@ -30,9 +30,10 @@ func BuildServiceAccount(instance *openclawv1alpha1.OpenClawInstance) *corev1.Se
 
 	return &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      ServiceAccountName(instance),
-			Namespace: instance.Namespace,
-			Labels:    labels,
+			Name:        ServiceAccountName(instance),
+			Namespace:   instance.Namespace,
+			Labels:      labels,
+			Annotations: instance.Spec.Security.RBAC.ServiceAccountAnnotations,
 		},
 		AutomountServiceAccountToken: Ptr(false),
 	}

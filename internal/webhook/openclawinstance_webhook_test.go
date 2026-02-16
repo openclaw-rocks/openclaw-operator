@@ -23,6 +23,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 
 	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
 )
@@ -310,8 +311,8 @@ func TestValidateCreate_WarnsNoEnvVars(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
-	if !containsWarning(warnings, "environment variables") {
-		t.Fatalf("expected warning about missing environment variables, got: %v", warnings)
+	if !containsWarning(warnings, "No AI provider API keys") {
+		t.Fatalf("expected warning about missing provider keys, got: %v", warnings)
 	}
 }
 
@@ -324,8 +325,8 @@ func TestValidateCreate_NoWarnWithEnvFrom(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
-	if containsWarning(warnings, "environment variables") {
-		t.Fatalf("expected no env warning when envFrom is set, got: %v", warnings)
+	if containsWarning(warnings, "No AI provider API keys") {
+		t.Fatalf("expected no provider warning when envFrom is set, got: %v", warnings)
 	}
 }
 
@@ -341,8 +342,8 @@ func TestValidateCreate_NoWarnWithEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
-	if containsWarning(warnings, "environment variables") {
-		t.Fatalf("expected no env warning when env is set, got: %v", warnings)
+	if containsWarning(warnings, "No AI provider API keys") {
+		t.Fatalf("expected no provider warning when known env key is set, got: %v", warnings)
 	}
 }
 
@@ -514,7 +515,7 @@ func TestValidateCreate_MultipleWarnings(t *testing.T) {
 		"TLS",
 		"forceHTTPS",
 		"Chromium",
-		"environment variables",
+		"No AI provider API keys",
 		"allowPrivilegeEscalation",
 		"Resource limits",
 		"latest",
@@ -649,8 +650,8 @@ func TestValidateUpdate_ReturnsWarningsFromValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
-	if !containsWarning(warnings, "environment variables") {
-		t.Fatalf("expected warning about environment variables from update validation, got: %v", warnings)
+	if !containsWarning(warnings, "No AI provider API keys") {
+		t.Fatalf("expected warning about provider keys from update validation, got: %v", warnings)
 	}
 }
 
@@ -932,5 +933,223 @@ func TestValidateCreate_WorkspaceNestedDirAllowed(t *testing.T) {
 	_, err := v.ValidateCreate(context.Background(), instance)
 	if err != nil {
 		t.Fatalf("expected no error for nested directories, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// CA bundle validation tests
+// ---------------------------------------------------------------------------
+
+func TestValidateCreate_CABundle_BothSources(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.Security.CABundle = &openclawv1alpha1.CABundleSpec{
+		ConfigMapName: "my-cm",
+		SecretName:    "my-secret",
+	}
+
+	_, err := v.ValidateCreate(context.Background(), instance)
+	if err == nil {
+		t.Fatal("expected error when both configMapName and secretName are set")
+	}
+	if !strings.Contains(err.Error(), "only one") {
+		t.Fatalf("error should mention 'only one', got: %v", err)
+	}
+}
+
+func TestValidateCreate_CABundle_NoSource(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.Security.CABundle = &openclawv1alpha1.CABundleSpec{}
+
+	_, err := v.ValidateCreate(context.Background(), instance)
+	if err == nil {
+		t.Fatal("expected error when neither source is set")
+	}
+	if !strings.Contains(err.Error(), "must be set") {
+		t.Fatalf("error should mention 'must be set', got: %v", err)
+	}
+}
+
+func TestValidateCreate_CABundle_ConfigMapOnly(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.Security.CABundle = &openclawv1alpha1.CABundleSpec{
+		ConfigMapName: "my-ca",
+	}
+
+	_, err := v.ValidateCreate(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("expected no error with configMapName only, got: %v", err)
+	}
+}
+
+func TestValidateCreate_CABundle_SecretOnly(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.Security.CABundle = &openclawv1alpha1.CABundleSpec{
+		SecretName: "my-ca-secret",
+	}
+
+	_, err := v.ValidateCreate(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("expected no error with secretName only, got: %v", err)
+	}
+}
+
+func TestValidateCreate_CABundle_Nil(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	// CABundle is nil by default
+
+	_, err := v.ValidateCreate(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("expected no error with nil CABundle, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Provider warnings tests
+// ---------------------------------------------------------------------------
+
+func TestValidateCreate_ProviderWarning_EnvFromSet(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	// newTestInstance has EnvFrom set — should skip provider check
+
+	warnings, err := v.ValidateCreate(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if containsWarning(warnings, "No AI provider") {
+		t.Fatalf("expected no provider warning when envFrom is set, got: %v", warnings)
+	}
+}
+
+func TestValidateCreate_ProviderWarning_KnownKeyInEnv(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.EnvFrom = nil
+	instance.Spec.Env = []corev1.EnvVar{
+		{Name: "ANTHROPIC_API_KEY", Value: "sk-test"},
+	}
+
+	warnings, err := v.ValidateCreate(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if containsWarning(warnings, "No AI provider") {
+		t.Fatalf("expected no provider warning when ANTHROPIC_API_KEY is set, got: %v", warnings)
+	}
+}
+
+func TestValidateCreate_ProviderWarning_OnlyUnrelatedEnv(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.EnvFrom = nil
+	instance.Spec.Env = []corev1.EnvVar{
+		{Name: "HOME", Value: "/foo"},
+	}
+
+	warnings, err := v.ValidateCreate(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if !containsWarning(warnings, "No AI provider") {
+		t.Fatalf("expected provider warning when only unrelated env vars are set, got: %v", warnings)
+	}
+}
+
+func TestValidateCreate_ProviderWarning_SecretKeyRef(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.EnvFrom = nil
+	instance.Spec.Env = []corev1.EnvVar{
+		{
+			Name: "MY_KEY",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "my-secret"},
+					Key:                  "api-key",
+				},
+			},
+		},
+	}
+
+	warnings, err := v.ValidateCreate(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if containsWarning(warnings, "No AI provider") {
+		t.Fatalf("expected no provider warning when valueFrom secretKeyRef is set, got: %v", warnings)
+	}
+}
+
+func TestValidateCreate_ProviderWarning_EmptyEnvAndEnvFrom(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.EnvFrom = nil
+	instance.Spec.Env = nil
+
+	warnings, err := v.ValidateCreate(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if !containsWarning(warnings, "No AI provider") {
+		t.Fatalf("expected provider warning with empty env and envFrom, got: %v", warnings)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Config schema validation tests
+// ---------------------------------------------------------------------------
+
+func TestValidateCreate_ConfigSchema_Nil(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	// No raw config
+
+	warnings, err := v.ValidateCreate(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if containsWarning(warnings, "Unknown config key") {
+		t.Fatalf("expected no config schema warning with nil raw, got: %v", warnings)
+	}
+}
+
+func TestValidateCreate_ConfigSchema_ValidKeys(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: k8sruntime.RawExtension{
+			Raw: []byte(`{"mcpServers":{},"llmConfig":{},"settings":{}}`),
+		},
+	}
+
+	warnings, err := v.ValidateCreate(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if containsWarning(warnings, "Unknown config key") {
+		t.Fatalf("expected no config schema warning for valid keys, got: %v", warnings)
+	}
+}
+
+func TestValidateCreate_ConfigSchema_UnknownKey(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: k8sruntime.RawExtension{
+			Raw: []byte(`{"mcpServers":{},"foobar":"baz"}`),
+		},
+	}
+
+	warnings, err := v.ValidateCreate(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if !containsWarning(warnings, "Unknown config key") || !containsWarning(warnings, "foobar") {
+		t.Fatalf("expected warning about unknown key 'foobar', got: %v", warnings)
 	}
 }

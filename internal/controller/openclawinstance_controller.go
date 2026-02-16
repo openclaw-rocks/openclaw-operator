@@ -23,6 +23,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -719,10 +720,33 @@ func (r *OpenClawInstanceReconciler) migrateDeploymentToStatefulSet(ctx context.
 // reconcileStatefulSet reconciles the StatefulSet
 func (r *OpenClawInstanceReconciler) reconcileStatefulSet(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance, gatewayToken string) error {
 	// Compute secret hash for rollout trigger on secret rotation
-	secretHash, err := r.computeSecretHash(ctx, instance)
+	secretHash, missingSecrets, err := r.computeSecretHash(ctx, instance)
 	if err != nil {
 		log.FromContext(ctx).Error(err, "Failed to compute secret hash (non-fatal, using empty hash)")
 		secretHash = ""
+	}
+
+	// Set SecretsReady condition based on missing secrets
+	if len(missingSecrets) > 0 {
+		for _, name := range missingSecrets {
+			r.Recorder.Eventf(instance, corev1.EventTypeWarning, "SecretNotFound",
+				"Secret %q referenced in envFrom is not found", name)
+		}
+		meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+			Type:               openclawv1alpha1.ConditionTypeSecretsReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             "SecretsMissing",
+			Message:            fmt.Sprintf("Missing secrets: %s", strings.Join(missingSecrets, ", ")),
+			LastTransitionTime: metav1.Now(),
+		})
+	} else {
+		meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+			Type:               openclawv1alpha1.ConditionTypeSecretsReady,
+			Status:             metav1.ConditionTrue,
+			Reason:             "AllSecretsFound",
+			Message:            "All referenced secrets exist",
+			LastTransitionTime: metav1.Now(),
+		})
 	}
 
 	sts := &appsv1.StatefulSet{
@@ -888,7 +912,8 @@ func (r *OpenClawInstanceReconciler) reconcileServiceMonitor(ctx context.Context
 // computeSecretHash reads all Secrets referenced via envFrom[].secretRef and
 // computes a deterministic hash of their data. This hash is injected as a pod
 // annotation so that secret rotations trigger a rolling restart.
-func (r *OpenClawInstanceReconciler) computeSecretHash(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) (string, error) {
+// Returns the hash, a list of missing secret names, and any error.
+func (r *OpenClawInstanceReconciler) computeSecretHash(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) (hash string, missingSecrets []string, err error) {
 	var secretNames []string
 	for _, ef := range instance.Spec.EnvFrom {
 		if ef.SecretRef != nil {
@@ -900,19 +925,20 @@ func (r *OpenClawInstanceReconciler) computeSecretHash(ctx context.Context, inst
 	secretNames = append(secretNames, gwSecretName)
 
 	if len(secretNames) == 0 {
-		return "", nil
+		return "", nil, nil
 	}
 	sort.Strings(secretNames)
 
 	h := sha256.New()
 	for _, name := range secretNames {
 		secret := &corev1.Secret{}
-		if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: instance.Namespace}, secret); err != nil {
-			if apierrors.IsNotFound(err) {
+		if getErr := r.Get(ctx, types.NamespacedName{Name: name, Namespace: instance.Namespace}, secret); getErr != nil {
+			if apierrors.IsNotFound(getErr) {
 				h.Write([]byte(name + "=NOT_FOUND\n"))
+				missingSecrets = append(missingSecrets, name)
 				continue
 			}
-			return "", fmt.Errorf("failed to get secret %s: %w", name, err)
+			return "", nil, fmt.Errorf("failed to get secret %s: %w", name, getErr)
 		}
 		// Sort keys for determinism
 		keys := make([]string, 0, len(secret.Data))
@@ -926,7 +952,7 @@ func (r *OpenClawInstanceReconciler) computeSecretHash(ctx context.Context, inst
 			h.Write([]byte("\n"))
 		}
 	}
-	return hex.EncodeToString(h.Sum(nil)[:8]), nil
+	return hex.EncodeToString(h.Sum(nil)[:8]), missingSecrets, nil
 }
 
 // findInstancesForSecret maps a Secret change to reconcile requests for

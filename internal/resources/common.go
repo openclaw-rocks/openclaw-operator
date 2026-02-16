@@ -36,6 +36,9 @@ const (
 	// ConfigMergeModeMerge is the merge mode that deep-merges config with existing PVC config
 	ConfigMergeModeMerge = "merge"
 
+	// DefaultCABundleKey is the default key in a ConfigMap or Secret for the CA bundle
+	DefaultCABundleKey = "ca-bundle.crt"
+
 	// AppName is the application name used in labels
 	AppName = "openclaw"
 
