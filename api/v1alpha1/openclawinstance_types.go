@@ -802,6 +802,10 @@ type ManagedResourcesStatus struct {
 	// RoleBinding is the name of the managed RoleBinding
 	// +optional
 	RoleBinding string `json:"roleBinding,omitempty"`
+
+	// GatewayTokenSecret is the name of the auto-generated gateway token Secret
+	// +optional
+	GatewayTokenSecret string `json:"gatewayTokenSecret,omitempty"`
 }
 
 // +kubebuilder:object:root=true

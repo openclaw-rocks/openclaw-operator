@@ -905,8 +905,8 @@ func TestBuildStatefulSet_EnvAndEnvFrom(t *testing.T) {
 	sts := BuildStatefulSet(instance)
 	main := sts.Spec.Template.Spec.Containers[0]
 
-	if len(main.Env) != 2 || main.Env[0].Name != "HOME" || main.Env[1].Name != "MY_VAR" {
-		t.Error("env vars should include HOME followed by user-defined vars")
+	if len(main.Env) != 3 || main.Env[0].Name != "HOME" || main.Env[1].Name != "OPENCLAW_DISABLE_BONJOUR" || main.Env[2].Name != "MY_VAR" {
+		t.Errorf("env vars should include HOME, OPENCLAW_DISABLE_BONJOUR, then user-defined vars, got %v", envNames(main.Env))
 	}
 	if len(main.EnvFrom) != 1 || main.EnvFrom[0].SecretRef.Name != "api-keys" {
 		t.Error("envFrom not passed through")
@@ -1433,7 +1433,7 @@ func TestBuildRoleBinding_CustomServiceAccount(t *testing.T) {
 
 func TestBuildConfigMap_Default(t *testing.T) {
 	instance := newTestInstance("cm-test")
-	cm := BuildConfigMap(instance)
+	cm := BuildConfigMap(instance, "")
 
 	if cm.Name != "cm-test-config" {
 		t.Errorf("configmap name = %q, want %q", cm.Name, "cm-test-config")
@@ -1463,7 +1463,7 @@ func TestBuildConfigMap_RawConfig(t *testing.T) {
 		},
 	}
 
-	cm := BuildConfigMap(instance)
+	cm := BuildConfigMap(instance, "")
 
 	content, ok := cm.Data["openclaw.json"]
 	if !ok {
@@ -1491,7 +1491,7 @@ func TestBuildConfigMap_InvalidJSON_RawPreserved(t *testing.T) {
 		},
 	}
 
-	cm := BuildConfigMap(instance)
+	cm := BuildConfigMap(instance, "")
 	content := cm.Data["openclaw.json"]
 
 	// Pretty-printed version of {"key":"value"}
@@ -1667,7 +1667,7 @@ func TestBuildConfigMap_EnrichesChannelModules(t *testing.T) {
 		},
 	}
 
-	cm := BuildConfigMap(instance)
+	cm := BuildConfigMap(instance, "")
 	content := cm.Data["openclaw.json"]
 
 	// The enriched config should contain the module entry
@@ -2193,7 +2193,7 @@ func TestAllBuilders_ConsistentLabels(t *testing.T) {
 		{"ServiceAccount", BuildServiceAccount(instance).Labels},
 		{"Role", BuildRole(instance).Labels},
 		{"RoleBinding", BuildRoleBinding(instance).Labels},
-		{"ConfigMap", BuildConfigMap(instance).Labels},
+		{"ConfigMap", BuildConfigMap(instance, "").Labels},
 		{"PVC", BuildPVC(instance).Labels},
 		{"PDB", BuildPDB(instance).Labels},
 		{"Ingress", BuildIngress(instance).Labels},
@@ -2233,7 +2233,7 @@ func TestAllBuilders_ConsistentNamespace(t *testing.T) {
 		{"ServiceAccount", BuildServiceAccount(instance).Namespace},
 		{"Role", BuildRole(instance).Namespace},
 		{"RoleBinding", BuildRoleBinding(instance).Namespace},
-		{"ConfigMap", BuildConfigMap(instance).Namespace},
+		{"ConfigMap", BuildConfigMap(instance, "").Namespace},
 		{"PVC", BuildPVC(instance).Namespace},
 		{"PDB", BuildPDB(instance).Namespace},
 		{"Ingress", BuildIngress(instance).Namespace},
@@ -2390,6 +2390,14 @@ func assertVolumeMount(t *testing.T, mounts []corev1.VolumeMount, name, expected
 		}
 	}
 	t.Errorf("volume mount %q not found", name)
+}
+
+func envNames(envs []corev1.EnvVar) []string {
+	names := make([]string, len(envs))
+	for i, e := range envs {
+		names[i] = e.Name
+	}
+	return names
 }
 
 func findVolume(volumes []corev1.Volume, name string) *corev1.Volume {
@@ -3210,5 +3218,305 @@ func TestBuildStatefulSet_SkillsOnly_NoConfigInitContainer(t *testing.T) {
 	}
 	if !found {
 		t.Error("init-skills container should exist with skills defined")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// secret.go tests — gateway token Secret
+// ---------------------------------------------------------------------------
+
+func TestGatewayTokenSecretName(t *testing.T) {
+	instance := newTestInstance("my-app")
+	got := GatewayTokenSecretName(instance)
+	if got != "my-app-gateway-token" {
+		t.Errorf("GatewayTokenSecretName() = %q, want %q", got, "my-app-gateway-token")
+	}
+}
+
+func TestBuildGatewayTokenSecret(t *testing.T) {
+	instance := newTestInstance("my-app")
+	token := "abcdef1234567890abcdef1234567890"
+
+	secret := BuildGatewayTokenSecret(instance, token)
+
+	if secret.Name != "my-app-gateway-token" {
+		t.Errorf("secret name = %q, want %q", secret.Name, "my-app-gateway-token")
+	}
+	if secret.Namespace != "test-ns" {
+		t.Errorf("secret namespace = %q, want %q", secret.Namespace, "test-ns")
+	}
+	if secret.Labels["app.kubernetes.io/name"] != "openclaw" {
+		t.Error("secret missing app label")
+	}
+	if string(secret.Data[GatewayTokenSecretKey]) != token {
+		t.Errorf("secret data[%q] = %q, want %q", GatewayTokenSecretKey, string(secret.Data[GatewayTokenSecretKey]), token)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// configmap.go tests — gateway auth enrichment
+// ---------------------------------------------------------------------------
+
+func TestEnrichConfigWithGatewayAuth_InjectsToken(t *testing.T) {
+	configJSON := []byte(`{"channels":{"slack":{"enabled":true}}}`)
+	token := "my-test-token"
+
+	result, err := enrichConfigWithGatewayAuth(configJSON, token)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(result, &parsed); err != nil {
+		t.Fatalf("failed to parse result: %v", err)
+	}
+
+	gw, ok := parsed["gateway"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected gateway key in config")
+	}
+	auth, ok := gw["auth"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected gateway.auth key in config")
+	}
+	if auth["mode"] != "token" {
+		t.Errorf("gateway.auth.mode = %v, want %q", auth["mode"], "token")
+	}
+	if auth["token"] != token {
+		t.Errorf("gateway.auth.token = %v, want %q", auth["token"], token)
+	}
+}
+
+func TestEnrichConfigWithGatewayAuth_PreservesUserToken(t *testing.T) {
+	configJSON := []byte(`{"gateway":{"auth":{"mode":"token","token":"user-token-123"}}}`)
+	token := "operator-generated-token"
+
+	result, err := enrichConfigWithGatewayAuth(configJSON, token)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(result, &parsed); err != nil {
+		t.Fatalf("failed to parse result: %v", err)
+	}
+
+	gw := parsed["gateway"].(map[string]interface{})
+	auth := gw["auth"].(map[string]interface{})
+
+	// User's token should be preserved, not overwritten
+	if auth["token"] != "user-token-123" {
+		t.Errorf("gateway.auth.token = %v, want %q (user's value should be preserved)", auth["token"], "user-token-123")
+	}
+}
+
+func TestEnrichConfigWithGatewayAuth_EmptyConfig(t *testing.T) {
+	configJSON := []byte(`{}`)
+	token := "my-token"
+
+	result, err := enrichConfigWithGatewayAuth(configJSON, token)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(result, &parsed); err != nil {
+		t.Fatalf("failed to parse result: %v", err)
+	}
+
+	gw := parsed["gateway"].(map[string]interface{})
+	auth := gw["auth"].(map[string]interface{})
+	if auth["mode"] != "token" {
+		t.Errorf("gateway.auth.mode = %v, want %q", auth["mode"], "token")
+	}
+	if auth["token"] != "my-token" {
+		t.Errorf("gateway.auth.token = %v, want %q", auth["token"], "my-token")
+	}
+}
+
+func TestEnrichConfigWithGatewayAuth_InvalidJSON(t *testing.T) {
+	configJSON := []byte(`not json`)
+	token := "my-token"
+
+	result, err := enrichConfigWithGatewayAuth(configJSON, token)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Should return unchanged
+	if !bytes.Equal(result, configJSON) {
+		t.Errorf("expected unchanged result for invalid JSON, got %s", string(result))
+	}
+}
+
+func TestBuildConfigMap_WithGatewayToken(t *testing.T) {
+	instance := newTestInstance("gw-test")
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{
+			Raw: []byte(`{"channels":{"slack":{"enabled":true}}}`),
+		},
+	}
+	token := "abc123"
+
+	cm := BuildConfigMap(instance, token)
+
+	configContent := cm.Data["openclaw.json"]
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(configContent), &parsed); err != nil {
+		t.Fatalf("failed to parse ConfigMap data: %v", err)
+	}
+
+	gw, ok := parsed["gateway"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected gateway key in ConfigMap config")
+	}
+	auth, ok := gw["auth"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected gateway.auth key in ConfigMap config")
+	}
+	if auth["token"] != token {
+		t.Errorf("gateway.auth.token = %v, want %q", auth["token"], token)
+	}
+}
+
+func TestBuildConfigMap_WithGatewayToken_NoRawConfig(t *testing.T) {
+	instance := newTestInstance("gw-noraw")
+	// No raw config set
+	token := "abc123"
+
+	cm := BuildConfigMap(instance, token)
+
+	configContent := cm.Data["openclaw.json"]
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(configContent), &parsed); err != nil {
+		t.Fatalf("failed to parse ConfigMap data: %v", err)
+	}
+
+	gw, ok := parsed["gateway"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected gateway key in ConfigMap config even with no raw config")
+	}
+	auth, ok := gw["auth"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected gateway.auth in ConfigMap config")
+	}
+	if auth["token"] != token {
+		t.Errorf("gateway.auth.token = %v, want %q", auth["token"], token)
+	}
+}
+
+func TestBuildConfigMap_EmptyGatewayToken(t *testing.T) {
+	instance := newTestInstance("gw-empty")
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{
+			Raw: []byte(`{"key":"value"}`),
+		},
+	}
+
+	cm := BuildConfigMap(instance, "")
+
+	configContent := cm.Data["openclaw.json"]
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(configContent), &parsed); err != nil {
+		t.Fatalf("failed to parse ConfigMap data: %v", err)
+	}
+
+	// No gateway key should be injected when token is empty
+	if _, ok := parsed["gateway"]; ok {
+		t.Error("gateway key should not be present when token is empty")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// statefulset.go tests — gateway token env + Bonjour disable
+// ---------------------------------------------------------------------------
+
+func TestBuildStatefulSet_DisableBonjour(t *testing.T) {
+	instance := newTestInstance("bonjour-test")
+	sts := BuildStatefulSet(instance)
+
+	main := sts.Spec.Template.Spec.Containers[0]
+	found := false
+	for _, env := range main.Env {
+		if env.Name == "OPENCLAW_DISABLE_BONJOUR" {
+			found = true
+			if env.Value != "1" {
+				t.Errorf("OPENCLAW_DISABLE_BONJOUR = %q, want %q", env.Value, "1")
+			}
+			break
+		}
+	}
+	if !found {
+		t.Error("OPENCLAW_DISABLE_BONJOUR env var should always be present")
+	}
+}
+
+func TestBuildStatefulSet_GatewayTokenEnv(t *testing.T) {
+	instance := newTestInstance("gw-env-test")
+	secretName := "gw-env-test-gateway-token"
+
+	sts := BuildStatefulSet(instance, secretName)
+
+	main := sts.Spec.Template.Spec.Containers[0]
+	var gwEnv *corev1.EnvVar
+	for i := range main.Env {
+		if main.Env[i].Name == "OPENCLAW_GATEWAY_TOKEN" {
+			gwEnv = &main.Env[i]
+			break
+		}
+	}
+
+	if gwEnv == nil {
+		t.Fatal("OPENCLAW_GATEWAY_TOKEN env var not found")
+	}
+	if gwEnv.ValueFrom == nil || gwEnv.ValueFrom.SecretKeyRef == nil {
+		t.Fatal("OPENCLAW_GATEWAY_TOKEN should use SecretKeyRef")
+	}
+	if gwEnv.ValueFrom.SecretKeyRef.Name != secretName {
+		t.Errorf("secret name = %q, want %q", gwEnv.ValueFrom.SecretKeyRef.Name, secretName)
+	}
+	if gwEnv.ValueFrom.SecretKeyRef.Key != GatewayTokenSecretKey {
+		t.Errorf("secret key = %q, want %q", gwEnv.ValueFrom.SecretKeyRef.Key, GatewayTokenSecretKey)
+	}
+}
+
+func TestBuildStatefulSet_GatewayTokenEnv_UserOverride(t *testing.T) {
+	instance := newTestInstance("gw-override")
+	instance.Spec.Env = []corev1.EnvVar{
+		{Name: "OPENCLAW_GATEWAY_TOKEN", Value: "user-provided-token"},
+	}
+	secretName := "gw-override-gateway-token"
+
+	sts := BuildStatefulSet(instance, secretName)
+
+	main := sts.Spec.Template.Spec.Containers[0]
+	// Count occurrences of OPENCLAW_GATEWAY_TOKEN
+	count := 0
+	for _, env := range main.Env {
+		if env.Name == "OPENCLAW_GATEWAY_TOKEN" {
+			count++
+			// The one present should be the user's value, not a SecretKeyRef
+			if env.Value != "user-provided-token" {
+				t.Errorf("OPENCLAW_GATEWAY_TOKEN value = %q, want %q (user's value)", env.Value, "user-provided-token")
+			}
+			if env.ValueFrom != nil {
+				t.Error("user's OPENCLAW_GATEWAY_TOKEN should not use SecretKeyRef")
+			}
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected exactly 1 OPENCLAW_GATEWAY_TOKEN env var, got %d", count)
+	}
+}
+
+func TestBuildStatefulSet_NoGatewayTokenSecretName(t *testing.T) {
+	instance := newTestInstance("no-gw")
+
+	sts := BuildStatefulSet(instance)
+
+	main := sts.Spec.Template.Spec.Containers[0]
+	for _, env := range main.Env {
+		if env.Name == "OPENCLAW_GATEWAY_TOKEN" {
+			t.Error("OPENCLAW_GATEWAY_TOKEN should not be present when no secret name is provided")
+		}
 	}
 }

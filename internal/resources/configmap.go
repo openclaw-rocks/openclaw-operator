@@ -25,8 +25,10 @@ import (
 	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
 )
 
-// BuildConfigMap creates a ConfigMap for the OpenClawInstance configuration
-func BuildConfigMap(instance *openclawv1alpha1.OpenClawInstance) *corev1.ConfigMap {
+// BuildConfigMap creates a ConfigMap for the OpenClawInstance configuration.
+// If gatewayToken is non-empty and the user hasn't already configured
+// gateway.auth.token in their config, the token and auth mode are injected.
+func BuildConfigMap(instance *openclawv1alpha1.OpenClawInstance, gatewayToken string) *corev1.ConfigMap {
 	labels := Labels(instance)
 
 	// Generate openclaw.json content from raw config
@@ -38,7 +40,16 @@ func BuildConfigMap(instance *openclawv1alpha1.OpenClawInstance) *corev1.ConfigM
 		if enriched, err := enrichConfigWithModules(configBytes); err == nil {
 			configBytes = enriched
 		}
+		// Inject gateway auth token so mDNS pairing is not required.
+		if gatewayToken != "" {
+			if enriched, err := enrichConfigWithGatewayAuth(configBytes, gatewayToken); err == nil {
+				configBytes = enriched
+			}
+		}
 		configContent = string(configBytes)
+	} else if gatewayToken != "" {
+		// No raw config at all — create a minimal config with gateway auth
+		configContent = `{"gateway":{"auth":{"mode":"token","token":"` + gatewayToken + `"}}}`
 	}
 
 	// Try to pretty-print the JSON
@@ -126,5 +137,37 @@ func enrichConfigWithModules(configJSON []byte) ([]byte, error) {
 	}
 
 	config["modules"] = modules
+	return json.Marshal(config)
+}
+
+// enrichConfigWithGatewayAuth injects gateway.auth.mode=token and
+// gateway.auth.token into the config JSON. If the user has already set
+// gateway.auth.token, the config is returned unchanged (user override wins).
+func enrichConfigWithGatewayAuth(configJSON []byte, token string) ([]byte, error) {
+	var config map[string]interface{}
+	if err := json.Unmarshal(configJSON, &config); err != nil {
+		return configJSON, nil // not a JSON object, return unchanged
+	}
+
+	// Navigate into gateway.auth, creating intermediate maps as needed
+	gw, _ := config["gateway"].(map[string]interface{})
+	if gw == nil {
+		gw = make(map[string]interface{})
+	}
+	auth, _ := gw["auth"].(map[string]interface{})
+	if auth == nil {
+		auth = make(map[string]interface{})
+	}
+
+	// If the user already set a token, don't override
+	if existingToken, ok := auth["token"].(string); ok && existingToken != "" {
+		return configJSON, nil
+	}
+
+	auth["mode"] = "token"
+	auth["token"] = token
+	gw["auth"] = auth
+	config["gateway"] = gw
+
 	return json.Marshal(config)
 }

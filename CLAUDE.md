@@ -157,7 +157,7 @@ All checks run on every push to main and every PR:
 
 - **RBAC:** Use `+kubebuilder:rbac` markers with minimum required verbs. No wildcards.
 - **Pod security:** Default to Restricted PSS — `runAsNonRoot`, drop `ALL` capabilities, seccomp RuntimeDefault
-- **Secrets:** Operator only gets `get;list;watch` on secrets (never `create;update;delete`)
+- **Secrets:** Operator has `get;list;watch;create;update;patch` on secrets — needed for auto-generating gateway token Secrets (owned by the CR, garbage-collected on deletion)
 - **Images:** Signed with Cosign (keyless OIDC), SBOM attested
 - **NetworkPolicy:** Enabled by default with deny-all baseline
 

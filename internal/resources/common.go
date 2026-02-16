@@ -41,6 +41,9 @@ const (
 
 	// ComponentLabel is the component label key
 	ComponentLabel = "app.kubernetes.io/component"
+
+	// GatewayTokenSecretKey is the data key used in the gateway token Secret
+	GatewayTokenSecretKey = "token"
 )
 
 // Labels returns the standard labels for an OpenClawInstance
@@ -121,6 +124,11 @@ func PDBName(instance *openclawv1alpha1.OpenClawInstance) string {
 // IngressName returns the name of the Ingress
 func IngressName(instance *openclawv1alpha1.OpenClawInstance) string {
 	return instance.Name
+}
+
+// GatewayTokenSecretName returns the name of the auto-generated gateway token Secret
+func GatewayTokenSecretName(instance *openclawv1alpha1.OpenClawInstance) string {
+	return instance.Name + "-gateway-token"
 }
 
 // GetImageRepository returns the image repository with defaults

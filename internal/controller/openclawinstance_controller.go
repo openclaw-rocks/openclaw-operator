@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -85,7 +86,7 @@ type OpenClawInstanceReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=core,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;update;patch;delete
@@ -274,8 +275,15 @@ func (r *OpenClawInstanceReconciler) reconcileResources(ctx context.Context, ins
 	}
 	logger.V(1).Info("NetworkPolicy reconciled")
 
+	// 2b. Reconcile gateway token Secret (must precede ConfigMap + StatefulSet)
+	gatewayToken, err := r.reconcileGatewayTokenSecret(ctx, instance)
+	if err != nil {
+		return fmt.Errorf("failed to reconcile gateway token secret: %w", err)
+	}
+	logger.V(1).Info("Gateway token secret reconciled")
+
 	// 3. Reconcile ConfigMap (if using raw config)
-	if err := r.reconcileConfigMap(ctx, instance); err != nil {
+	if err := r.reconcileConfigMap(ctx, instance, gatewayToken); err != nil {
 		return fmt.Errorf("failed to reconcile ConfigMap: %w", err)
 	}
 	logger.V(1).Info("ConfigMap reconciled")
@@ -313,7 +321,7 @@ func (r *OpenClawInstanceReconciler) reconcileResources(ctx context.Context, ins
 	if err := r.migrateDeploymentToStatefulSet(ctx, instance); err != nil {
 		return fmt.Errorf("failed to migrate Deployment to StatefulSet: %w", err)
 	}
-	if err := r.reconcileStatefulSet(ctx, instance); err != nil {
+	if err := r.reconcileStatefulSet(ctx, instance, gatewayToken); err != nil {
 		return fmt.Errorf("failed to reconcile StatefulSet: %w", err)
 	}
 	logger.V(1).Info("StatefulSet reconciled")
@@ -454,8 +462,61 @@ func (r *OpenClawInstanceReconciler) reconcileNetworkPolicy(ctx context.Context,
 	return nil
 }
 
+// reconcileGatewayTokenSecret ensures a gateway token Secret exists for the instance.
+// If the Secret doesn't exist, a random 32-byte hex token is generated and stored.
+// If it already exists, the existing token is returned. The token is used to configure
+// gateway.auth.mode=token so that Bonjour/mDNS pairing (unusable in k8s) is bypassed.
+func (r *OpenClawInstanceReconciler) reconcileGatewayTokenSecret(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) (string, error) {
+	secretName := resources.GatewayTokenSecretName(instance)
+
+	existing := &corev1.Secret{}
+	err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: instance.Namespace}, existing)
+	if err == nil {
+		// Secret exists — return the stored token
+		instance.Status.ManagedResources.GatewayTokenSecret = existing.Name
+		if tok, ok := existing.Data[resources.GatewayTokenSecretKey]; ok {
+			return string(tok), nil
+		}
+		return "", nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return "", fmt.Errorf("failed to get gateway token secret: %w", err)
+	}
+
+	// Generate a random 32-byte hex token
+	tokenBytes := make([]byte, 32)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		return "", fmt.Errorf("failed to generate gateway token: %w", err)
+	}
+	tokenHex := hex.EncodeToString(tokenBytes)
+
+	// Create the Secret via CreateOrUpdate (handles race conditions)
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: instance.Namespace,
+		},
+	}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
+		desired := resources.BuildGatewayTokenSecret(instance, tokenHex)
+		secret.Labels = desired.Labels
+		// Only set data if this is a new Secret (don't overwrite user edits)
+		if secret.Data == nil {
+			secret.Data = desired.Data
+		}
+		return controllerutil.SetControllerReference(instance, secret, r.Scheme)
+	}); err != nil {
+		return "", fmt.Errorf("failed to create gateway token secret: %w", err)
+	}
+
+	instance.Status.ManagedResources.GatewayTokenSecret = secret.Name
+	r.Recorder.Event(instance, corev1.EventTypeNormal, "GatewayTokenCreated", "Auto-generated gateway authentication token")
+
+	return tokenHex, nil
+}
+
 // reconcileConfigMap reconciles the ConfigMap for openclaw.json
-func (r *OpenClawInstanceReconciler) reconcileConfigMap(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) error {
+func (r *OpenClawInstanceReconciler) reconcileConfigMap(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance, gatewayToken string) error {
 	// Only create ConfigMap if using raw config (not referencing external ConfigMap)
 	if instance.Spec.Config.ConfigMapRef != nil {
 		// Using external ConfigMap, nothing to create
@@ -470,7 +531,7 @@ func (r *OpenClawInstanceReconciler) reconcileConfigMap(ctx context.Context, ins
 		},
 	}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
-		desired := resources.BuildConfigMap(instance)
+		desired := resources.BuildConfigMap(instance, gatewayToken)
 		cm.Labels = desired.Labels
 		cm.Data = desired.Data
 		return controllerutil.SetControllerReference(instance, cm, r.Scheme)
@@ -656,7 +717,7 @@ func (r *OpenClawInstanceReconciler) migrateDeploymentToStatefulSet(ctx context.
 }
 
 // reconcileStatefulSet reconciles the StatefulSet
-func (r *OpenClawInstanceReconciler) reconcileStatefulSet(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) error {
+func (r *OpenClawInstanceReconciler) reconcileStatefulSet(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance, gatewayToken string) error {
 	// Compute secret hash for rollout trigger on secret rotation
 	secretHash, err := r.computeSecretHash(ctx, instance)
 	if err != nil {
@@ -671,7 +732,12 @@ func (r *OpenClawInstanceReconciler) reconcileStatefulSet(ctx context.Context, i
 		},
 	}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sts, func() error {
-		desired := resources.BuildStatefulSet(instance)
+		// Pass the gateway token secret name so the env var can be injected
+		var gwSecretName string
+		if gatewayToken != "" {
+			gwSecretName = resources.GatewayTokenSecretName(instance)
+		}
+		desired := resources.BuildStatefulSet(instance, gwSecretName)
 		sts.Labels = desired.Labels
 		sts.Spec = desired.Spec
 		// Inject secret hash annotation to trigger rollout on secret rotation
@@ -829,6 +895,10 @@ func (r *OpenClawInstanceReconciler) computeSecretHash(ctx context.Context, inst
 			secretNames = append(secretNames, ef.SecretRef.Name)
 		}
 	}
+	// Include the gateway token Secret so rotations trigger a pod rollout
+	gwSecretName := resources.GatewayTokenSecretName(instance)
+	secretNames = append(secretNames, gwSecretName)
+
 	if len(secretNames) == 0 {
 		return "", nil
 	}
@@ -902,6 +972,7 @@ func (r *OpenClawInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
 		Owns(&corev1.ServiceAccount{}).
+		Owns(&corev1.Secret{}).
 		Owns(&rbacv1.Role{}).
 		Owns(&rbacv1.RoleBinding{}).
 		Owns(&networkingv1.NetworkPolicy{}).

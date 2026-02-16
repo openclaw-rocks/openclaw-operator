@@ -33,13 +33,21 @@ import (
 	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
 )
 
-// BuildStatefulSet creates a StatefulSet for the OpenClawInstance
-func BuildStatefulSet(instance *openclawv1alpha1.OpenClawInstance) *appsv1.StatefulSet {
+// BuildStatefulSet creates a StatefulSet for the OpenClawInstance.
+// If gatewayTokenSecretName is non-empty and the user hasn't already set
+// OPENCLAW_GATEWAY_TOKEN in spec.env, the env var is injected via SecretKeyRef.
+func BuildStatefulSet(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecretName ...string) *appsv1.StatefulSet {
 	labels := Labels(instance)
 	selectorLabels := SelectorLabels(instance)
 
 	// Calculate config hash for rollout trigger
 	configHash := calculateConfigHash(instance)
+
+	// Resolve optional gateway token secret name
+	var gwSecretName string
+	if len(gatewayTokenSecretName) > 0 {
+		gwSecretName = gatewayTokenSecretName[0]
+	}
 
 	sts := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
@@ -70,7 +78,7 @@ func BuildStatefulSet(instance *openclawv1alpha1.OpenClawInstance) *appsv1.State
 					AutomountServiceAccountToken:  Ptr(false),
 					SecurityContext:               buildPodSecurityContext(instance),
 					InitContainers:                buildInitContainers(instance),
-					Containers:                    buildContainers(instance),
+					Containers:                    buildContainers(instance, gwSecretName),
 					Volumes:                       buildVolumes(instance),
 					NodeSelector:                  instance.Spec.Availability.NodeSelector,
 					Tolerations:                   instance.Spec.Availability.Tolerations,
@@ -164,9 +172,9 @@ func buildContainerSecurityContext(instance *openclawv1alpha1.OpenClawInstance) 
 }
 
 // buildContainers creates the container specs
-func buildContainers(instance *openclawv1alpha1.OpenClawInstance) []corev1.Container {
+func buildContainers(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecretName string) []corev1.Container {
 	containers := []corev1.Container{
-		buildMainContainer(instance),
+		buildMainContainer(instance, gatewayTokenSecretName),
 	}
 
 	// Add Chromium sidecar if enabled
@@ -181,7 +189,7 @@ func buildContainers(instance *openclawv1alpha1.OpenClawInstance) []corev1.Conta
 }
 
 // buildMainContainer creates the main OpenClaw container
-func buildMainContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
+func buildMainContainer(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecretName string) corev1.Container {
 	container := corev1.Container{
 		Name:                     "openclaw",
 		Image:                    GetImage(instance),
@@ -201,7 +209,7 @@ func buildMainContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Cont
 				Protocol:      corev1.ProtocolTCP,
 			},
 		},
-		Env:       buildMainEnv(instance),
+		Env:       buildMainEnv(instance, gatewayTokenSecretName),
 		EnvFrom:   instance.Spec.EnvFrom,
 		Resources: buildResourceRequirements(instance),
 		VolumeMounts: []corev1.VolumeMount{
@@ -225,9 +233,11 @@ func buildMainContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Cont
 }
 
 // buildMainEnv creates the environment variables for the main container
-func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance) []corev1.EnvVar {
+func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecretName string) []corev1.EnvVar {
 	env := []corev1.EnvVar{
 		{Name: "HOME", Value: "/home/openclaw"},
+		// mDNS/Bonjour pairing is unusable in Kubernetes — always disable it
+		{Name: "OPENCLAW_DISABLE_BONJOUR", Value: "1"},
 	}
 
 	if instance.Spec.Chromium.Enabled {
@@ -237,7 +247,30 @@ func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance) []corev1.EnvVar {
 		})
 	}
 
+	// Inject OPENCLAW_GATEWAY_TOKEN from Secret unless the user already set it in spec.env
+	if gatewayTokenSecretName != "" && !hasUserEnv(instance, "OPENCLAW_GATEWAY_TOKEN") {
+		env = append(env, corev1.EnvVar{
+			Name: "OPENCLAW_GATEWAY_TOKEN",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: gatewayTokenSecretName},
+					Key:                  GatewayTokenSecretKey,
+				},
+			},
+		})
+	}
+
 	return append(env, instance.Spec.Env...)
+}
+
+// hasUserEnv checks whether the user has defined a specific env var in spec.env.
+func hasUserEnv(instance *openclawv1alpha1.OpenClawInstance, name string) bool {
+	for _, e := range instance.Spec.Env {
+		if e.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // buildInitContainers creates init containers that seed config and workspace
