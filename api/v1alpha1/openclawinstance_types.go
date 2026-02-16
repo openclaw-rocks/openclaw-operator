@@ -78,6 +78,10 @@ type OpenClawInstanceSpec struct {
 	// Cleared automatically after successful restore.
 	// +optional
 	RestoreFrom string `json:"restoreFrom,omitempty"`
+
+	// AutoUpdate configures automatic version updates from the OCI registry
+	// +optional
+	AutoUpdate AutoUpdateSpec `json:"autoUpdate,omitempty"`
 }
 
 // ImageSpec defines the container image configuration
@@ -605,10 +609,61 @@ type PodDisruptionBudgetSpec struct {
 	MaxUnavailable *int32 `json:"maxUnavailable,omitempty"`
 }
 
+// AutoUpdateSpec configures automatic version updates from the OCI registry
+type AutoUpdateSpec struct {
+	// Enabled enables automatic version updates
+	// +kubebuilder:default=false
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// CheckInterval is how often to check for new versions (Go duration, e.g. "24h")
+	// Minimum: 1h, Maximum: 168h (7 days)
+	// +kubebuilder:default="24h"
+	// +optional
+	CheckInterval string `json:"checkInterval,omitempty"`
+
+	// BackupBeforeUpdate creates a backup before applying updates
+	// +kubebuilder:default=true
+	// +optional
+	BackupBeforeUpdate *bool `json:"backupBeforeUpdate,omitempty"`
+}
+
+// AutoUpdateStatus tracks the state of automatic version updates
+type AutoUpdateStatus struct {
+	// LastCheckTime is when the registry was last checked for new versions
+	// +optional
+	LastCheckTime *metav1.Time `json:"lastCheckTime,omitempty"`
+
+	// LatestVersion is the latest version available in the registry
+	// +optional
+	LatestVersion string `json:"latestVersion,omitempty"`
+
+	// CurrentVersion is the version currently running
+	// +optional
+	CurrentVersion string `json:"currentVersion,omitempty"`
+
+	// PendingVersion is set during an in-flight update
+	// +optional
+	PendingVersion string `json:"pendingVersion,omitempty"`
+
+	// UpdatePhase tracks progress of an in-flight update
+	// +kubebuilder:validation:Enum="";BackingUp;ApplyingUpdate
+	// +optional
+	UpdatePhase string `json:"updatePhase,omitempty"`
+
+	// LastUpdateTime is when the last successful update was applied
+	// +optional
+	LastUpdateTime *metav1.Time `json:"lastUpdateTime,omitempty"`
+
+	// LastUpdateError records the error from the last failed update attempt
+	// +optional
+	LastUpdateError string `json:"lastUpdateError,omitempty"`
+}
+
 // OpenClawInstanceStatus defines the observed state of OpenClawInstance
 type OpenClawInstanceStatus struct {
 	// Phase represents the current lifecycle phase of the instance
-	// +kubebuilder:validation:Enum=Pending;Provisioning;Running;Degraded;Failed;Terminating;BackingUp;Restoring
+	// +kubebuilder:validation:Enum=Pending;Provisioning;Running;Degraded;Failed;Terminating;BackingUp;Restoring;Updating
 	// +optional
 	Phase string `json:"phase,omitempty"`
 
@@ -655,6 +710,10 @@ type OpenClawInstanceStatus struct {
 	// RestoredFrom is the B2 path this instance was restored from
 	// +optional
 	RestoredFrom string `json:"restoredFrom,omitempty"`
+
+	// AutoUpdate tracks the state of automatic version updates
+	// +optional
+	AutoUpdate AutoUpdateStatus `json:"autoUpdate,omitempty"`
 }
 
 // ManagedResourcesStatus tracks resources created by the operator
@@ -760,6 +819,9 @@ const (
 
 	// ConditionTypeRestoreComplete indicates the restore completed successfully
 	ConditionTypeRestoreComplete = "RestoreComplete"
+
+	// ConditionTypeAutoUpdateAvailable indicates a newer version is available
+	ConditionTypeAutoUpdateAvailable = "AutoUpdateAvailable"
 )
 
 // Phase constants
@@ -772,4 +834,5 @@ const (
 	PhaseTerminating  = "Terminating"
 	PhaseBackingUp    = "BackingUp"
 	PhaseRestoring    = "Restoring"
+	PhaseUpdating     = "Updating"
 )

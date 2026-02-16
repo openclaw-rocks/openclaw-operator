@@ -52,6 +52,26 @@ spec:
           spec:
             description: OpenClawInstanceSpec defines the desired state of OpenClawInstance
             properties:
+              autoUpdate:
+                description: AutoUpdate configures automatic version updates from
+                  the OCI registry
+                properties:
+                  backupBeforeUpdate:
+                    default: true
+                    description: BackupBeforeUpdate creates a backup before applying
+                      updates
+                    type: boolean
+                  checkInterval:
+                    default: 24h
+                    description: |-
+                      CheckInterval is how often to check for new versions (Go duration, e.g. "24h")
+                      Minimum: 1h, Maximum: 168h (7 days)
+                    type: string
+                  enabled:
+                    default: false
+                    description: Enabled enables automatic version updates
+                    type: boolean
+                type: object
               availability:
                 description: Availability configures high availability settings
                 properties:
@@ -1612,6 +1632,12 @@ spec:
                         type: string
                     type: object
                 type: object
+              restoreFrom:
+                description: |-
+                  RestoreFrom is the B2 backup path to restore data from (e.g. "backups/{tenantId}/{instanceId}/{timestamp}").
+                  When set, the operator restores PVC data from this path before creating the StatefulSet.
+                  Cleared automatically after successful restore.
+                type: string
               security:
                 description: Security specifies security-related configuration
                 properties:
@@ -5162,10 +5188,71 @@ spec:
                         type: string
                     type: object
                 type: object
+              workspace:
+                description: |-
+                  Workspace configures initial workspace files seeded into the instance.
+                  Files are copied once on first boot and never overwritten, so agent
+                  modifications survive pod restarts.
+                properties:
+                  initialDirectories:
+                    description: |-
+                      InitialDirectories is a list of directories to create (mkdir -p)
+                      inside the workspace directory. Nested paths like "tools/scripts" are allowed.
+                    items:
+                      type: string
+                    maxItems: 20
+                    type: array
+                  initialFiles:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      InitialFiles maps filenames to their content. Each file is written
+                      to the workspace directory only if it does not already exist.
+                    maxProperties: 50
+                    type: object
+                type: object
             type: object
           status:
             description: OpenClawInstanceStatus defines the observed state of OpenClawInstance
             properties:
+              autoUpdate:
+                description: AutoUpdate tracks the state of automatic version updates
+                properties:
+                  currentVersion:
+                    description: CurrentVersion is the version currently running
+                    type: string
+                  lastCheckTime:
+                    description: LastCheckTime is when the registry was last checked
+                      for new versions
+                    format: date-time
+                    type: string
+                  lastUpdateError:
+                    description: LastUpdateError records the error from the last failed
+                      update attempt
+                    type: string
+                  lastUpdateTime:
+                    description: LastUpdateTime is when the last successful update
+                      was applied
+                    format: date-time
+                    type: string
+                  latestVersion:
+                    description: LatestVersion is the latest version available in
+                      the registry
+                    type: string
+                  pendingVersion:
+                    description: PendingVersion is set during an in-flight update
+                    type: string
+                  updatePhase:
+                    description: UpdatePhase tracks progress of an in-flight update
+                    enum:
+                    - ""
+                    - BackingUp
+                    - ApplyingUpdate
+                    type: string
+                type: object
+              backupJobName:
+                description: BackupJobName is the name of the active backup Job
+                type: string
               canvasEndpoint:
                 description: CanvasEndpoint is the endpoint for the OpenClaw canvas
                 type: string
@@ -5230,6 +5317,15 @@ spec:
               gatewayEndpoint:
                 description: GatewayEndpoint is the endpoint for the OpenClaw gateway
                 type: string
+              lastBackupPath:
+                description: LastBackupPath is the B2 path of the last successful
+                  backup
+                type: string
+              lastBackupTime:
+                description: LastBackupTime is the timestamp of the last successful
+                  backup
+                format: date-time
+                type: string
               lastReconcileTime:
                 description: LastReconcileTime is the timestamp of the last reconciliation
                 format: date-time
@@ -5242,7 +5338,8 @@ spec:
                     description: ConfigMap is the name of the managed ConfigMap
                     type: string
                   deployment:
-                    description: Deployment is the name of the managed Deployment
+                    description: Deployment is the name of the legacy Deployment (deprecated,
+                      used during migration)
                     type: string
                   networkPolicy:
                     description: NetworkPolicy is the name of the managed NetworkPolicy
@@ -5265,6 +5362,9 @@ spec:
                   serviceAccount:
                     description: ServiceAccount is the name of the managed ServiceAccount
                     type: string
+                  statefulSet:
+                    description: StatefulSet is the name of the managed StatefulSet
+                    type: string
                 type: object
               observedGeneration:
                 description: ObservedGeneration is the most recent generation observed
@@ -5280,6 +5380,16 @@ spec:
                 - Degraded
                 - Failed
                 - Terminating
+                - BackingUp
+                - Restoring
+                - Updating
+                type: string
+              restoreJobName:
+                description: RestoreJobName is the name of the active restore Job
+                type: string
+              restoredFrom:
+                description: RestoredFrom is the B2 path this instance was restored
+                  from
                 type: string
             type: object
         type: object

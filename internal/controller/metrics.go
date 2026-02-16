@@ -61,6 +61,22 @@ var (
 			Help: "Current number of managed OpenClaw instances",
 		},
 	)
+
+	autoUpdateChecksTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "openclaw_autoupdate_checks_total",
+			Help: "Total number of auto-update version checks",
+		},
+		[]string{"instance", "namespace", "result"},
+	)
+
+	autoUpdateAppliedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "openclaw_autoupdate_applied_total",
+			Help: "Total number of auto-updates applied",
+		},
+		[]string{"instance", "namespace"},
+	)
 )
 
 func init() {
@@ -70,5 +86,7 @@ func init() {
 		instancePhase,
 		resourceCreationFailures,
 		managedInstances,
+		autoUpdateChecksTotal,
+		autoUpdateAppliedTotal,
 	)
 }

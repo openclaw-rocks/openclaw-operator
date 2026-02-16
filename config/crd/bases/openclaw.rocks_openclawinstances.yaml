@@ -52,6 +52,26 @@ spec:
           spec:
             description: OpenClawInstanceSpec defines the desired state of OpenClawInstance
             properties:
+              autoUpdate:
+                description: AutoUpdate configures automatic version updates from
+                  the OCI registry
+                properties:
+                  backupBeforeUpdate:
+                    default: true
+                    description: BackupBeforeUpdate creates a backup before applying
+                      updates
+                    type: boolean
+                  checkInterval:
+                    default: 24h
+                    description: |-
+                      CheckInterval is how often to check for new versions (Go duration, e.g. "24h")
+                      Minimum: 1h, Maximum: 168h (7 days)
+                    type: string
+                  enabled:
+                    default: false
+                    description: Enabled enables automatic version updates
+                    type: boolean
+                type: object
               availability:
                 description: Availability configures high availability settings
                 properties:
@@ -5195,6 +5215,41 @@ spec:
           status:
             description: OpenClawInstanceStatus defines the observed state of OpenClawInstance
             properties:
+              autoUpdate:
+                description: AutoUpdate tracks the state of automatic version updates
+                properties:
+                  currentVersion:
+                    description: CurrentVersion is the version currently running
+                    type: string
+                  lastCheckTime:
+                    description: LastCheckTime is when the registry was last checked
+                      for new versions
+                    format: date-time
+                    type: string
+                  lastUpdateError:
+                    description: LastUpdateError records the error from the last failed
+                      update attempt
+                    type: string
+                  lastUpdateTime:
+                    description: LastUpdateTime is when the last successful update
+                      was applied
+                    format: date-time
+                    type: string
+                  latestVersion:
+                    description: LatestVersion is the latest version available in
+                      the registry
+                    type: string
+                  pendingVersion:
+                    description: PendingVersion is set during an in-flight update
+                    type: string
+                  updatePhase:
+                    description: UpdatePhase tracks progress of an in-flight update
+                    enum:
+                    - ""
+                    - BackingUp
+                    - ApplyingUpdate
+                    type: string
+                type: object
               backupJobName:
                 description: BackupJobName is the name of the active backup Job
                 type: string
@@ -5327,6 +5382,7 @@ spec:
                 - Terminating
                 - BackingUp
                 - Restoring
+                - Updating
                 type: string
               restoreJobName:
                 description: RestoreJobName is the name of the active restore Job

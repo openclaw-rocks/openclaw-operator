@@ -39,6 +39,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	"github.com/openclawrocks/k8s-operator/internal/registry"
 	"github.com/openclawrocks/k8s-operator/internal/resources"
 )
 
@@ -66,6 +67,7 @@ type OpenClawInstanceReconciler struct {
 	Scheme            *runtime.Scheme
 	Recorder          record.EventRecorder
 	OperatorNamespace string
+	VersionResolver   *registry.Resolver
 }
 
 // +kubebuilder:rbac:groups=openclaw.rocks,resources=openclawinstances,verbs=get;list;watch;create;update;patch;delete
@@ -139,6 +141,28 @@ func (r *OpenClawInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		if err := r.Status().Update(ctx, instance); err != nil {
 			return ctrl.Result{}, err
 		}
+
+		// Resolve "latest" to a concrete semver tag if auto-update is enabled
+		if resolved, err := r.resolveInitialTag(ctx, instance); err != nil {
+			return ctrl.Result{}, err
+		} else if resolved {
+			return ctrl.Result{Requeue: true}, nil
+		}
+	}
+
+	// If an auto-update is in progress, drive the state machine
+	if instance.Status.AutoUpdate.PendingVersion != "" {
+		result, err := r.reconcileAutoUpdate(ctx, instance)
+		if err != nil {
+			logger.Error(err, "Auto-update error (non-fatal)")
+			r.Recorder.Event(instance, corev1.EventTypeWarning, "AutoUpdateError", err.Error())
+		}
+		if result.Requeue || result.RequeueAfter > 0 {
+			if statusErr := r.Status().Update(ctx, instance); statusErr != nil {
+				return ctrl.Result{}, statusErr
+			}
+			return result, nil
+		}
 	}
 
 	// Reconcile all resources
@@ -188,6 +212,12 @@ func (r *OpenClawInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		LastTransitionTime: metav1.Now(),
 	})
 
+	// Check for auto-updates (non-fatal — errors are logged and evented)
+	autoUpdateResult, autoUpdateErr := r.reconcileAutoUpdate(ctx, instance)
+	if autoUpdateErr != nil {
+		logger.Error(autoUpdateErr, "Auto-update check failed (non-fatal)")
+	}
+
 	if err := r.Status().Update(ctx, instance); err != nil {
 		logger.Error(err, "Failed to update status")
 		return ctrl.Result{}, err
@@ -199,11 +229,20 @@ func (r *OpenClawInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	r.Recorder.Event(instance, corev1.EventTypeNormal, "ReconcileSucceeded", "All resources reconciled successfully")
 	logger.Info("Reconciliation completed successfully")
 
-	return ctrl.Result{RequeueAfter: RequeueAfter}, nil
+	// If auto-update needs a requeue, use its interval if shorter
+	requeueAfter := RequeueAfter
+	if autoUpdateResult.Requeue {
+		return autoUpdateResult, nil
+	}
+	if autoUpdateResult.RequeueAfter > 0 && autoUpdateResult.RequeueAfter < requeueAfter {
+		requeueAfter = autoUpdateResult.RequeueAfter
+	}
+
+	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
 
 func updatePhaseMetric(name, namespace, currentPhase string) {
-	phases := []string{"Pending", "Provisioning", "Running", "Degraded", "Failed", "Terminating", "BackingUp", "Restoring"}
+	phases := []string{"Pending", "Provisioning", "Running", "Degraded", "Failed", "Terminating", "BackingUp", "Restoring", "Updating"}
 	for _, phase := range phases {
 		val := float64(0)
 		if phase == currentPhase {

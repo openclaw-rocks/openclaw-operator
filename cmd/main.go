@@ -20,6 +20,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -37,6 +38,7 @@ import (
 
 	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
 	"github.com/openclawrocks/k8s-operator/internal/controller"
+	"github.com/openclawrocks/k8s-operator/internal/registry"
 )
 
 var (
@@ -125,11 +127,14 @@ func main() {
 		operatorNamespace = "openclaw-operator-system"
 	}
 
+	versionResolver := registry.NewResolver(5 * time.Minute)
+
 	if err = (&controller.OpenClawInstanceReconciler{
 		Client:            mgr.GetClient(),
 		Scheme:            mgr.GetScheme(),
 		Recorder:          mgr.GetEventRecorderFor("openclawinstance-controller"),
 		OperatorNamespace: operatorNamespace,
+		VersionResolver:   versionResolver,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "OpenClawInstance")
 		os.Exit(1)

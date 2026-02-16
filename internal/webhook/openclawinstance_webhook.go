@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -143,6 +144,25 @@ func (v *OpenClawInstanceValidator) validate(instance *openclawv1alpha1.OpenClaw
 		if err := validateWorkspaceSpec(instance.Spec.Workspace); err != nil {
 			return nil, err
 		}
+	}
+
+	// 11. Validate auto-update spec
+	if instance.Spec.AutoUpdate.CheckInterval != "" {
+		d, err := time.ParseDuration(instance.Spec.AutoUpdate.CheckInterval)
+		if err != nil {
+			return nil, fmt.Errorf("autoUpdate.checkInterval is not a valid Go duration: %w", err)
+		}
+		if d < time.Hour {
+			return nil, fmt.Errorf("autoUpdate.checkInterval must be at least 1h, got %s", instance.Spec.AutoUpdate.CheckInterval)
+		}
+		if d > 168*time.Hour {
+			return nil, fmt.Errorf("autoUpdate.checkInterval must be at most 168h (7 days), got %s", instance.Spec.AutoUpdate.CheckInterval)
+		}
+	}
+
+	// 12. Warn if auto-update is enabled but image digest is set (digest pins override auto-update)
+	if instance.Spec.AutoUpdate.Enabled != nil && *instance.Spec.AutoUpdate.Enabled && instance.Spec.Image.Digest != "" {
+		warnings = append(warnings, "autoUpdate is enabled but image.digest is set — digest pins override auto-update, updates will be skipped")
 	}
 
 	return warnings, nil
@@ -270,6 +290,17 @@ func (d *OpenClawInstanceDefaulter) Default(ctx context.Context, obj runtime.Obj
 	// Default networking
 	if instance.Spec.Networking.Service.Type == "" {
 		instance.Spec.Networking.Service.Type = corev1.ServiceTypeClusterIP
+	}
+
+	// Default auto-update settings
+	if instance.Spec.AutoUpdate.Enabled == nil {
+		instance.Spec.AutoUpdate.Enabled = boolPtr(false)
+	}
+	if instance.Spec.AutoUpdate.CheckInterval == "" {
+		instance.Spec.AutoUpdate.CheckInterval = "24h"
+	}
+	if instance.Spec.AutoUpdate.BackupBeforeUpdate == nil {
+		instance.Spec.AutoUpdate.BackupBeforeUpdate = boolPtr(true)
 	}
 
 	return nil
