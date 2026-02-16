@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.6](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.5...v0.9.6) (2026-02-16)
+
+
+### Features
+
+* add runtime dependency init containers for pnpm and Python/uv ([#89](https://github.com/openclaw-rocks/k8s-operator/issues/89)) ([#90](https://github.com/openclaw-rocks/k8s-operator/issues/90)) ([b6a583c](https://github.com/openclaw-rocks/k8s-operator/commit/b6a583cfa368a49d0054943b5f055e925c2c2e5e))
+
 ## [0.9.5](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.4...v0.9.5) (2026-02-16)
 
 
