@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.3](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.2...v0.9.3) (2026-02-16)
+
+
+### Features
+
+* add auto-rollback on failed update with health check monitoring ([#75](https://github.com/openclaw-rocks/k8s-operator/issues/75)) ([1dff347](https://github.com/openclaw-rocks/k8s-operator/commit/1dff347ce46c8608be6a92640b9a5bf1bee53f28))
+
 ## [0.9.2](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.1...v0.9.2) (2026-02-16)
 
 
