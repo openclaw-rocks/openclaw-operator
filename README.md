@@ -191,6 +191,14 @@ spec:
 
 Config changes are detected via SHA-256 hashing and automatically trigger a rolling update. No manual restart needed.
 
+### Gateway authentication
+
+The operator automatically generates a gateway token Secret for each instance and injects it into both the config JSON (`gateway.auth.mode: token`) and the `OPENCLAW_GATEWAY_TOKEN` env var. This bypasses Bonjour/mDNS pairing, which is unusable in Kubernetes.
+
+- The token is generated once and never overwritten — rotate it by editing the Secret directly
+- If you set `gateway.auth.token` in your config or `OPENCLAW_GATEWAY_TOKEN` in `spec.env`, your value takes precedence
+- `OPENCLAW_DISABLE_BONJOUR=1` is always set (mDNS does not work in k8s)
+
 ### Chromium sidecar
 
 Enable headless browser automation for web scraping, screenshots, and browser-based integrations:
@@ -304,7 +312,7 @@ The operator follows a **secure-by-default** philosophy. Every instance ships wi
 - **All capabilities dropped**: no ambient Linux capabilities
 - **Seccomp RuntimeDefault**: syscall filtering enabled
 - **Default-deny NetworkPolicy**: only DNS (53) and HTTPS (443) egress allowed; ingress limited to same namespace
-- **Minimal RBAC**: each instance gets its own ServiceAccount with read-only access to its own ConfigMap; operator itself has secrets get-only (no list/watch)
+- **Minimal RBAC**: each instance gets its own ServiceAccount with read-only access to its own ConfigMap; operator can create/update Secrets only for operator-managed gateway tokens
 - **No automatic token mounting**: `automountServiceAccountToken: false` on both ServiceAccounts and pod specs
 - **Read-only root filesystem**: supported for the Chromium sidecar; scratch dirs via emptyDir
 

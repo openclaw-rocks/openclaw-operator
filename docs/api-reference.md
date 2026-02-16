@@ -352,7 +352,8 @@ Standard `metav1.Condition` array. Condition types:
 
 | Field                | Type     | Description                           |
 |----------------------|----------|---------------------------------------|
-| `deployment`         | `string` | Name of the managed Deployment.       |
+| `statefulSet`        | `string` | Name of the managed StatefulSet.      |
+| `deployment`         | `string` | Name of the legacy Deployment (deprecated, used during migration). |
 | `service`            | `string` | Name of the managed Service.          |
 | `configMap`          | `string` | Name of the managed ConfigMap.        |
 | `pvc`                | `string` | Name of the managed PVC.             |
@@ -361,6 +362,7 @@ Standard `metav1.Condition` array. Condition types:
 | `serviceAccount`     | `string` | Name of the managed ServiceAccount.   |
 | `role`               | `string` | Name of the managed Role.            |
 | `roleBinding`        | `string` | Name of the managed RoleBinding.      |
+| `gatewayTokenSecret` | `string` | Name of the auto-generated gateway token Secret. |
 
 ---
 
