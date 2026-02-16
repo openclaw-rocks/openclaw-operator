@@ -23,6 +23,12 @@ type OpenClawInstanceSpec struct {
 	// +optional
 	Workspace *WorkspaceSpec `json:"workspace,omitempty"`
 
+	// Skills is a list of ClawHub skills to install via init container.
+	// Each entry is a skill identifier (e.g., "@anthropic/mcp-server-fetch").
+	// +kubebuilder:validation:MaxItems=20
+	// +optional
+	Skills []string `json:"skills,omitempty"`
+
 	// EnvFrom is a list of sources to populate environment variables from
 	// Use this for API keys and other secrets (e.g., ANTHROPIC_API_KEY, OPENAI_API_KEY)
 	// +optional
@@ -121,6 +127,14 @@ type ConfigSpec struct {
 	// +kubebuilder:pruning:PreserveUnknownFields
 	// +optional
 	Raw *RawConfig `json:"raw,omitempty"`
+
+	// MergeMode controls how operator-managed config is applied to the PVC.
+	// "overwrite" replaces the config file on every pod restart.
+	// "merge" deep-merges operator config with existing PVC config, preserving runtime changes.
+	// +kubebuilder:validation:Enum=overwrite;merge
+	// +kubebuilder:default="overwrite"
+	// +optional
+	MergeMode string `json:"mergeMode,omitempty"`
 }
 
 // ConfigMapKeySelector selects a key from a ConfigMap
@@ -229,8 +243,8 @@ type ContainerSecurityContextSpec struct {
 	AllowPrivilegeEscalation *bool `json:"allowPrivilegeEscalation,omitempty"`
 
 	// ReadOnlyRootFilesystem mounts the container's root filesystem as read-only
-	// Note: OpenClaw requires write access to ~/.openclaw/, so this is false by default
-	// +kubebuilder:default=false
+	// The PVC at ~/.openclaw/ provides writable home, and a /tmp emptyDir handles temp files
+	// +kubebuilder:default=true
 	// +optional
 	ReadOnlyRootFilesystem *bool `json:"readOnlyRootFilesystem,omitempty"`
 

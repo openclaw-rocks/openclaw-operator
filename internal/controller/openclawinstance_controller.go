@@ -18,7 +18,10 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"sort"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -32,11 +35,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
 	"github.com/openclawrocks/k8s-operator/internal/registry"
@@ -79,7 +85,7 @@ type OpenClawInstanceReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=core,resources=secrets,verbs=get
+// +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;update;patch;delete
@@ -651,6 +657,13 @@ func (r *OpenClawInstanceReconciler) migrateDeploymentToStatefulSet(ctx context.
 
 // reconcileStatefulSet reconciles the StatefulSet
 func (r *OpenClawInstanceReconciler) reconcileStatefulSet(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) error {
+	// Compute secret hash for rollout trigger on secret rotation
+	secretHash, err := r.computeSecretHash(ctx, instance)
+	if err != nil {
+		log.FromContext(ctx).Error(err, "Failed to compute secret hash (non-fatal, using empty hash)")
+		secretHash = ""
+	}
+
 	sts := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      resources.StatefulSetName(instance),
@@ -661,6 +674,13 @@ func (r *OpenClawInstanceReconciler) reconcileStatefulSet(ctx context.Context, i
 		desired := resources.BuildStatefulSet(instance)
 		sts.Labels = desired.Labels
 		sts.Spec = desired.Spec
+		// Inject secret hash annotation to trigger rollout on secret rotation
+		if secretHash != "" {
+			if sts.Spec.Template.Annotations == nil {
+				sts.Spec.Template.Annotations = make(map[string]string)
+			}
+			sts.Spec.Template.Annotations["openclaw.rocks/secret-hash"] = secretHash
+		}
 		return controllerutil.SetControllerReference(instance, sts, r.Scheme)
 	}); err != nil {
 		return err
@@ -799,6 +819,78 @@ func (r *OpenClawInstanceReconciler) reconcileServiceMonitor(ctx context.Context
 
 // reconcileDelete is superseded by reconcileDeleteWithBackup in backup.go
 
+// computeSecretHash reads all Secrets referenced via envFrom[].secretRef and
+// computes a deterministic hash of their data. This hash is injected as a pod
+// annotation so that secret rotations trigger a rolling restart.
+func (r *OpenClawInstanceReconciler) computeSecretHash(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) (string, error) {
+	var secretNames []string
+	for _, ef := range instance.Spec.EnvFrom {
+		if ef.SecretRef != nil {
+			secretNames = append(secretNames, ef.SecretRef.Name)
+		}
+	}
+	if len(secretNames) == 0 {
+		return "", nil
+	}
+	sort.Strings(secretNames)
+
+	h := sha256.New()
+	for _, name := range secretNames {
+		secret := &corev1.Secret{}
+		if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: instance.Namespace}, secret); err != nil {
+			if apierrors.IsNotFound(err) {
+				h.Write([]byte(name + "=NOT_FOUND\n"))
+				continue
+			}
+			return "", fmt.Errorf("failed to get secret %s: %w", name, err)
+		}
+		// Sort keys for determinism
+		keys := make([]string, 0, len(secret.Data))
+		for k := range secret.Data {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			h.Write([]byte(k + "="))
+			h.Write(secret.Data[k])
+			h.Write([]byte("\n"))
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil)[:8]), nil
+}
+
+// findInstancesForSecret maps a Secret change to reconcile requests for
+// OpenClawInstances that reference it via envFrom[].secretRef.
+func (r *OpenClawInstanceReconciler) findInstancesForSecret(ctx context.Context, obj client.Object) []reconcile.Request {
+	secret, ok := obj.(*corev1.Secret)
+	if !ok {
+		return nil
+	}
+
+	instanceList := &openclawv1alpha1.OpenClawInstanceList{}
+	if err := r.List(ctx, instanceList, client.InNamespace(secret.Namespace)); err != nil {
+		log.FromContext(ctx).Error(err, "Failed to list OpenClawInstances for secret watch")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for i := range instanceList.Items {
+		instance := &instanceList.Items[i]
+		for _, ef := range instance.Spec.EnvFrom {
+			if ef.SecretRef != nil && ef.SecretRef.Name == secret.Name {
+				requests = append(requests, reconcile.Request{
+					NamespacedName: types.NamespacedName{
+						Name:      instance.Name,
+						Namespace: instance.Namespace,
+					},
+				})
+				break
+			}
+		}
+	}
+	return requests
+}
+
 // SetupWithManager sets up the controller with the Manager
 func (r *OpenClawInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
@@ -815,5 +907,6 @@ func (r *OpenClawInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&networkingv1.NetworkPolicy{}).
 		Owns(&networkingv1.Ingress{}).
 		Owns(&policyv1.PodDisruptionBudget{}).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.findInstancesForSecret)).
 		Complete(r)
 }

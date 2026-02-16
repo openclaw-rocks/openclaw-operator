@@ -129,24 +129,31 @@ func (v *OpenClawInstanceValidator) validate(instance *openclawv1alpha1.OpenClaw
 		warnings = append(warnings, "allowPrivilegeEscalation is enabled - this is a security risk")
 	}
 
-	// 8. Validate resource limits are set (recommended)
+	// 8. Warn if readOnlyRootFilesystem is explicitly disabled
+	if instance.Spec.Security.ContainerSecurityContext != nil &&
+		instance.Spec.Security.ContainerSecurityContext.ReadOnlyRootFilesystem != nil &&
+		!*instance.Spec.Security.ContainerSecurityContext.ReadOnlyRootFilesystem {
+		warnings = append(warnings, "readOnlyRootFilesystem is disabled - consider enabling for security hardening (the PVC at ~/.openclaw/ and /tmp emptyDir provide writable paths)")
+	}
+
+	// 9. Validate resource limits are set (recommended)
 	if instance.Spec.Resources.Limits.CPU == "" || instance.Spec.Resources.Limits.Memory == "" {
 		warnings = append(warnings, "Resource limits are not fully configured - consider setting both CPU and memory limits")
 	}
 
-	// 9. Warn if using "latest" image tag without a digest pin
+	// 10. Warn if using "latest" image tag without a digest pin
 	if instance.Spec.Image.Tag == imageTagLatest && instance.Spec.Image.Digest == "" {
 		warnings = append(warnings, "Image tag \"latest\" is mutable and not recommended for production - consider pinning to a specific version or digest")
 	}
 
-	// 10. Validate workspace spec
+	// 11. Validate workspace spec
 	if instance.Spec.Workspace != nil {
 		if err := validateWorkspaceSpec(instance.Spec.Workspace); err != nil {
 			return nil, err
 		}
 	}
 
-	// 11. Validate auto-update spec
+	// 12. Validate auto-update spec
 	if instance.Spec.AutoUpdate.CheckInterval != "" {
 		d, err := time.ParseDuration(instance.Spec.AutoUpdate.CheckInterval)
 		if err != nil {
@@ -160,12 +167,19 @@ func (v *OpenClawInstanceValidator) validate(instance *openclawv1alpha1.OpenClaw
 		}
 	}
 
-	// 12. Warn if auto-update is enabled but image digest is set (digest pins override auto-update)
+	// 13. Warn if auto-update is enabled but image digest is set (digest pins override auto-update)
 	if instance.Spec.AutoUpdate.Enabled != nil && *instance.Spec.AutoUpdate.Enabled && instance.Spec.Image.Digest != "" {
 		warnings = append(warnings, "autoUpdate is enabled but image.digest is set — digest pins override auto-update, updates will be skipped")
 	}
 
-	// 13. Validate auto-update healthCheckTimeout
+	// 15. Validate skill names
+	for i, skill := range instance.Spec.Skills {
+		if err := validateSkillName(skill); err != nil {
+			return nil, fmt.Errorf("skills[%d] %q: %w", i, skill, err)
+		}
+	}
+
+	// 16. Validate auto-update healthCheckTimeout
 	if instance.Spec.AutoUpdate.HealthCheckTimeout != "" {
 		d, err := time.ParseDuration(instance.Spec.AutoUpdate.HealthCheckTimeout)
 		if err != nil {
@@ -243,6 +257,23 @@ func validateWorkspaceDirectory(dir string) error {
 	return nil
 }
 
+// validateSkillName checks a single skill identifier.
+func validateSkillName(name string) error {
+	if name == "" {
+		return fmt.Errorf("skill name must not be empty")
+	}
+	if len(name) > 128 {
+		return fmt.Errorf("skill name must be at most 128 characters")
+	}
+	for _, c := range name {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+			c == '-' || c == '_' || c == '/' || c == '.' || c == '@') {
+			return fmt.Errorf("skill name contains invalid character %q", string(c))
+		}
+	}
+	return nil
+}
+
 // OpenClawInstanceDefaulter sets defaults for OpenClawInstance resources
 type OpenClawInstanceDefaulter struct{}
 
@@ -263,6 +294,11 @@ func (d *OpenClawInstanceDefaulter) Default(ctx context.Context, obj runtime.Obj
 		instance.Spec.Image.PullPolicy = corev1.PullIfNotPresent
 	}
 
+	// Default config merge mode
+	if instance.Spec.Config.MergeMode == "" {
+		instance.Spec.Config.MergeMode = "overwrite"
+	}
+
 	// Default security settings
 	if instance.Spec.Security.PodSecurityContext == nil {
 		instance.Spec.Security.PodSecurityContext = &openclawv1alpha1.PodSecurityContextSpec{
@@ -275,7 +311,7 @@ func (d *OpenClawInstanceDefaulter) Default(ctx context.Context, obj runtime.Obj
 	if instance.Spec.Security.ContainerSecurityContext == nil {
 		instance.Spec.Security.ContainerSecurityContext = &openclawv1alpha1.ContainerSecurityContextSpec{
 			AllowPrivilegeEscalation: boolPtr(false),
-			ReadOnlyRootFilesystem:   boolPtr(false),
+			ReadOnlyRootFilesystem:   boolPtr(true),
 		}
 	}
 

@@ -2881,3 +2881,334 @@ func TestBuildStatefulSet_Idempotent_WithWorkspace(t *testing.T) {
 		t.Error("BuildStatefulSet with workspace is not idempotent")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Feature 1: ReadOnlyRootFilesystem tests
+// ---------------------------------------------------------------------------
+
+func TestBuildStatefulSet_ReadOnlyRootFilesystem_Default(t *testing.T) {
+	instance := newTestInstance("rorfs-default")
+	sts := BuildStatefulSet(instance)
+	main := sts.Spec.Template.Spec.Containers[0]
+
+	csc := main.SecurityContext
+	if csc.ReadOnlyRootFilesystem == nil || !*csc.ReadOnlyRootFilesystem {
+		t.Error("readOnlyRootFilesystem should default to true")
+	}
+}
+
+func TestBuildStatefulSet_ReadOnlyRootFilesystem_ExplicitFalse(t *testing.T) {
+	instance := newTestInstance("rorfs-false")
+	instance.Spec.Security.ContainerSecurityContext = &openclawv1alpha1.ContainerSecurityContextSpec{
+		ReadOnlyRootFilesystem: Ptr(false),
+	}
+
+	sts := BuildStatefulSet(instance)
+	main := sts.Spec.Template.Spec.Containers[0]
+
+	if main.SecurityContext.ReadOnlyRootFilesystem == nil || *main.SecurityContext.ReadOnlyRootFilesystem {
+		t.Error("readOnlyRootFilesystem should be false when explicitly overridden")
+	}
+}
+
+func TestBuildStatefulSet_TmpVolumeAndMount(t *testing.T) {
+	instance := newTestInstance("tmp-vol")
+	sts := BuildStatefulSet(instance)
+
+	// Check /tmp volume mount on main container
+	main := sts.Spec.Template.Spec.Containers[0]
+	assertVolumeMount(t, main.VolumeMounts, "tmp", "/tmp")
+
+	// Check tmp volume exists as emptyDir
+	tmpVol := findVolume(sts.Spec.Template.Spec.Volumes, "tmp")
+	if tmpVol == nil {
+		t.Fatal("tmp volume not found")
+	}
+	if tmpVol.EmptyDir == nil {
+		t.Error("tmp volume should be emptyDir")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Feature 2: Config merge mode tests
+// ---------------------------------------------------------------------------
+
+func TestBuildInitScript_OverwriteMode(t *testing.T) {
+	instance := newTestInstance("init-overwrite")
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
+	}
+	instance.Spec.Config.MergeMode = "overwrite"
+
+	script := BuildInitScript(instance)
+	if !strings.Contains(script, "cp /config/") {
+		t.Errorf("overwrite mode should use cp, got: %q", script)
+	}
+	if strings.Contains(script, "jq") {
+		t.Error("overwrite mode should not use jq")
+	}
+}
+
+func TestBuildInitScript_MergeMode(t *testing.T) {
+	instance := newTestInstance("init-merge")
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
+	}
+	instance.Spec.Config.MergeMode = ConfigMergeModeMerge
+
+	script := BuildInitScript(instance)
+	if !strings.Contains(script, "jq -s '.[0] * .[1]'") {
+		t.Errorf("merge mode should use jq, got: %q", script)
+	}
+	if !strings.Contains(script, "if [ -f /data/openclaw.json ]") {
+		t.Errorf("merge mode should check for existing file, got: %q", script)
+	}
+	// Should also have a cp fallback for first boot
+	if !strings.Contains(script, "cp /config/") {
+		t.Errorf("merge mode should fall back to cp for first boot, got: %q", script)
+	}
+}
+
+func TestBuildStatefulSet_MergeMode_JqImage(t *testing.T) {
+	instance := newTestInstance("merge-jq")
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
+	}
+	instance.Spec.Config.MergeMode = ConfigMergeModeMerge
+
+	sts := BuildStatefulSet(instance)
+	initContainers := sts.Spec.Template.Spec.InitContainers
+	if len(initContainers) == 0 {
+		t.Fatal("expected init container for merge mode")
+	}
+
+	initC := initContainers[0]
+	if initC.Image != JqImage {
+		t.Errorf("merge mode init container image = %q, want %q", initC.Image, JqImage)
+	}
+
+	// Should have init-tmp mount
+	assertVolumeMount(t, initC.VolumeMounts, "init-tmp", "/tmp")
+}
+
+func TestBuildStatefulSet_OverwriteMode_BusyboxImage(t *testing.T) {
+	instance := newTestInstance("overwrite-bb")
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
+	}
+	instance.Spec.Config.MergeMode = "overwrite"
+
+	sts := BuildStatefulSet(instance)
+	initContainers := sts.Spec.Template.Spec.InitContainers
+	if len(initContainers) == 0 {
+		t.Fatal("expected init container for overwrite mode")
+	}
+
+	initC := initContainers[0]
+	if initC.Image != "busybox:1.37" {
+		t.Errorf("overwrite mode init container image = %q, want busybox:1.37", initC.Image)
+	}
+}
+
+func TestBuildStatefulSet_MergeMode_InitTmpVolume(t *testing.T) {
+	instance := newTestInstance("merge-vol")
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
+	}
+	instance.Spec.Config.MergeMode = ConfigMergeModeMerge
+
+	sts := BuildStatefulSet(instance)
+	initTmpVol := findVolume(sts.Spec.Template.Spec.Volumes, "init-tmp")
+	if initTmpVol == nil {
+		t.Fatal("init-tmp volume not found in merge mode")
+	}
+	if initTmpVol.EmptyDir == nil {
+		t.Error("init-tmp volume should be emptyDir")
+	}
+}
+
+func TestBuildStatefulSet_OverwriteMode_NoInitTmpVolume(t *testing.T) {
+	instance := newTestInstance("overwrite-vol")
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
+	}
+	instance.Spec.Config.MergeMode = "overwrite"
+
+	sts := BuildStatefulSet(instance)
+	initTmpVol := findVolume(sts.Spec.Template.Spec.Volumes, "init-tmp")
+	if initTmpVol != nil {
+		t.Error("init-tmp volume should not exist in overwrite mode")
+	}
+}
+
+func TestBuildInitScript_MergeMode_NoConfig(t *testing.T) {
+	instance := newTestInstance("merge-no-cfg")
+	instance.Spec.Config.MergeMode = ConfigMergeModeMerge
+	// No config set
+
+	script := BuildInitScript(instance)
+	if script != "" {
+		t.Errorf("merge mode with no config should produce empty script, got: %q", script)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Feature 3: Declarative skill installation tests
+// ---------------------------------------------------------------------------
+
+func TestBuildSkillsScript_NoSkills(t *testing.T) {
+	instance := newTestInstance("no-skills")
+	script := BuildSkillsScript(instance)
+	if script != "" {
+		t.Errorf("expected empty script, got: %q", script)
+	}
+}
+
+func TestBuildSkillsScript_WithSkills(t *testing.T) {
+	instance := newTestInstance("with-skills")
+	instance.Spec.Skills = []string{"@anthropic/mcp-server-fetch", "@github/copilot-skill"}
+
+	script := BuildSkillsScript(instance)
+
+	// Skills should be sorted
+	lines := strings.Split(script, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %d: %q", len(lines), script)
+	}
+	if lines[0] != "npx -y clawhub install '@anthropic/mcp-server-fetch'" {
+		t.Errorf("line 0: %q", lines[0])
+	}
+	if lines[1] != "npx -y clawhub install '@github/copilot-skill'" {
+		t.Errorf("line 1: %q", lines[1])
+	}
+}
+
+func TestBuildStatefulSet_NoSkills_NoInitSkillsContainer(t *testing.T) {
+	instance := newTestInstance("no-skills-sts")
+
+	sts := BuildStatefulSet(instance)
+	for _, c := range sts.Spec.Template.Spec.InitContainers {
+		if c.Name == "init-skills" {
+			t.Error("init-skills container should not exist without skills")
+		}
+	}
+}
+
+func TestBuildStatefulSet_WithSkills_InitSkillsContainer(t *testing.T) {
+	instance := newTestInstance("skills-sts")
+	instance.Spec.Skills = []string{"@anthropic/mcp-server-fetch"}
+
+	sts := BuildStatefulSet(instance)
+
+	var skillsContainer *corev1.Container
+	for i := range sts.Spec.Template.Spec.InitContainers {
+		if sts.Spec.Template.Spec.InitContainers[i].Name == "init-skills" {
+			skillsContainer = &sts.Spec.Template.Spec.InitContainers[i]
+			break
+		}
+	}
+	if skillsContainer == nil {
+		t.Fatal("init-skills container not found")
+	}
+
+	// Should use same image as main container
+	expectedImage := GetImage(instance)
+	if skillsContainer.Image != expectedImage {
+		t.Errorf("init-skills image = %q, want %q", skillsContainer.Image, expectedImage)
+	}
+
+	// Should have HOME and NPM_CONFIG_CACHE env vars
+	envMap := map[string]string{}
+	for _, e := range skillsContainer.Env {
+		envMap[e.Name] = e.Value
+	}
+	if envMap["HOME"] != "/tmp" {
+		t.Errorf("init-skills HOME = %q, want /tmp", envMap["HOME"])
+	}
+	if envMap["NPM_CONFIG_CACHE"] != "/tmp/.npm" {
+		t.Errorf("init-skills NPM_CONFIG_CACHE = %q, want /tmp/.npm", envMap["NPM_CONFIG_CACHE"])
+	}
+
+	// Should have data and skills-tmp mounts
+	assertVolumeMount(t, skillsContainer.VolumeMounts, "data", "/home/openclaw/.openclaw")
+	assertVolumeMount(t, skillsContainer.VolumeMounts, "skills-tmp", "/tmp")
+
+	// Security context should be restricted
+	sc := skillsContainer.SecurityContext
+	if sc == nil {
+		t.Fatal("init-skills security context is nil")
+	}
+	if sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation {
+		t.Error("init-skills: allowPrivilegeEscalation should be false")
+	}
+	if sc.RunAsNonRoot == nil || !*sc.RunAsNonRoot {
+		t.Error("init-skills: runAsNonRoot should be true")
+	}
+}
+
+func TestBuildStatefulSet_WithSkills_SkillsTmpVolume(t *testing.T) {
+	instance := newTestInstance("skills-vol")
+	instance.Spec.Skills = []string{"some-skill"}
+
+	sts := BuildStatefulSet(instance)
+	skillsTmpVol := findVolume(sts.Spec.Template.Spec.Volumes, "skills-tmp")
+	if skillsTmpVol == nil {
+		t.Fatal("skills-tmp volume not found")
+	}
+	if skillsTmpVol.EmptyDir == nil {
+		t.Error("skills-tmp volume should be emptyDir")
+	}
+}
+
+func TestBuildStatefulSet_NoSkills_NoSkillsTmpVolume(t *testing.T) {
+	instance := newTestInstance("no-skills-vol")
+
+	sts := BuildStatefulSet(instance)
+	skillsTmpVol := findVolume(sts.Spec.Template.Spec.Volumes, "skills-tmp")
+	if skillsTmpVol != nil {
+		t.Error("skills-tmp volume should not exist without skills")
+	}
+}
+
+func TestConfigHash_ChangesWithSkills(t *testing.T) {
+	instance := newTestInstance("hash-skills")
+
+	dep1 := BuildStatefulSet(instance)
+	hash1 := dep1.Spec.Template.Annotations["openclaw.rocks/config-hash"]
+
+	instance.Spec.Skills = []string{"new-skill"}
+
+	dep2 := BuildStatefulSet(instance)
+	hash2 := dep2.Spec.Template.Annotations["openclaw.rocks/config-hash"]
+
+	if hash1 == hash2 {
+		t.Error("config hash should change when skills are added")
+	}
+}
+
+func TestBuildStatefulSet_SkillsOnly_NoConfigInitContainer(t *testing.T) {
+	instance := newTestInstance("skills-only")
+	instance.Spec.Skills = []string{"some-skill"}
+	// No config set
+
+	sts := BuildStatefulSet(instance)
+
+	// Should NOT have init-config container (no config to copy)
+	for _, c := range sts.Spec.Template.Spec.InitContainers {
+		if c.Name == "init-config" {
+			t.Error("init-config container should not exist without config")
+		}
+	}
+
+	// But SHOULD have init-skills container
+	found := false
+	for _, c := range sts.Spec.Template.Spec.InitContainers {
+		if c.Name == "init-skills" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("init-skills container should exist with skills defined")
+	}
+}

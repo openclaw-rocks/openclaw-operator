@@ -136,7 +136,7 @@ func buildPodSecurityContext(instance *openclawv1alpha1.OpenClawInstance) *corev
 func buildContainerSecurityContext(instance *openclawv1alpha1.OpenClawInstance) *corev1.SecurityContext {
 	sc := &corev1.SecurityContext{
 		AllowPrivilegeEscalation: Ptr(false),
-		ReadOnlyRootFilesystem:   Ptr(false), // OpenClaw writes to ~/.openclaw/
+		ReadOnlyRootFilesystem:   Ptr(true), // PVC at ~/.openclaw/ + /tmp emptyDir provide writable paths
 		RunAsNonRoot:             Ptr(true),
 		Capabilities: &corev1.Capabilities{
 			Drop: []corev1.Capability{"ALL"},
@@ -209,6 +209,10 @@ func buildMainContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Cont
 				Name:      "data",
 				MountPath: "/home/openclaw/.openclaw",
 			},
+			{
+				Name:      "tmp",
+				MountPath: "/tmp",
+			},
 		},
 	}
 
@@ -239,30 +243,40 @@ func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance) []corev1.EnvVar {
 // buildInitContainers creates init containers that seed config and workspace
 // files into the data volume. Config is always overwritten (operator-managed),
 // while workspace files use seed-once semantics (only copied if not present).
+// Skills are installed via a separate init container using the OpenClaw image.
 func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance) []corev1.Container {
-	script := BuildInitScript(instance)
-	if script == "" {
-		return nil
-	}
+	var initContainers []corev1.Container
 
-	mounts := []corev1.VolumeMount{
-		{Name: "data", MountPath: "/data"},
-	}
+	// Config/workspace init container (only if there's something to do)
+	if script := BuildInitScript(instance); script != "" {
+		mounts := []corev1.VolumeMount{
+			{Name: "data", MountPath: "/data"},
+		}
 
-	// Config volume mount (only if config exists)
-	if configMapKey(instance) != "" {
-		mounts = append(mounts, corev1.VolumeMount{Name: "config", MountPath: "/config"})
-	}
+		// Config volume mount (only if config exists)
+		if configMapKey(instance) != "" {
+			mounts = append(mounts, corev1.VolumeMount{Name: "config", MountPath: "/config"})
+		}
 
-	// Workspace volume mount (only if workspace files exist)
-	if hasWorkspaceFiles(instance) {
-		mounts = append(mounts, corev1.VolumeMount{Name: "workspace-init", MountPath: "/workspace-init", ReadOnly: true})
-	}
+		// Tmp mount for merge mode (jq writes to /tmp/merged.json)
+		if instance.Spec.Config.MergeMode == ConfigMergeModeMerge {
+			mounts = append(mounts, corev1.VolumeMount{Name: "init-tmp", MountPath: "/tmp"})
+		}
 
-	return []corev1.Container{
-		{
+		// Workspace volume mount (only if workspace files exist)
+		if hasWorkspaceFiles(instance) {
+			mounts = append(mounts, corev1.VolumeMount{Name: "workspace-init", MountPath: "/workspace-init", ReadOnly: true})
+		}
+
+		// Use jq image for merge mode, busybox for overwrite
+		initImage := "busybox:1.37"
+		if instance.Spec.Config.MergeMode == ConfigMergeModeMerge {
+			initImage = JqImage
+		}
+
+		initContainers = append(initContainers, corev1.Container{
 			Name:                     "init-config",
-			Image:                    "busybox:1.37",
+			Image:                    initImage,
 			Command:                  []string{"sh", "-c", script},
 			ImagePullPolicy:          corev1.PullIfNotPresent,
 			TerminationMessagePath:   corev1.TerminationMessagePathDefault,
@@ -276,8 +290,15 @@ func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance) []corev1.C
 				},
 			},
 			VolumeMounts: mounts,
-		},
+		})
 	}
+
+	// Skills init container (only if skills are defined)
+	if skillsContainer := buildSkillsInitContainer(instance); skillsContainer != nil {
+		initContainers = append(initContainers, *skillsContainer)
+	}
+
+	return initContainers
 }
 
 // shellQuote escapes a string for safe use inside single-quoted shell arguments.
@@ -287,15 +308,27 @@ func shellQuote(s string) string {
 }
 
 // BuildInitScript generates the shell script for the init container.
-// It handles config copy (always overwrite), directory creation (idempotent),
+// It handles config copy or merge, directory creation (idempotent),
 // and workspace file seeding (only if not present).
 // Returns "" if there is nothing to do.
 func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance) string {
 	var lines []string
 
-	// 1. Config copy (always overwrite — operator-managed)
+	// 1. Config handling — overwrite or merge
 	if key := configMapKey(instance); key != "" {
-		lines = append(lines, fmt.Sprintf("cp /config/%s /data/openclaw.json", shellQuote(key)))
+		if instance.Spec.Config.MergeMode == ConfigMergeModeMerge {
+			// Deep-merge operator config with existing PVC config, preserving runtime changes
+			lines = append(lines, fmt.Sprintf(
+				"if [ -f /data/openclaw.json ]; then\n"+
+					"  jq -s '.[0] * .[1]' /data/openclaw.json /config/%s > /tmp/merged.json && mv /tmp/merged.json /data/openclaw.json\n"+
+					"else\n"+
+					"  cp /config/%s /data/openclaw.json\n"+
+					"fi",
+				shellQuote(key), shellQuote(key)))
+		} else {
+			// Overwrite (default) — operator-managed config always wins
+			lines = append(lines, fmt.Sprintf("cp /config/%s /data/openclaw.json", shellQuote(key)))
+		}
 	}
 
 	ws := instance.Spec.Workspace
@@ -330,6 +363,58 @@ func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance) string {
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+// BuildSkillsScript generates the shell script for the skills init container.
+// It produces `npx -y clawhub install <skill>` for each skill (sorted for determinism).
+// Returns "" if no skills are defined.
+func BuildSkillsScript(instance *openclawv1alpha1.OpenClawInstance) string {
+	if len(instance.Spec.Skills) == 0 {
+		return ""
+	}
+
+	skills := make([]string, len(instance.Spec.Skills))
+	copy(skills, instance.Spec.Skills)
+	sort.Strings(skills)
+
+	var lines []string
+	for _, skill := range skills {
+		lines = append(lines, fmt.Sprintf("npx -y clawhub install %s", shellQuote(skill)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// buildSkillsInitContainer creates the init container that installs ClawHub skills.
+func buildSkillsInitContainer(instance *openclawv1alpha1.OpenClawInstance) *corev1.Container {
+	script := BuildSkillsScript(instance)
+	if script == "" {
+		return nil
+	}
+
+	return &corev1.Container{
+		Name:            "init-skills",
+		Image:           GetImage(instance),
+		Command:         []string{"sh", "-c", script},
+		ImagePullPolicy: getPullPolicy(instance),
+		Env: []corev1.EnvVar{
+			{Name: "HOME", Value: "/tmp"},
+			{Name: "NPM_CONFIG_CACHE", Value: "/tmp/.npm"},
+		},
+		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
+		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: Ptr(false),
+			ReadOnlyRootFilesystem:   Ptr(false), // npx needs to write to node_modules
+			RunAsNonRoot:             Ptr(true),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+		},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: "data", MountPath: "/home/openclaw/.openclaw"},
+			{Name: "skills-tmp", MountPath: "/tmp"},
+		},
+	}
 }
 
 // hasWorkspaceFiles returns true if the instance has workspace files to seed.
@@ -477,6 +562,34 @@ func buildVolumes(instance *openclawv1alpha1.OpenClawInstance) []corev1.Volume {
 			},
 		})
 	}
+
+	// Skills-tmp volume for skills init container
+	if len(instance.Spec.Skills) > 0 {
+		volumes = append(volumes, corev1.Volume{
+			Name: "skills-tmp",
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		})
+	}
+
+	// Init-tmp volume for merge mode (jq writes to /tmp/merged.json)
+	if instance.Spec.Config.MergeMode == ConfigMergeModeMerge {
+		volumes = append(volumes, corev1.Volume{
+			Name: "init-tmp",
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		})
+	}
+
+	// Tmp volume for main container (read-only rootfs needs a writable /tmp)
+	volumes = append(volumes, corev1.Volume{
+		Name: "tmp",
+		VolumeSource: corev1.VolumeSource{
+			EmptyDir: &corev1.EmptyDirVolumeSource{},
+		},
+	})
 
 	// Chromium volumes
 	if instance.Spec.Chromium.Enabled {
@@ -699,8 +812,8 @@ func getPullPolicy(instance *openclawv1alpha1.OpenClawInstance) corev1.PullPolic
 	return corev1.PullIfNotPresent
 }
 
-// calculateConfigHash computes a hash of the config and workspace for rollout detection.
-// Changes to either config or workspace spec trigger a pod restart.
+// calculateConfigHash computes a hash of the config, workspace, and skills for rollout detection.
+// Changes to any of these trigger a pod restart.
 func calculateConfigHash(instance *openclawv1alpha1.OpenClawInstance) string {
 	h := sha256.New()
 	configData, _ := json.Marshal(instance.Spec.Config)
@@ -708,6 +821,10 @@ func calculateConfigHash(instance *openclawv1alpha1.OpenClawInstance) string {
 	if instance.Spec.Workspace != nil {
 		wsData, _ := json.Marshal(instance.Spec.Workspace)
 		h.Write(wsData)
+	}
+	if len(instance.Spec.Skills) > 0 {
+		skillsData, _ := json.Marshal(instance.Spec.Skills)
+		h.Write(skillsData)
 	}
 	return hex.EncodeToString(h.Sum(nil)[:8])
 }

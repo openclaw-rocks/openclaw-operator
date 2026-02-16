@@ -30,6 +30,12 @@ const (
 	// ChromiumPort is the port for Chrome DevTools Protocol
 	ChromiumPort = 9222
 
+	// JqImage is the image used for jq-based config merge operations
+	JqImage = "ghcr.io/jqlang/jq:1.7.1"
+
+	// ConfigMergeModeMerge is the merge mode that deep-merges config with existing PVC config
+	ConfigMergeModeMerge = "merge"
+
 	// AppName is the application name used in labels
 	AppName = "openclaw"
 

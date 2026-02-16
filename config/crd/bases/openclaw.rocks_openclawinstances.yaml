@@ -1144,6 +1144,16 @@ spec:
                     required:
                     - name
                     type: object
+                  mergeMode:
+                    default: overwrite
+                    description: |-
+                      MergeMode controls how operator-managed config is applied to the PVC.
+                      "overwrite" replaces the config file on every pod restart.
+                      "merge" deep-merges operator config with existing PVC config, preserving runtime changes.
+                    enum:
+                    - overwrite
+                    - merge
+                    type: string
                   raw:
                     description: Raw is inline openclaw.json configuration (used if
                       ConfigMapRef is not set)
@@ -1684,10 +1694,10 @@ spec:
                             x-kubernetes-list-type: atomic
                         type: object
                       readOnlyRootFilesystem:
-                        default: false
+                        default: true
                         description: |-
                           ReadOnlyRootFilesystem mounts the container's root filesystem as read-only
-                          Note: OpenClaw requires write access to ~/.openclaw/, so this is false by default
+                          The PVC at ~/.openclaw/ provides writable home, and a /tmp emptyDir handles temp files
                         type: boolean
                     type: object
                   networkPolicy:
@@ -5168,6 +5178,14 @@ spec:
                   required:
                   - name
                   type: object
+                type: array
+              skills:
+                description: |-
+                  Skills is a list of ClawHub skills to install via init container.
+                  Each entry is a skill identifier (e.g., "@anthropic/mcp-server-fetch").
+                items:
+                  type: string
+                maxItems: 20
                 type: array
               storage:
                 description: Storage specifies persistent storage configuration
