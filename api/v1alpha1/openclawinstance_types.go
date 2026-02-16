@@ -54,6 +54,12 @@ type OpenClawInstanceSpec struct {
 	// +optional
 	Chromium ChromiumSpec `json:"chromium,omitempty"`
 
+	// InitContainers is a list of additional init containers to run before the main container.
+	// They run after the operator-managed init-config and init-skills containers.
+	// +kubebuilder:validation:MaxItems=10
+	// +optional
+	InitContainers []corev1.Container `json:"initContainers,omitempty"`
+
 	// Sidecars is a list of additional sidecar containers to inject into the pod.
 	// Use this for custom sidecars like database proxies, log forwarders, or service meshes.
 	// +optional
@@ -147,6 +153,15 @@ type ConfigSpec struct {
 	// +kubebuilder:default="overwrite"
 	// +optional
 	MergeMode string `json:"mergeMode,omitempty"`
+
+	// Format specifies the config file format.
+	// "json" (default) expects standard JSON. "json5" accepts JSON5 (comments, trailing commas).
+	// JSON5 is converted to standard JSON by the init container using npx json5.
+	// JSON5 requires configMapRef (inline raw config must be valid JSON).
+	// +kubebuilder:validation:Enum=json;json5
+	// +kubebuilder:default="json"
+	// +optional
+	Format string `json:"format,omitempty"`
 }
 
 // ConfigMapKeySelector selects a key from a ConfigMap

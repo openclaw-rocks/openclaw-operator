@@ -33,6 +33,7 @@ import (
 )
 
 const imageTagLatest = "latest"
+const configFormatJSON5 = "json5"
 
 // knownProviderEnvVars lists environment variable names for known AI provider API keys.
 var knownProviderEnvVars = map[string]bool{
@@ -219,7 +220,25 @@ func (v *OpenClawInstanceValidator) validate(instance *openclawv1alpha1.OpenClaw
 	}
 
 	// 17. Validate config schema (warning-only for unknown keys)
-	warnings = append(warnings, validateConfigSchema(instance)...)
+	// Skip config schema validation for JSON5 with configMapRef (can't validate externally)
+	if instance.Spec.Config.Format != configFormatJSON5 {
+		warnings = append(warnings, validateConfigSchema(instance)...)
+	}
+
+	// 19. Validate custom init container names
+	if err := validateInitContainers(instance.Spec.InitContainers); err != nil {
+		return nil, err
+	}
+
+	// 20. Validate JSON5 config constraints
+	if instance.Spec.Config.Format == configFormatJSON5 {
+		if instance.Spec.Config.Raw != nil {
+			return nil, fmt.Errorf("config.format \"json5\" requires configMapRef — inline raw config must be valid JSON")
+		}
+		if instance.Spec.Config.MergeMode == "merge" {
+			return nil, fmt.Errorf("config.format \"json5\" is not compatible with mergeMode \"merge\"")
+		}
+	}
 
 	// 18. Validate auto-update healthCheckTimeout
 	if instance.Spec.AutoUpdate.HealthCheckTimeout != "" {
@@ -359,6 +378,26 @@ func validateConfigSchema(instance *openclawv1alpha1.OpenClawInstance) admission
 	return warnings
 }
 
+// reservedInitContainerNames are names used by operator-managed init containers.
+var reservedInitContainerNames = map[string]bool{
+	"init-config": true,
+	"init-skills": true,
+}
+
+// validateInitContainers checks custom init container names.
+func validateInitContainers(containers []corev1.Container) error {
+	for i := range containers {
+		name := containers[i].Name
+		if name == "" {
+			return fmt.Errorf("initContainers[%d]: container name must not be empty", i)
+		}
+		if reservedInitContainerNames[name] {
+			return fmt.Errorf("initContainers[%d]: name %q is reserved for operator-managed init containers", i, name)
+		}
+	}
+	return nil
+}
+
 // OpenClawInstanceDefaulter sets defaults for OpenClawInstance resources
 type OpenClawInstanceDefaulter struct{}
 
@@ -382,6 +421,11 @@ func (d *OpenClawInstanceDefaulter) Default(ctx context.Context, obj runtime.Obj
 	// Default config merge mode
 	if instance.Spec.Config.MergeMode == "" {
 		instance.Spec.Config.MergeMode = "overwrite"
+	}
+
+	// Default config format
+	if instance.Spec.Config.Format == "" {
+		instance.Spec.Config.Format = "json"
 	}
 
 	// Default security settings

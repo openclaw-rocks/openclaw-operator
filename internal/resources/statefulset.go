@@ -315,8 +315,8 @@ func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance) []corev1.C
 			mounts = append(mounts, corev1.VolumeMount{Name: "config", MountPath: "/config"})
 		}
 
-		// Tmp mount for merge mode (jq writes to /tmp/merged.json)
-		if instance.Spec.Config.MergeMode == ConfigMergeModeMerge {
+		// Tmp mount for merge mode (jq writes to /tmp/merged.json) or JSON5 mode (npx writes to /tmp/converted.json)
+		if instance.Spec.Config.MergeMode == ConfigMergeModeMerge || instance.Spec.Config.Format == ConfigFormatJSON5 {
 			mounts = append(mounts, corev1.VolumeMount{Name: "init-tmp", MountPath: "/tmp"})
 		}
 
@@ -325,22 +325,38 @@ func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance) []corev1.C
 			mounts = append(mounts, corev1.VolumeMount{Name: "workspace-init", MountPath: "/workspace-init", ReadOnly: true})
 		}
 
-		// Use jq image for merge mode, busybox for overwrite
+		// Use jq image for merge mode, OpenClaw image for JSON5 (has Node.js + npx), busybox for overwrite
 		initImage := "busybox:1.37"
 		if instance.Spec.Config.MergeMode == ConfigMergeModeMerge {
 			initImage = JqImage
+		} else if instance.Spec.Config.Format == ConfigFormatJSON5 {
+			initImage = GetImage(instance)
+		}
+
+		// JSON5 mode needs writable rootfs (npx writes to node_modules) and HOME env
+		readOnlyRoot := true
+		var initEnv []corev1.EnvVar
+		initPullPolicy := corev1.PullIfNotPresent
+		if instance.Spec.Config.Format == ConfigFormatJSON5 {
+			readOnlyRoot = false
+			initEnv = []corev1.EnvVar{
+				{Name: "HOME", Value: "/tmp"},
+				{Name: "NPM_CONFIG_CACHE", Value: "/tmp/.npm"},
+			}
+			initPullPolicy = getPullPolicy(instance)
 		}
 
 		initContainers = append(initContainers, corev1.Container{
 			Name:                     "init-config",
 			Image:                    initImage,
 			Command:                  []string{"sh", "-c", script},
-			ImagePullPolicy:          corev1.PullIfNotPresent,
+			ImagePullPolicy:          initPullPolicy,
+			Env:                      initEnv,
 			TerminationMessagePath:   corev1.TerminationMessagePathDefault,
 			TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 			SecurityContext: &corev1.SecurityContext{
 				AllowPrivilegeEscalation: Ptr(false),
-				ReadOnlyRootFilesystem:   Ptr(true),
+				ReadOnlyRootFilesystem:   Ptr(readOnlyRoot),
 				RunAsNonRoot:             Ptr(true),
 				Capabilities: &corev1.Capabilities{
 					Drop: []corev1.Capability{"ALL"},
@@ -354,6 +370,9 @@ func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance) []corev1.C
 	if skillsContainer := buildSkillsInitContainer(instance); skillsContainer != nil {
 		initContainers = append(initContainers, *skillsContainer)
 	}
+
+	// Custom init containers (user-defined, run after operator-managed ones)
+	initContainers = append(initContainers, instance.Spec.InitContainers...)
 
 	return initContainers
 }
@@ -371,9 +390,10 @@ func shellQuote(s string) string {
 func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance) string {
 	var lines []string
 
-	// 1. Config handling — overwrite or merge
+	// 1. Config handling — overwrite or merge, with optional JSON5 conversion
 	if key := configMapKey(instance); key != "" {
-		if instance.Spec.Config.MergeMode == ConfigMergeModeMerge {
+		switch {
+		case instance.Spec.Config.MergeMode == ConfigMergeModeMerge:
 			// Deep-merge operator config with existing PVC config, preserving runtime changes
 			lines = append(lines, fmt.Sprintf(
 				"if [ -f /data/openclaw.json ]; then\n"+
@@ -382,7 +402,12 @@ func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance) string {
 					"  cp /config/%s /data/openclaw.json\n"+
 					"fi",
 				shellQuote(key), shellQuote(key)))
-		} else {
+		case instance.Spec.Config.Format == ConfigFormatJSON5:
+			// JSON5 overwrite — convert to standard JSON via npx json5
+			lines = append(lines, fmt.Sprintf(
+				"npx -y json5 /config/%s > /tmp/converted.json && mv /tmp/converted.json /data/openclaw.json",
+				shellQuote(key)))
+		default:
 			// Overwrite (default) — operator-managed config always wins
 			lines = append(lines, fmt.Sprintf("cp /config/%s /data/openclaw.json", shellQuote(key)))
 		}
@@ -675,8 +700,8 @@ func buildVolumes(instance *openclawv1alpha1.OpenClawInstance) []corev1.Volume {
 		})
 	}
 
-	// Init-tmp volume for merge mode (jq writes to /tmp/merged.json)
-	if instance.Spec.Config.MergeMode == ConfigMergeModeMerge {
+	// Init-tmp volume for merge mode (jq writes to /tmp/merged.json) or JSON5 mode (npx writes to /tmp/converted.json)
+	if instance.Spec.Config.MergeMode == ConfigMergeModeMerge || instance.Spec.Config.Format == ConfigFormatJSON5 {
 		volumes = append(volumes, corev1.Volume{
 			Name: "init-tmp",
 			VolumeSource: corev1.VolumeSource{
@@ -957,6 +982,10 @@ func calculateConfigHash(instance *openclawv1alpha1.OpenClawInstance) string {
 	if len(instance.Spec.Skills) > 0 {
 		skillsData, _ := json.Marshal(instance.Spec.Skills)
 		h.Write(skillsData)
+	}
+	if len(instance.Spec.InitContainers) > 0 {
+		icData, _ := json.Marshal(instance.Spec.InitContainers)
+		h.Write(icData)
 	}
 	return hex.EncodeToString(h.Sum(nil)[:8])
 }

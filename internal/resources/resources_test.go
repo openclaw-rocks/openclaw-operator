@@ -3847,3 +3847,181 @@ func TestBuildStatefulSet_CABundle_InitSkills(t *testing.T) {
 		t.Error("NODE_EXTRA_CA_CERTS env var not found on init-skills container")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Feature: Custom init containers
+// ---------------------------------------------------------------------------
+
+func TestBuildStatefulSet_NoCustomInitContainers(t *testing.T) {
+	instance := newTestInstance("no-custom-init")
+	sts := BuildStatefulSet(instance)
+	for _, c := range sts.Spec.Template.Spec.InitContainers {
+		if c.Name == "my-init" {
+			t.Error("should not have custom init containers when none configured")
+		}
+	}
+}
+
+func TestBuildStatefulSet_CustomInitContainers(t *testing.T) {
+	instance := newTestInstance("custom-init")
+	instance.Spec.InitContainers = []corev1.Container{
+		{
+			Name:    "my-init",
+			Image:   "busybox:1.37",
+			Command: []string{"echo", "hello"},
+		},
+	}
+
+	sts := BuildStatefulSet(instance)
+
+	// Custom init container should be last
+	initContainers := sts.Spec.Template.Spec.InitContainers
+	if len(initContainers) == 0 {
+		t.Fatal("expected at least one init container")
+	}
+	last := initContainers[len(initContainers)-1]
+	if last.Name != "my-init" {
+		t.Errorf("last init container = %q, want %q", last.Name, "my-init")
+	}
+	if last.Image != "busybox:1.37" {
+		t.Errorf("custom init container image = %q, want %q", last.Image, "busybox:1.37")
+	}
+}
+
+func TestBuildStatefulSet_CustomInitContainers_AfterOperatorManaged(t *testing.T) {
+	instance := newTestInstance("custom-init-order")
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
+	}
+	instance.Spec.Skills = []string{"some-skill"}
+	instance.Spec.InitContainers = []corev1.Container{
+		{Name: "user-init", Image: "busybox:1.37"},
+	}
+
+	sts := BuildStatefulSet(instance)
+	initContainers := sts.Spec.Template.Spec.InitContainers
+
+	if len(initContainers) != 3 {
+		t.Fatalf("expected 3 init containers, got %d", len(initContainers))
+	}
+	if initContainers[0].Name != "init-config" {
+		t.Errorf("initContainers[0] = %q, want init-config", initContainers[0].Name)
+	}
+	if initContainers[1].Name != "init-skills" {
+		t.Errorf("initContainers[1] = %q, want init-skills", initContainers[1].Name)
+	}
+	if initContainers[2].Name != "user-init" {
+		t.Errorf("initContainers[2] = %q, want user-init", initContainers[2].Name)
+	}
+}
+
+func TestConfigHash_ChangesWithInitContainers(t *testing.T) {
+	instance := newTestInstance("hash-ic")
+
+	dep1 := BuildStatefulSet(instance)
+	hash1 := dep1.Spec.Template.Annotations["openclaw.rocks/config-hash"]
+
+	instance.Spec.InitContainers = []corev1.Container{
+		{Name: "my-init", Image: "busybox:1.37"},
+	}
+
+	dep2 := BuildStatefulSet(instance)
+	hash2 := dep2.Spec.Template.Annotations["openclaw.rocks/config-hash"]
+
+	if hash1 == hash2 {
+		t.Error("config hash should change when init containers are added")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Feature: JSON5 config support
+// ---------------------------------------------------------------------------
+
+func TestBuildInitScript_JSON5_Overwrite(t *testing.T) {
+	instance := newTestInstance("json5-overwrite")
+	instance.Spec.Config.ConfigMapRef = &openclawv1alpha1.ConfigMapKeySelector{
+		Name: "my-config",
+		Key:  "config.json5",
+	}
+	instance.Spec.Config.Format = ConfigFormatJSON5
+
+	script := BuildInitScript(instance)
+	if !strings.Contains(script, "npx -y json5") {
+		t.Errorf("JSON5 overwrite should use npx json5, got: %q", script)
+	}
+	if !strings.Contains(script, "/tmp/converted.json") {
+		t.Errorf("JSON5 overwrite should write to /tmp/converted.json, got: %q", script)
+	}
+}
+
+func TestBuildStatefulSet_JSON5_UsesOpenClawImage(t *testing.T) {
+	instance := newTestInstance("json5-image")
+	instance.Spec.Config.ConfigMapRef = &openclawv1alpha1.ConfigMapKeySelector{
+		Name: "my-config",
+		Key:  "config.json5",
+	}
+	instance.Spec.Config.Format = ConfigFormatJSON5
+
+	sts := BuildStatefulSet(instance)
+	initContainers := sts.Spec.Template.Spec.InitContainers
+	if len(initContainers) == 0 {
+		t.Fatal("expected init container for JSON5 mode")
+	}
+
+	initC := initContainers[0]
+	expectedImage := GetImage(instance)
+	if initC.Image != expectedImage {
+		t.Errorf("JSON5 init container image = %q, want %q", initC.Image, expectedImage)
+	}
+}
+
+func TestBuildStatefulSet_JSON5_InitTmpVolume(t *testing.T) {
+	instance := newTestInstance("json5-vol")
+	instance.Spec.Config.ConfigMapRef = &openclawv1alpha1.ConfigMapKeySelector{
+		Name: "my-config",
+	}
+	instance.Spec.Config.Format = ConfigFormatJSON5
+
+	sts := BuildStatefulSet(instance)
+
+	// Should have init-tmp volume
+	initTmpVol := findVolume(sts.Spec.Template.Spec.Volumes, "init-tmp")
+	if initTmpVol == nil {
+		t.Fatal("init-tmp volume not found in JSON5 mode")
+	}
+
+	// Should have init-tmp mount on init container
+	initC := sts.Spec.Template.Spec.InitContainers[0]
+	assertVolumeMount(t, initC.VolumeMounts, "init-tmp", "/tmp")
+}
+
+func TestBuildStatefulSet_JSON5_WritableRootFS(t *testing.T) {
+	instance := newTestInstance("json5-writable")
+	instance.Spec.Config.ConfigMapRef = &openclawv1alpha1.ConfigMapKeySelector{
+		Name: "my-config",
+	}
+	instance.Spec.Config.Format = ConfigFormatJSON5
+
+	sts := BuildStatefulSet(instance)
+	initC := sts.Spec.Template.Spec.InitContainers[0]
+
+	if initC.SecurityContext.ReadOnlyRootFilesystem == nil || *initC.SecurityContext.ReadOnlyRootFilesystem {
+		t.Error("JSON5 init container should have writable root filesystem for npx")
+	}
+}
+
+func TestBuildInitScript_JSON_Overwrite_NoBusyboxRegression(t *testing.T) {
+	instance := newTestInstance("json-overwrite")
+	instance.Spec.Config.ConfigMapRef = &openclawv1alpha1.ConfigMapKeySelector{
+		Name: "my-config",
+	}
+	instance.Spec.Config.Format = "json"
+
+	script := BuildInitScript(instance)
+	if strings.Contains(script, "npx") {
+		t.Errorf("JSON overwrite should not use npx, got: %q", script)
+	}
+	if !strings.Contains(script, "cp /config/") {
+		t.Errorf("JSON overwrite should use cp, got: %q", script)
+	}
+}

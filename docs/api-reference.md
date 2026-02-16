@@ -40,10 +40,12 @@ Container image configuration for the main OpenClaw workload.
 
 Configuration for the OpenClaw application (`openclaw.json`).
 
-| Field          | Type                  | Default | Description                                                                |
-|----------------|-----------------------|---------|----------------------------------------------------------------------------|
-| `configMapRef` | `ConfigMapKeySelector`| --      | Reference to an external ConfigMap. If set, `raw` is ignored.              |
-| `raw`          | `RawConfig`           | --      | Inline JSON configuration. The operator creates a managed ConfigMap.       |
+| Field          | Type                  | Default       | Description                                                                |
+|----------------|-----------------------|---------------|----------------------------------------------------------------------------|
+| `configMapRef` | `ConfigMapKeySelector`| --            | Reference to an external ConfigMap. If set, `raw` is ignored.              |
+| `raw`          | `RawConfig`           | --            | Inline JSON configuration. The operator creates a managed ConfigMap.       |
+| `mergeMode`    | `string`              | `overwrite`   | How config is applied to the PVC. `overwrite` replaces on every restart. `merge` deep-merges with existing PVC config. |
+| `format`       | `string`              | `json`        | Config file format. `json` (standard JSON) or `json5` (JSON5 with comments/trailing commas). JSON5 requires `configMapRef` — inline `raw` must be valid JSON. JSON5 is not compatible with `mergeMode: merge`. |
 
 **ConfigMapKeySelector:**
 
@@ -82,6 +84,27 @@ spec:
       value: "debug"
 ```
 
+### spec.initContainers
+
+| Field            | Type            | Default | Description                                                              |
+|------------------|-----------------|---------|--------------------------------------------------------------------------|
+| `initContainers` | `[]Container`   | --      | Additional init containers to run before the main container. They run after the operator-managed `init-config` and `init-skills` containers. Max 10 items. |
+
+Standard Kubernetes `Container` spec. Names `init-config` and `init-skills` are reserved and rejected by the webhook.
+
+```yaml
+spec:
+  initContainers:
+    - name: wait-for-db
+      image: busybox:1.37
+      command: ["sh", "-c", "until nc -z postgres.db.svc 5432; do sleep 2; done"]
+    - name: seed-data
+      image: my-seeder:latest
+      volumeMounts:
+        - name: data
+          mountPath: /data
+```
+
 ### spec.resources
 
 Compute resource requirements for the main OpenClaw container.
@@ -111,7 +134,7 @@ Security-related configuration for the instance.
 | Field                      | Type              | Default | Description                                                    |
 |----------------------------|-------------------|---------|----------------------------------------------------------------|
 | `allowPrivilegeEscalation` | `*bool`           | `false` | Allow privilege escalation. Warns if set to `true`.            |
-| `readOnlyRootFilesystem`   | `*bool`           | `false` | Mount root filesystem as read-only. OpenClaw writes to `~/.openclaw/`. |
+| `readOnlyRootFilesystem`   | `*bool`           | `true`  | Mount root filesystem as read-only. The PVC at `~/.openclaw/` and `/tmp` emptyDir provide writable paths. |
 | `capabilities`             | `*Capabilities`   | Drop ALL | Linux capabilities to add or drop.                            |
 
 #### spec.security.networkPolicy
@@ -363,6 +386,14 @@ Standard `metav1.Condition` array. Condition types:
 | `role`               | `string` | Name of the managed Role.            |
 | `roleBinding`        | `string` | Name of the managed RoleBinding.      |
 | `gatewayTokenSecret` | `string` | Name of the auto-generated gateway token Secret. |
+
+---
+
+## Related Guides
+
+- [Model Fallback Chains](model-fallback.md) — configure multi-provider fallback with `llmConfig`
+- [Custom AI Providers](custom-providers.md) — Ollama sidecar, vLLM, and other self-hosted models
+- [External Secrets Operator Integration](external-secrets.md) — sync API keys from AWS, Vault, GCP, etc.
 
 ---
 
