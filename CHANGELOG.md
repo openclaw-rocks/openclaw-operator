@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.2](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.1...v0.9.2) (2026-02-16)
+
+
+### Features
+
+* add opt-in auto-update for OCI registry version tracking ([#71](https://github.com/openclaw-rocks/k8s-operator/issues/71)) ([5ce624e](https://github.com/openclaw-rocks/k8s-operator/commit/5ce624e72e70a185700fced9b4cc6c2461d74b91))
+* add webhook warning for latest image tag ([#67](https://github.com/openclaw-rocks/k8s-operator/issues/67)) ([6791624](https://github.com/openclaw-rocks/k8s-operator/commit/6791624d8ec5e46fc95b02f125ac38b1578a30c7))
+
+
+### Bug Fixes
+
+* add skip-backup annotation to E2E test instance ([#69](https://github.com/openclaw-rocks/k8s-operator/issues/69)) ([33ab056](https://github.com/openclaw-rocks/k8s-operator/commit/33ab0563ebfdfb4817a8cd4627400af35ae3a699))
+* extract imageTagLatest constant to satisfy goconst linter ([#68](https://github.com/openclaw-rocks/k8s-operator/issues/68)) ([fc14d1a](https://github.com/openclaw-rocks/k8s-operator/commit/fc14d1a12406373cf0fd5a6cf779e64594577841))
+* suppress gosec false positive and handle existing releases ([aef5468](https://github.com/openclaw-rocks/k8s-operator/commit/aef5468b57b3e787b9dbff82470362f5918d4bd0))
+* suppress gosec G101 false positive and handle existing releases ([182fafb](https://github.com/openclaw-rocks/k8s-operator/commit/182fafb026d7733b4f6c9c5e918366fab71da79c))
+* sync release-please manifest to v0.9.1 ([#72](https://github.com/openclaw-rocks/k8s-operator/issues/72)) ([88f50a9](https://github.com/openclaw-rocks/k8s-operator/commit/88f50a9a2492d20922d7dfe2781e1d8c0fcdb1dd))
+
 ## [0.6.0](https://github.com/openclaw-rocks/k8s-operator/compare/v0.5.0...v0.6.0) (2026-02-13)
 
 
