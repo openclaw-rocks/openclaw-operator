@@ -143,7 +143,7 @@ func (r *Resolver) fetchTags(ctx context.Context, repository string) ([]string, 
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	resp, err := r.httpClient.Do(req)
+	resp, err := r.httpClient.Do(req) // #nosec G704 -- URL is built from operator-controlled spec.image.repository
 	if err != nil {
 		return nil, fmt.Errorf("fetching tags from %s: %w", tagsURL, err)
 	}
@@ -172,7 +172,7 @@ func (r *Resolver) getToken(ctx context.Context, host, name string) (string, err
 		return "", err
 	}
 
-	resp, err := r.httpClient.Do(req)
+	resp, err := r.httpClient.Do(req) // #nosec G704 -- URL is built from operator-controlled spec.image.repository
 	if err != nil {
 		return "", fmt.Errorf("probing %s: %w", probeURL, err)
 	}
@@ -201,7 +201,7 @@ func (r *Resolver) getToken(ctx context.Context, host, name string) (string, err
 		return "", err
 	}
 
-	tokenResp, err := r.httpClient.Do(tokenReq)
+	tokenResp, err := r.httpClient.Do(tokenReq) // #nosec G704 -- token URL derived from registry WWW-Authenticate challenge
 	if err != nil {
 		return "", fmt.Errorf("fetching token from %s: %w", tokenURL, err)
 	}
