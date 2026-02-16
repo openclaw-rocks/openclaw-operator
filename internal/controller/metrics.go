@@ -77,6 +77,14 @@ var (
 		},
 		[]string{"instance", "namespace"},
 	)
+
+	autoUpdateRollbacksTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "openclaw_autoupdate_rollbacks_total",
+			Help: "Total number of auto-update rollbacks",
+		},
+		[]string{"instance", "namespace"},
+	)
 )
 
 func init() {
@@ -88,5 +96,6 @@ func init() {
 		managedInstances,
 		autoUpdateChecksTotal,
 		autoUpdateAppliedTotal,
+		autoUpdateRollbacksTotal,
 	)
 }

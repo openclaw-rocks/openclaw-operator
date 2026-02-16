@@ -165,6 +165,20 @@ func (v *OpenClawInstanceValidator) validate(instance *openclawv1alpha1.OpenClaw
 		warnings = append(warnings, "autoUpdate is enabled but image.digest is set — digest pins override auto-update, updates will be skipped")
 	}
 
+	// 13. Validate auto-update healthCheckTimeout
+	if instance.Spec.AutoUpdate.HealthCheckTimeout != "" {
+		d, err := time.ParseDuration(instance.Spec.AutoUpdate.HealthCheckTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("autoUpdate.healthCheckTimeout is not a valid Go duration: %w", err)
+		}
+		if d < 2*time.Minute {
+			return nil, fmt.Errorf("autoUpdate.healthCheckTimeout must be at least 2m, got %s", instance.Spec.AutoUpdate.HealthCheckTimeout)
+		}
+		if d > 30*time.Minute {
+			return nil, fmt.Errorf("autoUpdate.healthCheckTimeout must be at most 30m, got %s", instance.Spec.AutoUpdate.HealthCheckTimeout)
+		}
+	}
+
 	return warnings, nil
 }
 
@@ -301,6 +315,12 @@ func (d *OpenClawInstanceDefaulter) Default(ctx context.Context, obj runtime.Obj
 	}
 	if instance.Spec.AutoUpdate.BackupBeforeUpdate == nil {
 		instance.Spec.AutoUpdate.BackupBeforeUpdate = boolPtr(true)
+	}
+	if instance.Spec.AutoUpdate.RollbackOnFailure == nil {
+		instance.Spec.AutoUpdate.RollbackOnFailure = boolPtr(true)
+	}
+	if instance.Spec.AutoUpdate.HealthCheckTimeout == "" {
+		instance.Spec.AutoUpdate.HealthCheckTimeout = "10m"
 	}
 
 	return nil

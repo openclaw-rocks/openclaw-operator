@@ -45,7 +45,7 @@ The operator reconciles this into a fully managed stack of 9+ Kubernetes resourc
 | **Secure** | Hardened by default | Non-root (UID 1000), all capabilities dropped, seccomp RuntimeDefault, default-deny NetworkPolicy, validating webhook |
 | **Observable** | Built-in metrics | Prometheus metrics, ServiceMonitor integration, structured JSON logging, Kubernetes events |
 | **Flexible** | Provider-agnostic config | Use any AI provider (Anthropic, OpenAI, or others) via environment variables and inline or external config |
-| **Auto-Update** | OCI registry polling | Opt-in version tracking: checks the registry for new semver releases, backs up first, then rolls out — hands-free |
+| **Auto-Update** | OCI registry polling | Opt-in version tracking: checks the registry for new semver releases, backs up first, rolls out, and auto-rolls back if the new version fails health checks |
 | **Resilient** | Self-healing lifecycle | PodDisruptionBudgets, health probes, automatic config rollouts via content hashing, 5-minute drift detection |
 | **Backup/Restore** | B2-backed snapshots | Automatic backup to Backblaze B2 on instance deletion; restore into a new instance from any snapshot |
 | **Workspace Seeding** | Initial files & dirs | Pre-populate the workspace with files and directories before the agent starts |
@@ -221,8 +221,10 @@ Opt into automatic version tracking so the operator detects new releases and rol
 spec:
   autoUpdate:
     enabled: true
-    checkInterval: "24h"       # how often to poll the registry (1h–168h)
-    backupBeforeUpdate: true   # back up the PVC before applying an update
+    checkInterval: "24h"         # how often to poll the registry (1h–168h)
+    backupBeforeUpdate: true     # back up the PVC before applying an update
+    rollbackOnFailure: true      # auto-rollback if the new version fails health checks
+    healthCheckTimeout: "10m"    # how long to wait for the pod to become ready (2m–30m)
 ```
 
 When enabled, the operator:
@@ -231,6 +233,14 @@ When enabled, the operator:
 2. **Polls for new versions** — on each `checkInterval`, the operator checks the registry for newer semver tags
 3. **Backs up first** (optional) — if `backupBeforeUpdate` is true and persistence is enabled, a B2 backup job runs before updating
 4. **Applies the update** — patches `spec.image.tag` to the new version, triggering a StatefulSet rolling update
+5. **Health checks** — monitors the StatefulSet for `healthCheckTimeout`; if the pod becomes ready, the update is confirmed
+6. **Auto-rollback** — if the pod fails to become ready within the timeout, the operator reverts the image tag (and optionally restores the PVC from the pre-update backup)
+
+The rollback system includes safety mechanisms:
+
+- **Failed version tracking** — a version that fails health checks is recorded and skipped in future checks (cleared when a newer version is published)
+- **Circuit breaker** — after 3 consecutive rollbacks, auto-update pauses and emits a warning event; reset on any successful update
+- **Backup restore** — when `backupBeforeUpdate` is true, rollback restores the PVC from the pre-update snapshot, fully reverting both code and data
 
 Update progress is tracked in `status.autoUpdate`:
 
@@ -278,6 +288,8 @@ Auto-update is a no-op for digest-pinned images (`spec.image.digest`). The opera
 | `spec.autoUpdate.enabled` | Automatic version updates | `false` |
 | `spec.autoUpdate.checkInterval` | Registry poll interval (Go duration) | `24h` |
 | `spec.autoUpdate.backupBeforeUpdate` | Backup PVC before updating | `true` |
+| `spec.autoUpdate.rollbackOnFailure` | Auto-rollback if update fails health check | `true` |
+| `spec.autoUpdate.healthCheckTimeout` | Time to wait for pod readiness after update (2m–30m) | `10m` |
 | `spec.restoreFrom` | B2 backup path to restore workspace from | - |
 
 See the [full example](config/samples/openclaw_v1alpha1_openclawinstance_full.yaml) for every available field, or the [API reference](docs/api-reference.md) for detailed documentation.
@@ -306,6 +318,7 @@ The operator follows a **secure-by-default** philosophy. Every instance ships wi
 | Chromium without digest pinning | Warning | Deployment proceeds with a warning |
 | Auto-update with digest pin | Warning | Digest overrides auto-update; updates won't apply |
 | Invalid `checkInterval` | Error | Must be a valid Go duration between 1h and 168h |
+| Invalid `healthCheckTimeout` | Error | Must be a valid Go duration between 2m and 30m |
 
 ### Custom network rules
 
@@ -336,6 +349,7 @@ spec:
 | `openclaw_instance_phase` | Gauge | Current phase per instance |
 | `openclaw_autoupdate_checks_total` | Counter | Auto-update version checks by result |
 | `openclaw_autoupdate_applied_total` | Counter | Successful auto-updates applied |
+| `openclaw_autoupdate_rollbacks_total` | Counter | Auto-update rollbacks triggered |
 
 ### ServiceMonitor
 

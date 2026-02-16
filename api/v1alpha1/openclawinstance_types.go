@@ -626,6 +626,19 @@ type AutoUpdateSpec struct {
 	// +kubebuilder:default=true
 	// +optional
 	BackupBeforeUpdate *bool `json:"backupBeforeUpdate,omitempty"`
+
+	// RollbackOnFailure automatically reverts to the previous version if the
+	// updated pod fails to become ready within HealthCheckTimeout
+	// +kubebuilder:default=true
+	// +optional
+	RollbackOnFailure *bool `json:"rollbackOnFailure,omitempty"`
+
+	// HealthCheckTimeout is how long to wait for the updated pod to become ready
+	// before triggering a rollback (Go duration, e.g. "10m")
+	// Minimum: 2m, Maximum: 30m
+	// +kubebuilder:default="10m"
+	// +optional
+	HealthCheckTimeout string `json:"healthCheckTimeout,omitempty"`
 }
 
 // AutoUpdateStatus tracks the state of automatic version updates
@@ -647,7 +660,7 @@ type AutoUpdateStatus struct {
 	PendingVersion string `json:"pendingVersion,omitempty"`
 
 	// UpdatePhase tracks progress of an in-flight update
-	// +kubebuilder:validation:Enum="";BackingUp;ApplyingUpdate
+	// +kubebuilder:validation:Enum="";BackingUp;ApplyingUpdate;HealthCheck;RollingBack
 	// +optional
 	UpdatePhase string `json:"updatePhase,omitempty"`
 
@@ -658,6 +671,24 @@ type AutoUpdateStatus struct {
 	// LastUpdateError records the error from the last failed update attempt
 	// +optional
 	LastUpdateError string `json:"lastUpdateError,omitempty"`
+
+	// PreviousVersion is the version before the last update (used for rollback)
+	// +optional
+	PreviousVersion string `json:"previousVersion,omitempty"`
+
+	// PreUpdateBackupPath is the B2 path of the pre-update backup (used for rollback restore)
+	// +optional
+	PreUpdateBackupPath string `json:"preUpdateBackupPath,omitempty"`
+
+	// FailedVersion is a version that failed health checks and will be skipped in future checks
+	// Cleared when a newer version becomes available
+	// +optional
+	FailedVersion string `json:"failedVersion,omitempty"`
+
+	// RollbackCount tracks consecutive rollbacks; auto-update pauses after 3
+	// Reset to 0 on any successful update
+	// +optional
+	RollbackCount int32 `json:"rollbackCount,omitempty"`
 }
 
 // OpenClawInstanceStatus defines the observed state of OpenClawInstance

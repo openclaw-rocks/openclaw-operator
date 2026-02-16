@@ -40,6 +40,14 @@ import (
 const (
 	updatePhaseBackingUp      = "BackingUp"
 	updatePhaseApplyingUpdate = "ApplyingUpdate"
+	updatePhaseHealthCheck    = "HealthCheck"
+	updatePhaseRollingBack    = "RollingBack"
+
+	// maxRollbackCount is the circuit breaker threshold — auto-update pauses after this many consecutive rollbacks
+	maxRollbackCount = int32(3)
+
+	// defaultHealthCheckTimeout is used when the spec field is empty
+	defaultHealthCheckTimeout = 10 * time.Minute
 )
 
 // resolveInitialTag resolves "latest" to a concrete semver tag when auto-update is enabled.
@@ -106,6 +114,12 @@ func (r *OpenClawInstanceReconciler) reconcileAutoUpdate(ctx context.Context, in
 		return ctrl.Result{}, nil
 	}
 
+	// Circuit breaker: pause version checks after too many consecutive rollbacks
+	if instance.Status.AutoUpdate.RollbackCount >= maxRollbackCount {
+		logger.Info("Auto-update paused due to repeated rollbacks", "rollbackCount", instance.Status.AutoUpdate.RollbackCount)
+		return ctrl.Result{}, nil
+	}
+
 	// Check if it's time to check for updates
 	if !shouldCheckForUpdate(instance) {
 		return ctrl.Result{}, nil
@@ -167,6 +181,21 @@ func (r *OpenClawInstanceReconciler) reconcileAutoUpdate(ctx context.Context, in
 		return ctrl.Result{}, nil
 	}
 
+	// Clear stale FailedVersion if a newer version is now available
+	if instance.Status.AutoUpdate.FailedVersion != "" {
+		failedVer, fErr := semver.NewVersion(instance.Status.AutoUpdate.FailedVersion)
+		if fErr == nil && latestVer.GreaterThan(failedVer) {
+			logger.Info("Newer version available, clearing failed version", "failed", instance.Status.AutoUpdate.FailedVersion, "latest", version)
+			instance.Status.AutoUpdate.FailedVersion = ""
+		}
+	}
+
+	// Skip if the latest version is the same one that previously failed
+	if instance.Status.AutoUpdate.FailedVersion == version {
+		logger.Info("Skipping update to previously failed version", "version", version)
+		return ctrl.Result{}, nil
+	}
+
 	// New version available — start update
 	logger.Info("New version available, starting update", "current", currentTag, "latest", version)
 	r.Recorder.Event(instance, corev1.EventTypeNormal, "AutoUpdateAvailable",
@@ -197,11 +226,24 @@ func (r *OpenClawInstanceReconciler) reconcileAutoUpdate(ctx context.Context, in
 //     c. Create backup job → requeue
 //     d. Poll job → requeue
 //     e. On failure: abort update
-//  3. Patch spec.image.tag = pendingVersion
-//  4. Clear pendingVersion, set currentVersion, lastUpdateTime
+//  3. Save previousVersion, preUpdateBackupPath
+//  4. Patch spec.image.tag = pendingVersion
+//  5. Set UpdatePhase = HealthCheck, keep PendingVersion set
+//  6. Health check loop: wait for StatefulSet readiness or timeout
+//  7. On timeout (if rollbackOnFailure): rollback
 func (r *OpenClawInstanceReconciler) driveUpdateStateMachine(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	pendingVersion := instance.Status.AutoUpdate.PendingVersion
+
+	// Handle in-progress health check
+	if instance.Status.AutoUpdate.UpdatePhase == updatePhaseHealthCheck {
+		return r.driveHealthCheck(ctx, instance)
+	}
+
+	// Handle in-progress rollback
+	if instance.Status.AutoUpdate.UpdatePhase == updatePhaseRollingBack {
+		return r.driveRollback(ctx, instance)
+	}
 
 	// Step 1: Set phase to Updating
 	if instance.Status.Phase != openclawv1alpha1.PhaseUpdating {
@@ -232,11 +274,15 @@ func (r *OpenClawInstanceReconciler) driveUpdateStateMachine(ctx context.Context
 				}
 				return result, nil
 			}
-			// Backup complete, fall through to apply update
+			// Backup complete — save the backup path for potential rollback restore
+			instance.Status.AutoUpdate.PreUpdateBackupPath = r.lastPreUpdateBackupPath(instance)
 		}
 	}
 
-	// Step 3: Apply the update — patch spec.image.tag
+	// Step 3: Save previous version for rollback
+	instance.Status.AutoUpdate.PreviousVersion = instance.Spec.Image.Tag
+
+	// Step 4: Apply the update — patch spec.image.tag
 	instance.Status.AutoUpdate.UpdatePhase = updatePhaseApplyingUpdate
 	if err := r.Status().Update(ctx, instance); err != nil {
 		return ctrl.Result{}, err
@@ -250,13 +296,37 @@ func (r *OpenClawInstanceReconciler) driveUpdateStateMachine(ctx context.Context
 		return r.abortUpdate(ctx, instance, fmt.Sprintf("failed to patch image tag: %v", err))
 	}
 
-	// Step 4: Update status
+	// Step 5: Enter health check phase (keep PendingVersion set)
+	rollbackEnabled := instance.Spec.AutoUpdate.RollbackOnFailure == nil || *instance.Spec.AutoUpdate.RollbackOnFailure
+	if rollbackEnabled {
+		now := metav1.Now()
+		instance.Status.AutoUpdate.UpdatePhase = updatePhaseHealthCheck
+		instance.Status.AutoUpdate.LastUpdateTime = &now
+		instance.Status.Phase = openclawv1alpha1.PhaseProvisioning
+		// PendingVersion stays set — signals "update not yet confirmed"
+
+		if err := r.Status().Update(ctx, instance); err != nil {
+			return ctrl.Result{}, err
+		}
+
+		autoUpdateAppliedTotal.WithLabelValues(instance.Name, instance.Namespace).Inc()
+		r.Recorder.Event(instance, corev1.EventTypeNormal, "AutoUpdateApplied",
+			fmt.Sprintf("Updated image tag to %s, health check started", pendingVersion))
+
+		logger.Info("Auto-update applied, entering health check", "version", pendingVersion)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	// Rollback disabled — immediately confirm the update (legacy behavior)
 	now := metav1.Now()
 	instance.Status.AutoUpdate.CurrentVersion = pendingVersion
 	instance.Status.AutoUpdate.PendingVersion = ""
 	instance.Status.AutoUpdate.UpdatePhase = ""
 	instance.Status.AutoUpdate.LastUpdateTime = &now
 	instance.Status.AutoUpdate.LastUpdateError = ""
+	instance.Status.AutoUpdate.PreviousVersion = ""
+	instance.Status.AutoUpdate.PreUpdateBackupPath = ""
+	instance.Status.AutoUpdate.RollbackCount = 0
 	instance.Status.Phase = openclawv1alpha1.PhaseProvisioning
 
 	meta.RemoveStatusCondition(&instance.Status.Conditions, openclawv1alpha1.ConditionTypeAutoUpdateAvailable)
@@ -271,6 +341,295 @@ func (r *OpenClawInstanceReconciler) driveUpdateStateMachine(ctx context.Context
 
 	logger.Info("Auto-update applied successfully", "version", pendingVersion)
 	return ctrl.Result{Requeue: true}, nil
+}
+
+// driveHealthCheck monitors the StatefulSet after an update and either confirms
+// the update or triggers a rollback if the health check timeout elapses.
+func (r *OpenClawInstanceReconciler) driveHealthCheck(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	// Check StatefulSet readiness
+	sts := &appsv1.StatefulSet{}
+	stsKey := client.ObjectKey{Name: resources.StatefulSetName(instance), Namespace: instance.Namespace}
+	if err := r.Get(ctx, stsKey, sts); err != nil {
+		if apierrors.IsNotFound(err) {
+			// StatefulSet doesn't exist yet — requeue
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+		return ctrl.Result{}, err
+	}
+
+	// Success: pod is ready and updated
+	if sts.Status.ReadyReplicas > 0 && sts.Status.UpdatedReplicas > 0 {
+		logger.Info("Health check passed, update confirmed", "version", instance.Status.AutoUpdate.PendingVersion)
+
+		instance.Status.AutoUpdate.CurrentVersion = instance.Status.AutoUpdate.PendingVersion
+		instance.Status.AutoUpdate.PendingVersion = ""
+		instance.Status.AutoUpdate.UpdatePhase = ""
+		instance.Status.AutoUpdate.LastUpdateError = ""
+		instance.Status.AutoUpdate.PreviousVersion = ""
+		instance.Status.AutoUpdate.PreUpdateBackupPath = ""
+		instance.Status.AutoUpdate.RollbackCount = 0
+		instance.Status.Phase = openclawv1alpha1.PhaseRunning
+
+		meta.RemoveStatusCondition(&instance.Status.Conditions, openclawv1alpha1.ConditionTypeAutoUpdateAvailable)
+
+		if err := r.Status().Update(ctx, instance); err != nil {
+			return ctrl.Result{}, err
+		}
+
+		r.Recorder.Event(instance, corev1.EventTypeNormal, "AutoUpdateConfirmed",
+			fmt.Sprintf("Update to %s confirmed — pod is healthy", instance.Status.AutoUpdate.CurrentVersion))
+
+		return ctrl.Result{Requeue: true}, nil
+	}
+
+	// Check timeout
+	timeout := parseHealthCheckTimeout(instance.Spec.AutoUpdate.HealthCheckTimeout)
+	if instance.Status.AutoUpdate.LastUpdateTime == nil {
+		// Shouldn't happen, but handle gracefully
+		now := metav1.Now()
+		instance.Status.AutoUpdate.LastUpdateTime = &now
+	}
+	elapsed := time.Since(instance.Status.AutoUpdate.LastUpdateTime.Time)
+
+	if elapsed < timeout {
+		logger.V(1).Info("Health check in progress", "elapsed", elapsed.Round(time.Second), "timeout", timeout)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	// Timeout elapsed — trigger rollback
+	logger.Info("Health check timeout elapsed, triggering rollback",
+		"pendingVersion", instance.Status.AutoUpdate.PendingVersion,
+		"previousVersion", instance.Status.AutoUpdate.PreviousVersion,
+		"elapsed", elapsed.Round(time.Second))
+
+	instance.Status.AutoUpdate.UpdatePhase = updatePhaseRollingBack
+	instance.Status.Phase = openclawv1alpha1.PhaseUpdating
+	updatePhaseMetric(instance.Name, instance.Namespace, instance.Status.Phase)
+
+	if err := r.Status().Update(ctx, instance); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	r.Recorder.Event(instance, corev1.EventTypeWarning, "AutoUpdateHealthCheckFailed",
+		fmt.Sprintf("Pod failed to become ready within %s, rolling back from %s to %s",
+			timeout, instance.Status.AutoUpdate.PendingVersion, instance.Status.AutoUpdate.PreviousVersion))
+
+	return ctrl.Result{Requeue: true}, nil
+}
+
+// driveRollback reverts the image tag to the previous version and optionally
+// restores the PVC from the pre-update backup.
+func (r *OpenClawInstanceReconciler) driveRollback(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	previousVersion := instance.Status.AutoUpdate.PreviousVersion
+	if previousVersion == "" {
+		// Can't rollback without knowing the previous version
+		return r.abortUpdate(ctx, instance, "rollback failed: no previous version recorded")
+	}
+
+	backupPath := instance.Status.AutoUpdate.PreUpdateBackupPath
+	persistenceEnabled := instance.Spec.Storage.Persistence.Enabled == nil || *instance.Spec.Storage.Persistence.Enabled
+
+	// Step 8b: Restore from backup if available and persistence is enabled
+	if backupPath != "" && persistenceEnabled {
+		result, done, err := r.driveRollbackRestore(ctx, instance, backupPath)
+		if err != nil {
+			logger.Error(err, "Rollback restore failed, reverting image tag only")
+			r.Recorder.Event(instance, corev1.EventTypeWarning, "RollbackRestoreFailed",
+				fmt.Sprintf("Failed to restore from %s: %v — reverting image tag only", backupPath, err))
+			// Fall through to revert image tag even if restore fails
+		} else if !done {
+			return result, nil
+		}
+	}
+
+	// Step 8c: Revert image tag
+	logger.Info("Rolling back image tag", "from", instance.Spec.Image.Tag, "to", previousVersion)
+
+	original := instance.DeepCopy()
+	instance.Spec.Image.Tag = previousVersion
+	if err := r.Patch(ctx, instance, client.MergeFrom(original)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("rollback patch failed: %w", err)
+	}
+
+	// Step 8d-g: Update status
+	failedVersion := instance.Status.AutoUpdate.PendingVersion
+	instance.Status.AutoUpdate.FailedVersion = failedVersion
+	instance.Status.AutoUpdate.PendingVersion = ""
+	instance.Status.AutoUpdate.UpdatePhase = ""
+	instance.Status.AutoUpdate.PreUpdateBackupPath = ""
+	instance.Status.AutoUpdate.PreviousVersion = ""
+	instance.Status.AutoUpdate.LastUpdateError = fmt.Sprintf("version %s failed health check, rolled back to %s", failedVersion, previousVersion)
+	instance.Status.AutoUpdate.RollbackCount++
+	instance.Status.AutoUpdate.CurrentVersion = previousVersion
+	instance.Status.Phase = openclawv1alpha1.PhaseProvisioning
+
+	meta.RemoveStatusCondition(&instance.Status.Conditions, openclawv1alpha1.ConditionTypeAutoUpdateAvailable)
+
+	if err := r.Status().Update(ctx, instance); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	autoUpdateRollbacksTotal.WithLabelValues(instance.Name, instance.Namespace).Inc()
+
+	// Step 8h: Emit warning event
+	r.Recorder.Event(instance, corev1.EventTypeWarning, "AutoUpdateRolledBack",
+		fmt.Sprintf("Rolled back from %s to %s (rollback count: %d/%d)",
+			failedVersion, previousVersion, instance.Status.AutoUpdate.RollbackCount, maxRollbackCount))
+
+	if instance.Status.AutoUpdate.RollbackCount >= maxRollbackCount {
+		r.Recorder.Event(instance, corev1.EventTypeWarning, "AutoUpdatePaused",
+			fmt.Sprintf("Auto-update paused after %d consecutive rollbacks", instance.Status.AutoUpdate.RollbackCount))
+	}
+
+	logger.Info("Auto-update rolled back", "failedVersion", failedVersion, "restoredVersion", previousVersion,
+		"rollbackCount", instance.Status.AutoUpdate.RollbackCount)
+
+	return ctrl.Result{Requeue: true}, nil
+}
+
+// driveRollbackRestore handles the PVC restore during rollback.
+// Returns (result, done, err) where done=true means restore completed.
+func (r *OpenClawInstanceReconciler) driveRollbackRestore(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance, backupPath string) (requeueResult ctrl.Result, done bool, retErr error) {
+	logger := log.FromContext(ctx)
+
+	// Scale down StatefulSet
+	sts := &appsv1.StatefulSet{}
+	stsKey := client.ObjectKey{Name: resources.StatefulSetName(instance), Namespace: instance.Namespace}
+	if err := r.Get(ctx, stsKey, sts); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, true, nil
+		}
+		return ctrl.Result{}, false, err
+	}
+
+	if sts.Spec.Replicas == nil || *sts.Spec.Replicas > 0 {
+		logger.Info("Scaling down StatefulSet for rollback restore")
+		zero := int32(0)
+		original := sts.DeepCopy()
+		sts.Spec.Replicas = &zero
+		if err := r.Patch(ctx, sts, client.MergeFrom(original)); err != nil {
+			return ctrl.Result{}, false, err
+		}
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, false, nil
+	}
+
+	// Wait for pods to terminate
+	podList := &corev1.PodList{}
+	if err := r.List(ctx, podList,
+		client.InNamespace(instance.Namespace),
+		client.MatchingLabels(resources.SelectorLabels(instance)),
+	); err != nil {
+		return ctrl.Result{}, false, err
+	}
+	if len(podList.Items) > 0 {
+		logger.Info("Waiting for pods to terminate for rollback restore", "count", len(podList.Items))
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, false, nil
+	}
+
+	// Get B2 credentials
+	creds, err := r.getB2Credentials(ctx)
+	if err != nil {
+		return ctrl.Result{}, false, fmt.Errorf("failed to get B2 credentials for rollback: %w", err)
+	}
+
+	// Create or check restore job
+	jobName := rollbackRestoreJobName(instance)
+	existingJob, err := r.getJob(ctx, jobName, instance.Namespace)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return ctrl.Result{}, false, err
+	}
+
+	if apierrors.IsNotFound(err) || existingJob == nil {
+		pvcName := pvcNameForInstance(instance)
+		labels := backupLabels(instance, "rollback-restore")
+
+		job := buildRcloneJob(jobName, instance.Namespace, pvcName, backupPath, labels, creds, false)
+		if err := controllerutil.SetControllerReference(instance, job, r.Scheme); err != nil {
+			return ctrl.Result{}, false, err
+		}
+
+		logger.Info("Creating rollback restore job", "job", jobName, "b2Path", backupPath)
+		if err := r.Create(ctx, job); err != nil {
+			if apierrors.IsAlreadyExists(err) {
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, false, nil
+			}
+			return ctrl.Result{}, false, err
+		}
+		r.Recorder.Event(instance, corev1.EventTypeNormal, "RollbackRestoreStarted",
+			fmt.Sprintf("Rollback restore job %s created from %s", jobName, backupPath))
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, false, nil
+	}
+
+	// Job exists — check status
+	finished, condType := isJobFinished(existingJob)
+	if !finished {
+		logger.Info("Rollback restore job still running", "job", jobName)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, false, nil
+	}
+
+	if condType == batchv1.JobFailed {
+		return ctrl.Result{}, false, fmt.Errorf("rollback restore job %s failed", jobName)
+	}
+
+	logger.Info("Rollback restore completed successfully", "job", jobName)
+	r.Recorder.Event(instance, corev1.EventTypeNormal, "RollbackRestoreComplete",
+		"Rollback restore completed successfully")
+
+	return ctrl.Result{}, true, nil
+}
+
+// rollbackRestoreJobName returns a deterministic name for the rollback restore Job.
+func rollbackRestoreJobName(instance *openclawv1alpha1.OpenClawInstance) string {
+	return instance.Name + "-rollback-restore"
+}
+
+// lastPreUpdateBackupPath extracts the B2 path from the pre-update backup Job.
+// This is called right after the backup completes so the job should exist.
+func (r *OpenClawInstanceReconciler) lastPreUpdateBackupPath(instance *openclawv1alpha1.OpenClawInstance) string {
+	jobName := preUpdateBackupJobName(instance)
+	job, err := r.getJob(context.TODO(), jobName, instance.Namespace)
+	if err != nil || job == nil {
+		return ""
+	}
+	// Extract the B2 path from the rclone args (the second arg after "sync")
+	for i := range job.Spec.Template.Spec.Containers {
+		c := &job.Spec.Template.Spec.Containers[i]
+		if c.Name == "rclone" && len(c.Args) >= 2 {
+			// Args[1] is the remote path for backup (":s3:bucket/path")
+			remotePath := c.Args[1]
+			// Strip the ":s3:bucket/" prefix to get the B2 path
+			creds, credErr := r.getB2Credentials(context.TODO())
+			if credErr == nil {
+				prefix := fmt.Sprintf(":s3:%s/", creds.Bucket)
+				if len(remotePath) > len(prefix) {
+					return remotePath[len(prefix):]
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// parseHealthCheckTimeout parses the health check timeout string with min/max bounds.
+func parseHealthCheckTimeout(s string) time.Duration {
+	if s == "" {
+		return defaultHealthCheckTimeout
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return defaultHealthCheckTimeout
+	}
+	if d < 2*time.Minute {
+		return 2 * time.Minute
+	}
+	if d > 30*time.Minute {
+		return 30 * time.Minute
+	}
+	return d
 }
 
 // drivePreUpdateBackup handles the backup steps before applying an update.

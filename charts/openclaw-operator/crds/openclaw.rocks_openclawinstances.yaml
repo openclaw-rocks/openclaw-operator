@@ -71,6 +71,19 @@ spec:
                     default: false
                     description: Enabled enables automatic version updates
                     type: boolean
+                  healthCheckTimeout:
+                    default: 10m
+                    description: |-
+                      HealthCheckTimeout is how long to wait for the updated pod to become ready
+                      before triggering a rollback (Go duration, e.g. "10m")
+                      Minimum: 2m, Maximum: 30m
+                    type: string
+                  rollbackOnFailure:
+                    default: true
+                    description: |-
+                      RollbackOnFailure automatically reverts to the previous version if the
+                      updated pod fails to become ready within HealthCheckTimeout
+                    type: boolean
                 type: object
               availability:
                 description: Availability configures high availability settings
@@ -5221,6 +5234,11 @@ spec:
                   currentVersion:
                     description: CurrentVersion is the version currently running
                     type: string
+                  failedVersion:
+                    description: |-
+                      FailedVersion is a version that failed health checks and will be skipped in future checks
+                      Cleared when a newer version becomes available
+                    type: string
                   lastCheckTime:
                     description: LastCheckTime is when the registry was last checked
                       for new versions
@@ -5242,12 +5260,28 @@ spec:
                   pendingVersion:
                     description: PendingVersion is set during an in-flight update
                     type: string
+                  preUpdateBackupPath:
+                    description: PreUpdateBackupPath is the B2 path of the pre-update
+                      backup (used for rollback restore)
+                    type: string
+                  previousVersion:
+                    description: PreviousVersion is the version before the last update
+                      (used for rollback)
+                    type: string
+                  rollbackCount:
+                    description: |-
+                      RollbackCount tracks consecutive rollbacks; auto-update pauses after 3
+                      Reset to 0 on any successful update
+                    format: int32
+                    type: integer
                   updatePhase:
                     description: UpdatePhase tracks progress of an in-flight update
                     enum:
                     - ""
                     - BackingUp
                     - ApplyingUpdate
+                    - HealthCheck
+                    - RollingBack
                     type: string
                 type: object
               backupJobName:
