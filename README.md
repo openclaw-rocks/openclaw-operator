@@ -206,6 +206,7 @@ The operator automatically generates a gateway token Secret for each instance an
 - The token is generated once and never overwritten — rotate it by editing the Secret directly
 - If you set `gateway.auth.token` in your config or `OPENCLAW_GATEWAY_TOKEN` in `spec.env`, your value takes precedence
 - `OPENCLAW_DISABLE_BONJOUR=1` is always set (mDNS does not work in k8s)
+- To bring your own token Secret, set `spec.gateway.existingSecret` — the operator will use it instead of auto-generating one (the Secret must have a key named `token`)
 
 ### Chromium sidecar
 
@@ -429,6 +430,8 @@ Auto-update is a no-op for digest-pinned images (`spec.image.digest`). The opera
 | `spec.security.caBundle.configMapName` | CA bundle ConfigMap name | - |
 | `spec.security.caBundle.secretName` | CA bundle Secret name | - |
 | `spec.security.caBundle.key` | Key in ConfigMap/Secret containing CA bundle | `ca-bundle.crt` |
+| **Gateway** | | |
+| `spec.gateway.existingSecret` | Use existing Secret for gateway token (key: `token`) | auto-generated |
 | **Chromium** | | |
 | `spec.chromium.enabled` | Chromium sidecar | `false` |
 | **Networking** | | |

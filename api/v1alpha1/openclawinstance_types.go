@@ -108,6 +108,10 @@ type OpenClawInstanceSpec struct {
 	// +optional
 	RuntimeDeps RuntimeDepsSpec `json:"runtimeDeps,omitempty"`
 
+	// Gateway configures the gateway authentication token
+	// +optional
+	Gateway GatewaySpec `json:"gateway,omitempty"`
+
 	// AutoUpdate configures automatic version updates from the OCI registry
 	// +optional
 	AutoUpdate AutoUpdateSpec `json:"autoUpdate,omitempty"`
@@ -733,6 +737,15 @@ type RuntimeDepsSpec struct {
 	// Python installs Python 3.12 and uv for Python-based MCP servers and skills.
 	// +optional
 	Python bool `json:"python,omitempty"`
+}
+
+// GatewaySpec configures the gateway authentication token
+type GatewaySpec struct {
+	// ExistingSecret is the name of a user-managed Secret containing the gateway token.
+	// The Secret must have a key named "token". When set, the operator skips
+	// auto-generating a gateway token Secret and uses this Secret instead.
+	// +optional
+	ExistingSecret string `json:"existingSecret,omitempty"`
 }
 
 // AutoUpdateStatus tracks the state of automatic version updates

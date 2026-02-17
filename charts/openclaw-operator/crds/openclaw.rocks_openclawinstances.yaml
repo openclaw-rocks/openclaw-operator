@@ -3169,6 +3169,16 @@ spec:
                   type: object
                 maxItems: 10
                 type: array
+              gateway:
+                description: Gateway configures the gateway authentication token
+                properties:
+                  existingSecret:
+                    description: |-
+                      ExistingSecret is the name of a user-managed Secret containing the gateway token.
+                      The Secret must have a key named "token". When set, the operator skips
+                      auto-generating a gateway token Secret and uses this Secret instead.
+                    type: string
+                type: object
               image:
                 description: Image configuration for the OpenClaw container
                 properties:

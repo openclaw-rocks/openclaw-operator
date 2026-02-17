@@ -3507,6 +3507,63 @@ func TestBuildStatefulSet_GatewayTokenEnv_UserOverride(t *testing.T) {
 	}
 }
 
+func TestBuildStatefulSet_ExistingSecret(t *testing.T) {
+	instance := newTestInstance("existing-secret")
+	instance.Spec.Gateway.ExistingSecret = "my-custom-secret"
+	existingSecretName := "my-custom-secret"
+
+	sts := BuildStatefulSet(instance, existingSecretName)
+
+	main := sts.Spec.Template.Spec.Containers[0]
+	var gwEnv *corev1.EnvVar
+	for i := range main.Env {
+		if main.Env[i].Name == "OPENCLAW_GATEWAY_TOKEN" {
+			gwEnv = &main.Env[i]
+			break
+		}
+	}
+
+	if gwEnv == nil {
+		t.Fatal("OPENCLAW_GATEWAY_TOKEN env var not found")
+	}
+	if gwEnv.ValueFrom == nil || gwEnv.ValueFrom.SecretKeyRef == nil {
+		t.Fatal("OPENCLAW_GATEWAY_TOKEN should use SecretKeyRef")
+	}
+	if gwEnv.ValueFrom.SecretKeyRef.Name != existingSecretName {
+		t.Errorf("secret name = %q, want %q", gwEnv.ValueFrom.SecretKeyRef.Name, existingSecretName)
+	}
+	if gwEnv.ValueFrom.SecretKeyRef.Key != GatewayTokenSecretKey {
+		t.Errorf("secret key = %q, want %q", gwEnv.ValueFrom.SecretKeyRef.Key, GatewayTokenSecretKey)
+	}
+}
+
+func TestBuildStatefulSet_ExistingSecret_UserOverride(t *testing.T) {
+	instance := newTestInstance("existing-secret-override")
+	instance.Spec.Gateway.ExistingSecret = "my-custom-secret"
+	instance.Spec.Env = []corev1.EnvVar{
+		{Name: "OPENCLAW_GATEWAY_TOKEN", Value: "user-provided-token"},
+	}
+
+	sts := BuildStatefulSet(instance, "my-custom-secret")
+
+	main := sts.Spec.Template.Spec.Containers[0]
+	count := 0
+	for _, env := range main.Env {
+		if env.Name == "OPENCLAW_GATEWAY_TOKEN" {
+			count++
+			if env.Value != "user-provided-token" {
+				t.Errorf("OPENCLAW_GATEWAY_TOKEN value = %q, want %q", env.Value, "user-provided-token")
+			}
+			if env.ValueFrom != nil {
+				t.Error("user's OPENCLAW_GATEWAY_TOKEN should not use SecretKeyRef")
+			}
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected exactly 1 OPENCLAW_GATEWAY_TOKEN env var, got %d", count)
+	}
+}
+
 func TestBuildStatefulSet_NoGatewayTokenSecretName(t *testing.T) {
 	instance := newTestInstance("no-gw")
 

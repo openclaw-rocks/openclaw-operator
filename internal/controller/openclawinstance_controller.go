@@ -464,10 +464,27 @@ func (r *OpenClawInstanceReconciler) reconcileNetworkPolicy(ctx context.Context,
 }
 
 // reconcileGatewayTokenSecret ensures a gateway token Secret exists for the instance.
-// If the Secret doesn't exist, a random 32-byte hex token is generated and stored.
-// If it already exists, the existing token is returned. The token is used to configure
-// gateway.auth.mode=token so that Bonjour/mDNS pairing (unusable in k8s) is bypassed.
+// If spec.gateway.existingSecret is set, the operator uses that Secret instead of
+// auto-generating one. Otherwise, a random 32-byte hex token is generated and stored.
+// The token is used to configure gateway.auth.mode=token so that Bonjour/mDNS
+// pairing (unusable in k8s) is bypassed.
 func (r *OpenClawInstanceReconciler) reconcileGatewayTokenSecret(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) (string, error) {
+	// If the user provides their own secret, look it up and return its token
+	if instance.Spec.Gateway.ExistingSecret != "" {
+		existing := &corev1.Secret{}
+		if err := r.Get(ctx, types.NamespacedName{Name: instance.Spec.Gateway.ExistingSecret, Namespace: instance.Namespace}, existing); err != nil {
+			if apierrors.IsNotFound(err) {
+				return "", fmt.Errorf("gateway.existingSecret %q not found", instance.Spec.Gateway.ExistingSecret)
+			}
+			return "", fmt.Errorf("failed to get gateway existing secret: %w", err)
+		}
+		instance.Status.ManagedResources.GatewayTokenSecret = existing.Name
+		if tok, ok := existing.Data[resources.GatewayTokenSecretKey]; ok {
+			return string(tok), nil
+		}
+		return "", fmt.Errorf("gateway.existingSecret %q missing key %q", instance.Spec.Gateway.ExistingSecret, resources.GatewayTokenSecretKey)
+	}
+
 	secretName := resources.GatewayTokenSecretName(instance)
 
 	existing := &corev1.Secret{}
@@ -759,7 +776,11 @@ func (r *OpenClawInstanceReconciler) reconcileStatefulSet(ctx context.Context, i
 		// Pass the gateway token secret name so the env var can be injected
 		var gwSecretName string
 		if gatewayToken != "" {
-			gwSecretName = resources.GatewayTokenSecretName(instance)
+			if instance.Spec.Gateway.ExistingSecret != "" {
+				gwSecretName = instance.Spec.Gateway.ExistingSecret
+			} else {
+				gwSecretName = resources.GatewayTokenSecretName(instance)
+			}
 		}
 		desired := resources.BuildStatefulSet(instance, gwSecretName)
 		sts.Labels = desired.Labels
@@ -921,7 +942,12 @@ func (r *OpenClawInstanceReconciler) computeSecretHash(ctx context.Context, inst
 		}
 	}
 	// Include the gateway token Secret so rotations trigger a pod rollout
-	gwSecretName := resources.GatewayTokenSecretName(instance)
+	var gwSecretName string
+	if instance.Spec.Gateway.ExistingSecret != "" {
+		gwSecretName = instance.Spec.Gateway.ExistingSecret
+	} else {
+		gwSecretName = resources.GatewayTokenSecretName(instance)
+	}
 	secretNames = append(secretNames, gwSecretName)
 
 	if len(secretNames) == 0 {
@@ -972,16 +998,23 @@ func (r *OpenClawInstanceReconciler) findInstancesForSecret(ctx context.Context,
 	var requests []reconcile.Request
 	for i := range instanceList.Items {
 		instance := &instanceList.Items[i]
+		matched := false
 		for _, ef := range instance.Spec.EnvFrom {
 			if ef.SecretRef != nil && ef.SecretRef.Name == secret.Name {
-				requests = append(requests, reconcile.Request{
-					NamespacedName: types.NamespacedName{
-						Name:      instance.Name,
-						Namespace: instance.Namespace,
-					},
-				})
+				matched = true
 				break
 			}
+		}
+		if !matched && instance.Spec.Gateway.ExistingSecret == secret.Name {
+			matched = true
+		}
+		if matched {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      instance.Name,
+					Namespace: instance.Namespace,
+				},
+			})
 		}
 	}
 	return requests

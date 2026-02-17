@@ -38,12 +38,19 @@ spec:
     - secretRef:
         name: openclaw-api-keys  # Contains ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.
 
+  # Gateway authentication — use an existing Secret instead of auto-generation
+  # The Secret must have a key named "token"
+  # gateway:
+  #   existingSecret: my-gateway-token
+
   env:
-    - name: OPENCLAW_GATEWAY_TOKEN
-      valueFrom:
-        secretKeyRef:
-          name: gateway-token
-          key: token
+    # If gateway.existingSecret is not set, OPENCLAW_GATEWAY_TOKEN is auto-injected.
+    # Override manually only if you need a specific value:
+    # - name: OPENCLAW_GATEWAY_TOKEN
+    #   valueFrom:
+    #     secretKeyRef:
+    #       name: gateway-token
+    #       key: token
     - name: OPENCLAW_DISABLE_BONJOUR
       value: "1"
 

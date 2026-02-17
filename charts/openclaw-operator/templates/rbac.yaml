@@ -11,7 +11,7 @@ rules:
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
@@ -49,6 +49,10 @@ rules:
   # Policy
   - apiGroups: ["policy"]
     resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Monitoring
+  - apiGroups: ["monitoring.coreos.com"]
+    resources: ["servicemonitors"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # OpenClaw CRDs
   - apiGroups: ["openclaw.rocks"]
