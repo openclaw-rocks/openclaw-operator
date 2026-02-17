@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.7](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.6...v0.9.7) (2026-02-17)
+
+
+### Bug Fixes
+
+* use server-side apply for CRD installation and update README ([#94](https://github.com/openclaw-rocks/k8s-operator/issues/94)) ([73b0677](https://github.com/openclaw-rocks/k8s-operator/commit/73b0677d577ada187af7298e0b685cf25161ba12))
+
 ## [0.9.6](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.5...v0.9.6) (2026-02-16)
 
 
