@@ -26,35 +26,35 @@ import (
 )
 
 // BuildConfigMap creates a ConfigMap for the OpenClawInstance configuration.
-// If gatewayToken is non-empty and the user hasn't already configured
-// gateway.auth.token in their config, the token and auth mode are injected.
+// It always injects gateway.bind=lan (so health probes work) and optionally
+// injects gateway.auth credentials when gatewayToken is non-empty.
 func BuildConfigMap(instance *openclawv1alpha1.OpenClawInstance, gatewayToken string) *corev1.ConfigMap {
 	labels := Labels(instance)
 
-	// Generate openclaw.json content from raw config
-	configContent := "{}"
+	// Start with empty config, overlay raw config if present
+	configBytes := []byte("{}")
 	if instance.Spec.Config.Raw != nil && len(instance.Spec.Config.Raw.Raw) > 0 {
-		configBytes := instance.Spec.Config.Raw.Raw
-		// Pre-enable modules for configured channels so the gateway does not
-		// need to modify the config file on startup (avoids EBUSY on rename).
-		if enriched, err := enrichConfigWithModules(configBytes); err == nil {
+		configBytes = instance.Spec.Config.Raw.Raw
+	}
+
+	// Enrichment pipeline: modules → gateway auth → gateway bind
+	if enriched, err := enrichConfigWithModules(configBytes); err == nil {
+		configBytes = enriched
+	}
+	if gatewayToken != "" {
+		if enriched, err := enrichConfigWithGatewayAuth(configBytes, gatewayToken); err == nil {
 			configBytes = enriched
 		}
-		// Inject gateway auth token so mDNS pairing is not required.
-		if gatewayToken != "" {
-			if enriched, err := enrichConfigWithGatewayAuth(configBytes, gatewayToken); err == nil {
-				configBytes = enriched
-			}
-		}
-		configContent = string(configBytes)
-	} else if gatewayToken != "" {
-		// No raw config at all — create a minimal config with gateway auth
-		configContent = `{"gateway":{"auth":{"mode":"token","token":"` + gatewayToken + `"}}}`
 	}
+	if enriched, err := enrichConfigWithGatewayBind(configBytes); err == nil {
+		configBytes = enriched
+	}
+
+	configContent := string(configBytes)
 
 	// Try to pretty-print the JSON
 	var parsed interface{}
-	if err := json.Unmarshal([]byte(configContent), &parsed); err == nil {
+	if err := json.Unmarshal(configBytes, &parsed); err == nil {
 		if pretty, err := json.MarshalIndent(parsed, "", "  "); err == nil {
 			configContent = string(pretty)
 		}
@@ -167,6 +167,32 @@ func enrichConfigWithGatewayAuth(configJSON []byte, token string) ([]byte, error
 	auth["mode"] = "token"
 	auth["token"] = token
 	gw["auth"] = auth
+	config["gateway"] = gw
+
+	return json.Marshal(config)
+}
+
+// enrichConfigWithGatewayBind injects gateway.bind=lan into the config JSON
+// so that the gateway listens on the pod IP (required for TCPSocket health
+// probes). If the user has already set gateway.bind, the config is returned
+// unchanged (user override wins).
+func enrichConfigWithGatewayBind(configJSON []byte) ([]byte, error) {
+	var config map[string]interface{}
+	if err := json.Unmarshal(configJSON, &config); err != nil {
+		return configJSON, nil // not a JSON object, return unchanged
+	}
+
+	gw, _ := config["gateway"].(map[string]interface{})
+	if gw == nil {
+		gw = make(map[string]interface{})
+	}
+
+	// If the user already set bind, don't override
+	if _, ok := gw["bind"]; ok {
+		return configJSON, nil
+	}
+
+	gw["bind"] = "lan"
 	config["gateway"] = gw
 
 	return json.Marshal(config)

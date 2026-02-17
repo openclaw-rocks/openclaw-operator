@@ -18,6 +18,7 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"testing"
 	"time"
@@ -34,6 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
 	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	"github.com/openclawrocks/k8s-operator/internal/resources"
 )
 
 var (
@@ -168,6 +170,85 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				}, statefulSet)
 				return err != nil
 			}, timeout, interval).Should(BeTrue())
+		})
+
+		It("Should mount default config for vanilla deployment", func() {
+			instanceName := "vanilla-instance"
+
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			// Create vanilla OpenClawInstance (image only, no config)
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			// Verify StatefulSet has init-config init container
+			statefulSet := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName,
+					Namespace: namespace,
+				}, statefulSet)
+			}, timeout, interval).Should(Succeed())
+
+			initContainers := statefulSet.Spec.Template.Spec.InitContainers
+			var initConfig *corev1.Container
+			for i := range initContainers {
+				if initContainers[i].Name == "init-config" {
+					initConfig = &initContainers[i]
+					break
+				}
+			}
+			Expect(initConfig).NotTo(BeNil(), "vanilla deployment should have init-config container")
+
+			// Verify config volume references the operator-managed ConfigMap
+			var configVol *corev1.Volume
+			for i := range statefulSet.Spec.Template.Spec.Volumes {
+				if statefulSet.Spec.Template.Spec.Volumes[i].Name == "config" {
+					configVol = &statefulSet.Spec.Template.Spec.Volumes[i]
+					break
+				}
+			}
+			Expect(configVol).NotTo(BeNil(), "config volume should exist for vanilla deployment")
+			Expect(configVol.ConfigMap).NotTo(BeNil())
+			Expect(configVol.ConfigMap.Name).To(Equal(resources.ConfigMapName(instance)))
+
+			// Verify ConfigMap exists and contains gateway.bind=lan
+			cm := &corev1.ConfigMap{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.ConfigMapName(instance),
+					Namespace: namespace,
+				}, cm)
+			}, timeout, interval).Should(Succeed())
+
+			configContent, ok := cm.Data["openclaw.json"]
+			Expect(ok).To(BeTrue(), "ConfigMap should have openclaw.json key")
+
+			var parsed map[string]interface{}
+			Expect(json.Unmarshal([]byte(configContent), &parsed)).To(Succeed())
+			gw, ok := parsed["gateway"].(map[string]interface{})
+			Expect(ok).To(BeTrue(), "config should have gateway key")
+			Expect(gw["bind"]).To(Equal("lan"), "gateway.bind should be lan")
+
+			// Clean up via owner-reference garbage collection
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})
 	})
 

@@ -670,7 +670,9 @@ func hasWorkspaceFiles(instance *openclawv1alpha1.OpenClawInstance) bool {
 	return instance.Spec.Workspace != nil && len(instance.Spec.Workspace.InitialFiles) > 0
 }
 
-// configMapKey returns the ConfigMap key for the config file, or "" if no config is set.
+// configMapKey returns the ConfigMap key for the config file.
+// Always returns "openclaw.json" for operator-managed configs (including vanilla
+// deployments), since the operator always creates a ConfigMap with gateway.bind.
 func configMapKey(instance *openclawv1alpha1.OpenClawInstance) string {
 	if instance.Spec.Config.ConfigMapRef != nil {
 		if instance.Spec.Config.ConfigMapRef.Key != "" {
@@ -678,10 +680,7 @@ func configMapKey(instance *openclawv1alpha1.OpenClawInstance) string {
 		}
 		return "openclaw.json"
 	}
-	if instance.Spec.Config.Raw != nil {
-		return "openclaw.json"
-	}
-	return ""
+	return "openclaw.json"
 }
 
 // buildChromiumContainer creates the Chromium sidecar container
@@ -805,7 +804,9 @@ func buildVolumes(instance *openclawv1alpha1.OpenClawInstance) []corev1.Volume {
 				},
 			},
 		})
-	} else if instance.Spec.Config.Raw != nil {
+	} else {
+		// Always mount the operator-managed ConfigMap (even for vanilla
+		// deployments) — it contains gateway.bind=lan for health probes.
 		volumes = append(volumes, corev1.Volume{
 			Name: "config",
 			VolumeSource: corev1.VolumeSource{

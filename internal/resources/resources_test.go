@@ -766,14 +766,30 @@ func TestBuildStatefulSet_ConfigMapRef_DefaultKey(t *testing.T) {
 	}
 }
 
-func TestBuildStatefulSet_NoConfig_NoInitContainer(t *testing.T) {
+func TestBuildStatefulSet_VanillaDeployment_HasInitContainer(t *testing.T) {
 	instance := newTestInstance("no-config")
-	// No config set at all
+	// No config set at all — vanilla deployment
 
 	sts := BuildStatefulSet(instance)
 
-	if len(sts.Spec.Template.Spec.InitContainers) != 0 {
-		t.Errorf("expected 0 init containers when no config, got %d", len(sts.Spec.Template.Spec.InitContainers))
+	// Vanilla deployments should still get an init container (gateway.bind=lan)
+	if len(sts.Spec.Template.Spec.InitContainers) != 1 {
+		t.Fatalf("expected 1 init container for vanilla deployment, got %d", len(sts.Spec.Template.Spec.InitContainers))
+	}
+	if sts.Spec.Template.Spec.InitContainers[0].Name != "init-config" {
+		t.Errorf("init container name = %q, want %q", sts.Spec.Template.Spec.InitContainers[0].Name, "init-config")
+	}
+
+	// Verify config volume is present
+	configVol := findVolume(sts.Spec.Template.Spec.Volumes, "config")
+	if configVol == nil {
+		t.Fatal("config volume not found for vanilla deployment")
+	}
+	if configVol.ConfigMap == nil {
+		t.Fatal("config volume should use ConfigMap")
+	}
+	if configVol.ConfigMap.Name != "no-config-config" {
+		t.Errorf("config volume ConfigMap name = %q, want %q", configVol.ConfigMap.Name, "no-config-config")
 	}
 }
 
@@ -1445,13 +1461,22 @@ func TestBuildConfigMap_Default(t *testing.T) {
 		t.Error("configmap missing app label")
 	}
 
-	// Default config should be empty JSON object
+	// Default config should have gateway.bind=lan injected
 	content, ok := cm.Data["openclaw.json"]
 	if !ok {
 		t.Fatal("configmap missing openclaw.json key")
 	}
-	if content != "{}" {
-		t.Errorf("default config content = %q, want %q", content, "{}")
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse default config: %v", err)
+	}
+	gw, ok := parsed["gateway"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected gateway key in default config")
+	}
+	if gw["bind"] != "lan" {
+		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "lan")
 	}
 }
 
@@ -1484,7 +1509,7 @@ func TestBuildConfigMap_RawConfig(t *testing.T) {
 func TestBuildConfigMap_InvalidJSON_RawPreserved(t *testing.T) {
 	instance := newTestInstance("cm-invalid")
 	// If raw JSON is technically valid but the builder tries to pretty-print,
-	// verify it handles valid JSON correctly
+	// verify it handles valid JSON correctly and gateway.bind is injected
 	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
 		RawExtension: runtime.RawExtension{
 			Raw: []byte(`{"key":"value"}`),
@@ -1494,10 +1519,19 @@ func TestBuildConfigMap_InvalidJSON_RawPreserved(t *testing.T) {
 	cm := BuildConfigMap(instance, "")
 	content := cm.Data["openclaw.json"]
 
-	// Pretty-printed version of {"key":"value"}
-	expected := "{\n  \"key\": \"value\"\n}"
-	if content != expected {
-		t.Errorf("config content = %q, want %q", content, expected)
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config: %v", err)
+	}
+	if parsed["key"] != "value" {
+		t.Errorf("key = %v, want %q", parsed["key"], "value")
+	}
+	gw, ok := parsed["gateway"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected gateway key after enrichment")
+	}
+	if gw["bind"] != "lan" {
+		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "lan")
 	}
 }
 
@@ -1683,6 +1717,137 @@ func TestBuildConfigMap_EnrichesChannelModules(t *testing.T) {
 	mod := modules[0].(map[string]interface{})
 	if mod["location"] != "MODULES_ROOT/channel-telegram" {
 		t.Errorf("module location = %q, want %q", mod["location"], "MODULES_ROOT/channel-telegram")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// enrichConfigWithGatewayBind tests
+// ---------------------------------------------------------------------------
+
+func TestEnrichConfigWithGatewayBind(t *testing.T) {
+	input := []byte(`{}`)
+	out, err := enrichConfigWithGatewayBind(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	gw, ok := cfg["gateway"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected gateway key")
+	}
+	if gw["bind"] != "lan" {
+		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "lan")
+	}
+}
+
+func TestEnrichConfigWithGatewayBind_PreservesUserBind(t *testing.T) {
+	input := []byte(`{"gateway":{"bind":"0.0.0.0"}}`)
+	out, err := enrichConfigWithGatewayBind(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	gw := cfg["gateway"].(map[string]interface{})
+	if gw["bind"] != "0.0.0.0" {
+		t.Errorf("gateway.bind = %v, want %q (user override)", gw["bind"], "0.0.0.0")
+	}
+}
+
+func TestEnrichConfigWithGatewayBind_PreservesOtherFields(t *testing.T) {
+	input := []byte(`{"gateway":{"auth":{"mode":"token","token":"secret"}}}`)
+	out, err := enrichConfigWithGatewayBind(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	gw := cfg["gateway"].(map[string]interface{})
+	if gw["bind"] != "lan" {
+		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "lan")
+	}
+	auth, ok := gw["auth"].(map[string]interface{})
+	if !ok {
+		t.Fatal("gateway.auth should be preserved")
+	}
+	if auth["token"] != "secret" {
+		t.Errorf("gateway.auth.token = %v, want %q", auth["token"], "secret")
+	}
+}
+
+func TestEnrichConfigWithGatewayBind_InvalidJSON(t *testing.T) {
+	input := []byte(`not valid json`)
+	out, err := enrichConfigWithGatewayBind(input)
+	if err != nil {
+		t.Fatal("should not error on invalid JSON")
+	}
+
+	if !bytes.Equal(out, input) {
+		t.Errorf("invalid JSON should be returned unchanged")
+	}
+}
+
+func TestBuildConfigMap_RawConfig_GatewayBindInjected(t *testing.T) {
+	instance := newTestInstance("cm-bind-inject")
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{
+			Raw: []byte(`{"mcpServers":{"test":{"url":"http://localhost"}}}`),
+		},
+	}
+
+	cm := BuildConfigMap(instance, "")
+	content := cm.Data["openclaw.json"]
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config: %v", err)
+	}
+
+	gw, ok := parsed["gateway"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected gateway key injected into raw config")
+	}
+	if gw["bind"] != "lan" {
+		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "lan")
+	}
+	// Original data preserved
+	if _, ok := parsed["mcpServers"]; !ok {
+		t.Error("mcpServers should be preserved from raw config")
+	}
+}
+
+func TestBuildConfigMap_RawConfig_UserBindPreserved(t *testing.T) {
+	instance := newTestInstance("cm-bind-preserve")
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{
+			Raw: []byte(`{"gateway":{"bind":"0.0.0.0"}}`),
+		},
+	}
+
+	cm := BuildConfigMap(instance, "")
+	content := cm.Data["openclaw.json"]
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config: %v", err)
+	}
+
+	gw := parsed["gateway"].(map[string]interface{})
+	if gw["bind"] != "0.0.0.0" {
+		t.Errorf("gateway.bind = %v, want %q (user override should win)", gw["bind"], "0.0.0.0")
 	}
 }
 
@@ -2676,7 +2841,7 @@ func TestBuildInitScript_WorkspaceOnly(t *testing.T) {
 	}
 
 	script := BuildInitScript(instance)
-	expected := "mkdir -p /data/workspace/'memory'\nmkdir -p /data/workspace\n[ -f /data/workspace/'SOUL.md' ] || cp /workspace-init/'SOUL.md' /data/workspace/'SOUL.md'"
+	expected := "cp /config/'openclaw.json' /data/openclaw.json\nmkdir -p /data/workspace/'memory'\nmkdir -p /data/workspace\n[ -f /data/workspace/'SOUL.md' ] || cp /workspace-init/'SOUL.md' /data/workspace/'SOUL.md'"
 	if script != expected {
 		t.Errorf("unexpected script:\ngot:  %q\nwant: %q", script, expected)
 	}
@@ -2729,7 +2894,7 @@ func TestBuildInitScript_DirsOnly(t *testing.T) {
 	}
 
 	script := BuildInitScript(instance)
-	expected := "mkdir -p /data/workspace/'memory'\nmkdir -p /data/workspace/'tools/scripts'"
+	expected := "cp /config/'openclaw.json' /data/openclaw.json\nmkdir -p /data/workspace/'memory'\nmkdir -p /data/workspace/'tools/scripts'"
 	if script != expected {
 		t.Errorf("unexpected script:\ngot:  %q\nwant: %q", script, expected)
 	}
@@ -2744,7 +2909,7 @@ func TestBuildInitScript_ShellQuotesSpecialChars(t *testing.T) {
 	}
 
 	script := BuildInitScript(instance)
-	expected := "mkdir -p /data/workspace\n[ -f /data/workspace/'it'\\''s a file.md' ] || cp /workspace-init/'it'\\''s a file.md' /data/workspace/'it'\\''s a file.md'"
+	expected := "cp /config/'openclaw.json' /data/openclaw.json\nmkdir -p /data/workspace\n[ -f /data/workspace/'it'\\''s a file.md' ] || cp /workspace-init/'it'\\''s a file.md' /data/workspace/'it'\\''s a file.md'"
 	if script != expected {
 		t.Errorf("unexpected script:\ngot:  %q\nwant: %q", script, expected)
 	}
@@ -2761,16 +2926,18 @@ func TestBuildInitScript_FilesOnly_MkdirWorkspace(t *testing.T) {
 	}
 
 	script := BuildInitScript(instance)
-	if !strings.HasPrefix(script, "mkdir -p /data/workspace\n") {
-		t.Errorf("script should start with mkdir -p /data/workspace, got:\n%s", script)
+	if !strings.Contains(script, "mkdir -p /data/workspace\n") {
+		t.Errorf("script should contain mkdir -p /data/workspace, got:\n%s", script)
 	}
 }
 
-func TestBuildInitScript_Empty(t *testing.T) {
+func TestBuildInitScript_VanillaDeployment(t *testing.T) {
 	instance := newTestInstance("init-empty")
 	script := BuildInitScript(instance)
-	if script != "" {
-		t.Errorf("expected empty script, got: %q", script)
+	// Vanilla deployments now get a config copy (gateway.bind=lan)
+	expected := "cp /config/'openclaw.json' /data/openclaw.json"
+	if script != expected {
+		t.Errorf("unexpected script:\ngot:  %q\nwant: %q", script, expected)
 	}
 }
 
@@ -3071,11 +3238,12 @@ func TestBuildStatefulSet_OverwriteMode_NoInitTmpVolume(t *testing.T) {
 func TestBuildInitScript_MergeMode_NoConfig(t *testing.T) {
 	instance := newTestInstance("merge-no-cfg")
 	instance.Spec.Config.MergeMode = ConfigMergeModeMerge
-	// No config set
+	// No raw config set — but operator always creates a ConfigMap (gateway.bind)
 
 	script := BuildInitScript(instance)
-	if script != "" {
-		t.Errorf("merge mode with no config should produce empty script, got: %q", script)
+	// Should produce a merge script since configMapKey() now always returns "openclaw.json"
+	if !strings.Contains(script, "jq -s") {
+		t.Errorf("merge mode should produce jq merge script, got: %q", script)
 	}
 }
 
@@ -3213,29 +3381,28 @@ func TestConfigHash_ChangesWithSkills(t *testing.T) {
 	}
 }
 
-func TestBuildStatefulSet_SkillsOnly_NoConfigInitContainer(t *testing.T) {
+func TestBuildStatefulSet_SkillsOnly_HasBothInitContainers(t *testing.T) {
 	instance := newTestInstance("skills-only")
 	instance.Spec.Skills = []string{"some-skill"}
-	// No config set
+	// No raw config set — but operator always creates config (gateway.bind)
 
 	sts := BuildStatefulSet(instance)
 
-	// Should NOT have init-config container (no config to copy)
+	// Should have init-config container (gateway.bind=lan config)
+	foundConfig := false
+	foundSkills := false
 	for _, c := range sts.Spec.Template.Spec.InitContainers {
 		if c.Name == "init-config" {
-			t.Error("init-config container should not exist without config")
+			foundConfig = true
 		}
-	}
-
-	// But SHOULD have init-skills container
-	found := false
-	for _, c := range sts.Spec.Template.Spec.InitContainers {
 		if c.Name == "init-skills" {
-			found = true
-			break
+			foundSkills = true
 		}
 	}
-	if !found {
+	if !foundConfig {
+		t.Error("init-config container should exist (gateway.bind config)")
+	}
+	if !foundSkills {
 		t.Error("init-skills container should exist with skills defined")
 	}
 }
@@ -3420,6 +3587,10 @@ func TestBuildConfigMap_WithGatewayToken_NoRawConfig(t *testing.T) {
 	if auth["token"] != token {
 		t.Errorf("gateway.auth.token = %v, want %q", auth["token"], token)
 	}
+	// bind=lan should also be present
+	if gw["bind"] != "lan" {
+		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "lan")
+	}
 }
 
 func TestBuildConfigMap_EmptyGatewayToken(t *testing.T) {
@@ -3438,9 +3609,16 @@ func TestBuildConfigMap_EmptyGatewayToken(t *testing.T) {
 		t.Fatalf("failed to parse ConfigMap data: %v", err)
 	}
 
-	// No gateway key should be injected when token is empty
-	if _, ok := parsed["gateway"]; ok {
-		t.Error("gateway key should not be present when token is empty")
+	// gateway key IS present (gateway.bind=lan), but no auth when token is empty
+	gw, ok := parsed["gateway"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected gateway key (bind is always injected)")
+	}
+	if gw["bind"] != "lan" {
+		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "lan")
+	}
+	if _, ok := gw["auth"]; ok {
+		t.Error("gateway.auth should not be present when token is empty")
 	}
 }
 
