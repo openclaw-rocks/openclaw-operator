@@ -2676,7 +2676,7 @@ func TestBuildInitScript_WorkspaceOnly(t *testing.T) {
 	}
 
 	script := BuildInitScript(instance)
-	expected := "mkdir -p /data/workspace/'memory'\n[ -f /data/workspace/'SOUL.md' ] || cp /workspace-init/'SOUL.md' /data/workspace/'SOUL.md'"
+	expected := "mkdir -p /data/workspace/'memory'\nmkdir -p /data/workspace\n[ -f /data/workspace/'SOUL.md' ] || cp /workspace-init/'SOUL.md' /data/workspace/'SOUL.md'"
 	if script != expected {
 		t.Errorf("unexpected script:\ngot:  %q\nwant: %q", script, expected)
 	}
@@ -2699,8 +2699,8 @@ func TestBuildInitScript_Both(t *testing.T) {
 
 	// Verify all expected lines are present (sorted order)
 	lines := strings.Split(script, "\n")
-	if len(lines) != 5 {
-		t.Fatalf("expected 5 lines, got %d:\n%s", len(lines), script)
+	if len(lines) != 6 {
+		t.Fatalf("expected 6 lines, got %d:\n%s", len(lines), script)
 	}
 	if lines[0] != "cp /config/'openclaw.json' /data/openclaw.json" {
 		t.Errorf("line 0: %q", lines[0])
@@ -2711,11 +2711,14 @@ func TestBuildInitScript_Both(t *testing.T) {
 	if lines[2] != "mkdir -p /data/workspace/'tools'" {
 		t.Errorf("line 2: %q", lines[2])
 	}
-	if lines[3] != "[ -f /data/workspace/'AGENTS.md' ] || cp /workspace-init/'AGENTS.md' /data/workspace/'AGENTS.md'" {
+	if lines[3] != "mkdir -p /data/workspace" {
 		t.Errorf("line 3: %q", lines[3])
 	}
-	if lines[4] != "[ -f /data/workspace/'SOUL.md' ] || cp /workspace-init/'SOUL.md' /data/workspace/'SOUL.md'" {
+	if lines[4] != "[ -f /data/workspace/'AGENTS.md' ] || cp /workspace-init/'AGENTS.md' /data/workspace/'AGENTS.md'" {
 		t.Errorf("line 4: %q", lines[4])
+	}
+	if lines[5] != "[ -f /data/workspace/'SOUL.md' ] || cp /workspace-init/'SOUL.md' /data/workspace/'SOUL.md'" {
+		t.Errorf("line 5: %q", lines[5])
 	}
 }
 
@@ -2741,9 +2744,25 @@ func TestBuildInitScript_ShellQuotesSpecialChars(t *testing.T) {
 	}
 
 	script := BuildInitScript(instance)
-	expected := "[ -f /data/workspace/'it'\\''s a file.md' ] || cp /workspace-init/'it'\\''s a file.md' /data/workspace/'it'\\''s a file.md'"
+	expected := "mkdir -p /data/workspace\n[ -f /data/workspace/'it'\\''s a file.md' ] || cp /workspace-init/'it'\\''s a file.md' /data/workspace/'it'\\''s a file.md'"
 	if script != expected {
 		t.Errorf("unexpected script:\ngot:  %q\nwant: %q", script, expected)
+	}
+}
+
+func TestBuildInitScript_FilesOnly_MkdirWorkspace(t *testing.T) {
+	// Regression test: files without directories must still mkdir /data/workspace
+	// so that cp doesn't fail on first run with emptyDir.
+	instance := newTestInstance("init-files-only")
+	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+		InitialFiles: map[string]string{
+			"README.md": "hello",
+		},
+	}
+
+	script := BuildInitScript(instance)
+	if !strings.HasPrefix(script, "mkdir -p /data/workspace\n") {
+		t.Errorf("script should start with mkdir -p /data/workspace, got:\n%s", script)
 	}
 }
 

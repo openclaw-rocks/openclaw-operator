@@ -444,6 +444,8 @@ func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance) string {
 
 	// 3. Seed workspace files (only if not present)
 	if hasWorkspaceFiles(instance) {
+		// Ensure the workspace directory exists (may not on first run with emptyDir)
+		lines = append(lines, "mkdir -p /data/workspace")
 		// Sort keys for deterministic output
 		files := make([]string, 0, len(ws.InitialFiles))
 		for name := range ws.InitialFiles {
