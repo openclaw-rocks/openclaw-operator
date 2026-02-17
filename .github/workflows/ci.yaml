@@ -53,6 +53,15 @@ jobs:
           fi
           echo "No unconditional Update calls on managed resources found."
 
+  helm-rbac-sync:
+    name: Helm RBAC Sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Helm chart RBAC matches kubebuilder markers
+        run: bash hack/check-helm-rbac-sync.sh
+
   test:
     name: Test
     runs-on: ubuntu-latest

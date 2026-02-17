@@ -150,6 +150,7 @@ All checks run on every push to main and every PR:
 | **Test** | `make test` (unit + envtest integration) |
 | **Security Scan** | gosec + Trivy (CRITICAL/HIGH) |
 | **Reconcile Guard** | Grep check preventing bare `r.Update()` on managed resources |
+| **Helm RBAC Sync** | Verifies Helm chart ClusterRole contains all kubebuilder RBAC permissions |
 | **Build** | Multi-arch Docker image (amd64 + arm64), pushes on main only |
 | **E2E** | Kind cluster tests, runs on main only |
 
