@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.9](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.8...v0.9.9) (2026-02-17)
+
+
+### Bug Fixes
+
+* inject gateway.bind=lan so vanilla deployments pass health probes ([#102](https://github.com/openclaw-rocks/k8s-operator/issues/102)) ([7c63d86](https://github.com/openclaw-rocks/k8s-operator/commit/7c63d862b7e09c1d44368205c915064d4dbe25e1)), closes [#101](https://github.com/openclaw-rocks/k8s-operator/issues/101)
+
 ## [0.9.8](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.7...v0.9.8) (2026-02-17)
 
 
