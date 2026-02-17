@@ -42,14 +42,20 @@ The operator reconciles this into a fully managed stack of 9+ Kubernetes resourc
 | | Feature | Details |
 |---|---|---|
 | **Declarative** | Single CRD | One resource defines the entire stack: StatefulSet, Service, RBAC, NetworkPolicy, PVC, PDB, Ingress, and more |
-| **Secure** | Hardened by default | Non-root (UID 1000), all capabilities dropped, seccomp RuntimeDefault, default-deny NetworkPolicy, validating webhook |
+| **Secure** | Hardened by default | Non-root (UID 1000), read-only root filesystem, all capabilities dropped, seccomp RuntimeDefault, default-deny NetworkPolicy, validating webhook |
 | **Observable** | Built-in metrics | Prometheus metrics, ServiceMonitor integration, structured JSON logging, Kubernetes events |
 | **Flexible** | Provider-agnostic config | Use any AI provider (Anthropic, OpenAI, or others) via environment variables and inline or external config |
+| **Config Modes** | Merge or overwrite | `overwrite` replaces config on restart; `merge` deep-merges with PVC config, preserving runtime changes |
+| **Skills** | Declarative install | Install ClawHub skills via `spec.skills` — the operator runs an init container to fetch them before the agent starts |
+| **Runtime Deps** | pnpm & Python/uv | Built-in init containers install pnpm (via corepack) or Python 3.12 + uv for MCP servers and skills |
 | **Auto-Update** | OCI registry polling | Opt-in version tracking: checks the registry for new semver releases, backs up first, rolls out, and auto-rolls back if the new version fails health checks |
 | **Resilient** | Self-healing lifecycle | PodDisruptionBudgets, health probes, automatic config rollouts via content hashing, 5-minute drift detection |
 | **Backup/Restore** | B2-backed snapshots | Automatic backup to Backblaze B2 on instance deletion; restore into a new instance from any snapshot |
 | **Workspace Seeding** | Initial files & dirs | Pre-populate the workspace with files and directories before the agent starts |
-| **Extensible** | Chromium sidecar | Optional headless browser for web automation, injected as a hardened sidecar with shared-memory tuning |
+| **Gateway Auth** | Auto-generated tokens | Automatic gateway token Secret per instance, bypassing mDNS pairing (unusable in k8s) |
+| **Extensible** | Sidecars & init containers | Chromium sidecar for browser automation, plus custom init containers and sidecars for proxies, log forwarders, etc. |
+| **Cloud Native** | SA annotations & CA bundles | AWS IRSA / GCP Workload Identity via ServiceAccount annotations; CA bundle injection for corporate proxies |
+
 
 ## Architecture
 
@@ -75,13 +81,15 @@ The operator reconciles this into a fully managed stack of 9+ Kubernetes resourc
 │                                                              │
 │  ServiceAccount ─► Role ─► RoleBinding    NetworkPolicy      │
 │  ConfigMap        PVC      PDB            ServiceMonitor     │
+│  GatewayToken Secret                                         │
 │                                                              │
+│  StatefulSet                                                 │
 │  ┌────────────────────────────────────────────────────────┐  │
-│  │  StatefulSet                                           │  │
-│  │  ┌──────────────────────┐  ┌────────────────────────┐  │  │
-│  │  │  OpenClaw Container  │  │  Chromium Sidecar      │  │  │
-│  │  │  (AI agent runtime)  │  │  (optional, port 9222) │  │  │
-│  │  └──────────────────────┘  └────────────────────────┘  │  │
+│  │ Init: config -> pnpm* -> python* -> skills* -> custom  │  │
+│  │                                        (* = opt-in)    │  │
+│  ├────────────────────────────────────────────────────────┤  │
+│  │ OpenClaw Container        Chromium Sidecar (optional)  │  │
+│  │ (AI agent runtime)        + custom sidecars            │  │
 │  └────────────────────────────────────────────────────────┘  │
 │                                                              │
 │  Service (ports 18789, 18793) ─► Ingress (optional)          │
@@ -221,6 +229,114 @@ spec:
 
 When enabled, the operator automatically injects a `CHROMIUM_URL` environment variable into the main container and configures shared memory, security contexts, and health probes for the sidecar.
 
+### Config merge mode
+
+By default, the operator overwrites the config file on every pod restart. Set `mergeMode: merge` to deep-merge operator config with existing PVC config, preserving runtime changes made by the agent:
+
+```yaml
+spec:
+  config:
+    mergeMode: merge
+    raw:
+      agents:
+        defaults:
+          model:
+            primary: "anthropic/claude-sonnet-4-20250514"
+```
+
+### Skill installation
+
+Install ClawHub skills declaratively. The operator runs an init container that fetches each skill before the agent starts:
+
+```yaml
+spec:
+  skills:
+    - "@anthropic/mcp-server-fetch"
+    - "@anthropic/mcp-server-filesystem"
+```
+
+### Runtime dependencies
+
+Enable built-in init containers that install pnpm or Python/uv to the data PVC for MCP servers and skills:
+
+```yaml
+spec:
+  runtimeDeps:
+    pnpm: true    # Installs pnpm via corepack
+    python: true  # Installs Python 3.12 + uv
+```
+
+### Custom init containers and sidecars
+
+Add custom init containers (run after operator-managed ones) and sidecar containers:
+
+```yaml
+spec:
+  initContainers:
+    - name: fetch-models
+      image: curlimages/curl:8.5.0
+      command: ["sh", "-c", "curl -o /data/model.bin https://..."]
+      volumeMounts:
+        - name: data
+          mountPath: /data
+  sidecars:
+    - name: cloud-sql-proxy
+      image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.14.3
+      args: ["--structured-logs", "my-project:us-central1:my-db"]
+      ports:
+        - containerPort: 5432
+  sidecarVolumes:
+    - name: proxy-creds
+      secret:
+        secretName: cloud-sql-proxy-sa
+```
+
+Reserved init container names (`init-config`, `init-pnpm`, `init-python`, `init-skills`) are rejected by the webhook.
+
+### Extra volumes and mounts
+
+Mount additional ConfigMaps, Secrets, or CSI volumes into the main container:
+
+```yaml
+spec:
+  extraVolumes:
+    - name: shared-data
+      persistentVolumeClaim:
+        claimName: shared-pvc
+  extraVolumeMounts:
+    - name: shared-data
+      mountPath: /shared
+```
+
+### CA bundle injection
+
+Inject a custom CA certificate bundle for environments with TLS-intercepting proxies or private CAs:
+
+```yaml
+spec:
+  security:
+    caBundle:
+      configMapName: corporate-ca-bundle  # or secretName
+      key: ca-bundle.crt                  # default key name
+```
+
+The bundle is mounted into all containers and the `SSL_CERT_FILE` / `NODE_EXTRA_CA_CERTS` environment variables are set automatically.
+
+### ServiceAccount annotations
+
+Add annotations to the managed ServiceAccount for cloud provider integrations:
+
+```yaml
+spec:
+  security:
+    rbac:
+      serviceAccountAnnotations:
+        # AWS IRSA
+        eks.amazonaws.com/role-arn: "arn:aws:iam::123456789:role/openclaw"
+        # GCP Workload Identity
+        # iam.gke.io/gcp-service-account: "openclaw@project.iam.gserviceaccount.com"
+```
+
 ### Auto-update
 
 Opt into automatic version tracking so the operator detects new releases and rolls them out without manual intervention:
@@ -271,33 +387,71 @@ Auto-update is a no-op for digest-pinned images (`spec.image.digest`). The opera
 
 | Field | Description | Default |
 |-------|-------------|---------|
+| **Image** | | |
 | `spec.image.repository` | Container image | `ghcr.io/openclaw/openclaw` |
 | `spec.image.tag` | Image tag | `latest` |
+| `spec.image.digest` | Image digest (overrides tag) | - |
+| `spec.image.pullPolicy` | Image pull policy | `IfNotPresent` |
+| `spec.image.pullSecrets` | Secrets for private registries | `[]` |
+| **Config** | | |
 | `spec.config.raw` | Inline openclaw.json | - |
 | `spec.config.configMapRef` | External ConfigMap reference | - |
+| `spec.config.mergeMode` | Config apply strategy: `overwrite` or `merge` | `overwrite` |
+| `spec.config.format` | Config file format: `json` or `json5` | `json` |
+| **Environment** | | |
 | `spec.envFrom` | Secret/ConfigMap env sources | `[]` |
+| `spec.env` | Additional environment variables | `[]` |
+| **Skills & Runtime** | | |
+| `spec.skills` | ClawHub skills to install via init container | `[]` |
+| `spec.runtimeDeps.pnpm` | Install pnpm via corepack | `false` |
+| `spec.runtimeDeps.python` | Install Python 3.12 + uv | `false` |
+| **Custom Containers** | | |
+| `spec.initContainers` | Additional init containers (max 10) | `[]` |
+| `spec.sidecars` | Additional sidecar containers | `[]` |
+| `spec.sidecarVolumes` | Volumes for sidecar containers | `[]` |
+| `spec.extraVolumes` | Additional pod volumes (max 10) | `[]` |
+| `spec.extraVolumeMounts` | Additional volume mounts for main container (max 10) | `[]` |
+| **Resources** | | |
 | `spec.resources.requests.cpu` | CPU request | `500m` |
 | `spec.resources.requests.memory` | Memory request | `1Gi` |
 | `spec.resources.limits.cpu` | CPU limit | `2000m` |
 | `spec.resources.limits.memory` | Memory limit | `4Gi` |
+| **Storage** | | |
 | `spec.storage.persistence.enabled` | Persistent storage | `true` |
 | `spec.storage.persistence.size` | PVC size | `10Gi` |
 | `spec.storage.persistence.storageClass` | StorageClass name | cluster default |
-| `spec.chromium.enabled` | Chromium sidecar | `false` |
+| **Security** | | |
+| `spec.security.containerSecurityContext.readOnlyRootFilesystem` | Read-only root filesystem | `true` |
+| `spec.security.podSecurityContext.fsGroupChangePolicy` | Volume ownership change policy | - |
 | `spec.security.networkPolicy.enabled` | NetworkPolicy | `true` |
 | `spec.security.networkPolicy.additionalEgress` | Custom egress rules | `[]` |
+| `spec.security.rbac.serviceAccountAnnotations` | ServiceAccount annotations (IRSA/WI) | `{}` |
+| `spec.security.caBundle.configMapName` | CA bundle ConfigMap name | - |
+| `spec.security.caBundle.secretName` | CA bundle Secret name | - |
+| `spec.security.caBundle.key` | Key in ConfigMap/Secret containing CA bundle | `ca-bundle.crt` |
+| **Chromium** | | |
+| `spec.chromium.enabled` | Chromium sidecar | `false` |
+| **Networking** | | |
 | `spec.networking.service.type` | Service type | `ClusterIP` |
 | `spec.networking.ingress.enabled` | Ingress | `false` |
+| **Observability** | | |
 | `spec.observability.metrics.enabled` | Prometheus metrics | `true` |
 | `spec.observability.metrics.serviceMonitor.enabled` | ServiceMonitor | `false` |
+| **Availability** | | |
 | `spec.availability.podDisruptionBudget.enabled` | PDB | `true` |
-| `spec.workspace.initialFiles` | Files to create in workspace before start | `[]` |
+| `spec.availability.nodeSelector` | Node label selector for scheduling | `{}` |
+| `spec.availability.tolerations` | Pod tolerations | `[]` |
+| `spec.availability.affinity` | Pod affinity/anti-affinity rules | - |
+| **Workspace** | | |
+| `spec.workspace.initialFiles` | Files to create in workspace before start | `{}` |
 | `spec.workspace.initialDirectories` | Directories to create in workspace before start | `[]` |
+| **Auto-Update** | | |
 | `spec.autoUpdate.enabled` | Automatic version updates | `false` |
 | `spec.autoUpdate.checkInterval` | Registry poll interval (Go duration) | `24h` |
 | `spec.autoUpdate.backupBeforeUpdate` | Backup PVC before updating | `true` |
 | `spec.autoUpdate.rollbackOnFailure` | Auto-rollback if update fails health check | `true` |
 | `spec.autoUpdate.healthCheckTimeout` | Time to wait for pod readiness after update (2m–30m) | `10m` |
+| **Backup/Restore** | | |
 | `spec.restoreFrom` | B2 backup path to restore workspace from | - |
 
 See the [full example](config/samples/openclaw_v1alpha1_openclawinstance_full.yaml) for every available field, or the [API reference](docs/api-reference.md) for detailed documentation.
@@ -309,24 +463,34 @@ The operator follows a **secure-by-default** philosophy. Every instance ships wi
 ### Defaults
 
 - **Non-root execution**: containers run as UID 1000; root (UID 0) is blocked by the validating webhook
+- **Read-only root filesystem**: enabled by default for the main container and the Chromium sidecar; the PVC at `~/.openclaw/` provides writable home, and a `/tmp` emptyDir handles temp files
 - **All capabilities dropped**: no ambient Linux capabilities
 - **Seccomp RuntimeDefault**: syscall filtering enabled
 - **Default-deny NetworkPolicy**: only DNS (53) and HTTPS (443) egress allowed; ingress limited to same namespace
 - **Minimal RBAC**: each instance gets its own ServiceAccount with read-only access to its own ConfigMap; operator can create/update Secrets only for operator-managed gateway tokens
 - **No automatic token mounting**: `automountServiceAccountToken: false` on both ServiceAccounts and pod specs
-- **Read-only root filesystem**: supported for the Chromium sidecar; scratch dirs via emptyDir
+- **Secret validation**: the operator checks that all referenced Secrets exist and sets a `SecretsReady` condition
 
 ### Validating webhook
 
 | Check | Severity | Behavior |
 |-------|----------|----------|
 | `runAsUser: 0` | Error | Blocked: root execution not allowed |
+| Reserved init container name | Error | `init-config`, `init-pnpm`, `init-python`, `init-skills` are reserved |
+| Invalid skill name | Error | Only alphanumeric, `-`, `_`, `/`, `.`, `@` allowed (max 128 chars) |
+| Invalid CA bundle config | Error | Exactly one of `configMapName` or `secretName` must be set |
+| JSON5 with inline raw config | Error | JSON5 requires `configMapRef` (inline must be valid JSON) |
+| JSON5 with merge mode | Error | JSON5 is not compatible with `mergeMode: merge` |
+| Invalid `checkInterval` | Error | Must be a valid Go duration between 1h and 168h |
+| Invalid `healthCheckTimeout` | Error | Must be a valid Go duration between 2m and 30m |
+
 | NetworkPolicy disabled | Warning | Deployment proceeds with a warning |
 | Ingress without TLS | Warning | Deployment proceeds with a warning |
 | Chromium without digest pinning | Warning | Deployment proceeds with a warning |
 | Auto-update with digest pin | Warning | Digest overrides auto-update; updates won't apply |
-| Invalid `checkInterval` | Error | Must be a valid Go duration between 1h and 168h |
-| Invalid `healthCheckTimeout` | Error | Must be a valid Go duration between 2m and 30m |
+| `readOnlyRootFilesystem` disabled | Warning | Proceeds with a security recommendation |
+| No AI provider keys detected | Warning | Scans `env`/`envFrom` for known provider env vars |
+| Unknown config keys | Warning | Warns on unrecognized top-level keys in `spec.config.raw` |
 
 ### Custom network rules
 
@@ -431,8 +595,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development guide.
 
 ## Roadmap
 
-- **v0.10+**: Semver constraints for auto-update, multi-cluster support, HPA integration, cert-manager integration
-- **v1.0.0**: API graduation to v1, conformance test suite, CNCF Artifact Hub listing
+- **v1.0.0**: API graduation to `v1`, conformance test suite, semver constraints for auto-update, HPA integration, cert-manager integration, multi-cluster support
 
 See the full [roadmap](ROADMAP.md) for details.
 
