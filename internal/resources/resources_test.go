@@ -5257,7 +5257,7 @@ func TestBuildConfigMap_ChromiumUserOverrideCdpPort(t *testing.T) {
 	defaultProfile := profiles["default"].(map[string]interface{})
 
 	// cdpUrl should NOT be injected when user set cdpPort
-	if _, hasCdpUrl := defaultProfile["cdpUrl"]; hasCdpUrl {
+	if _, hasCdpURL := defaultProfile["cdpUrl"]; hasCdpURL {
 		t.Error("cdpUrl should not be injected when user set cdpPort")
 	}
 	// cdpPort should be preserved
