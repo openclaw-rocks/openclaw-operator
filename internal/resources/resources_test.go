@@ -438,8 +438,8 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 	for _, env := range mainContainer.Env {
 		if env.Name == "CHROMIUM_URL" {
 			foundChromiumURL = true
-			if env.Value != "ws://localhost:9222" {
-				t.Errorf("CHROMIUM_URL = %q, want %q", env.Value, "ws://localhost:9222")
+			if env.Value != "http://localhost:3000" {
+				t.Errorf("CHROMIUM_URL = %q, want %q", env.Value, "http://localhost:3000")
 			}
 			break
 		}
@@ -5120,6 +5120,149 @@ func TestBuildConfigMap_TailscaleNoAuthSSO(t *testing.T) {
 		if _, hasAllowTS := auth["allowTailscale"]; hasAllowTS {
 			t.Error("auth.allowTailscale should not be set when AuthSSO is disabled")
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Browser config enrichment tests (Chromium sidecar)
+// ---------------------------------------------------------------------------
+
+func TestBuildConfigMap_ChromiumBrowserConfig(t *testing.T) {
+	instance := newTestInstance("cr-browser")
+	instance.Spec.Chromium.Enabled = true
+
+	cm := BuildConfigMap(instance, "")
+	content := cm.Data["openclaw.json"]
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config JSON: %v", err)
+	}
+
+	browser, ok := parsed["browser"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected browser key in config when chromium is enabled")
+	}
+
+	if browser["defaultProfile"] != "default" {
+		t.Errorf("browser.defaultProfile = %v, want %q", browser["defaultProfile"], "default")
+	}
+
+	profiles, ok := browser["profiles"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected browser.profiles key")
+	}
+
+	// Both "default" and "chrome" profiles must point at the sidecar.
+	// LLMs often explicitly pass profile="chrome", so we redirect it.
+	for _, name := range []string{"default", "chrome"} {
+		p, ok := profiles[name].(map[string]interface{})
+		if !ok {
+			t.Fatalf("expected browser.profiles.%s key", name)
+		}
+		if p["cdpUrl"] != "http://localhost:3000" {
+			t.Errorf("browser.profiles.%s.cdpUrl = %v, want %q", name, p["cdpUrl"], "http://localhost:3000")
+		}
+		if p["color"] != "#4285F4" {
+			t.Errorf("browser.profiles.%s.color = %v, want %q", name, p["color"], "#4285F4")
+		}
+	}
+}
+
+func TestBuildConfigMap_ChromiumDisabled_NoBrowserConfig(t *testing.T) {
+	instance := newTestInstance("cr-disabled")
+	// Chromium not enabled (default)
+
+	cm := BuildConfigMap(instance, "")
+	content := cm.Data["openclaw.json"]
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config JSON: %v", err)
+	}
+
+	if _, ok := parsed["browser"]; ok {
+		t.Error("browser config should not be present when chromium is disabled")
+	}
+}
+
+func TestBuildConfigMap_ChromiumUserOverrideDefaultProfile(t *testing.T) {
+	instance := newTestInstance("cr-override-profile")
+	instance.Spec.Chromium.Enabled = true
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{
+			Raw: []byte(`{"browser":{"defaultProfile":"chrome"}}`),
+		},
+	}
+
+	cm := BuildConfigMap(instance, "")
+	content := cm.Data["openclaw.json"]
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config JSON: %v", err)
+	}
+
+	browser := parsed["browser"].(map[string]interface{})
+	if browser["defaultProfile"] != "chrome" {
+		t.Errorf("user-set defaultProfile should be preserved, got %v", browser["defaultProfile"])
+	}
+}
+
+func TestBuildConfigMap_ChromiumUserOverrideCdpUrl(t *testing.T) {
+	instance := newTestInstance("cr-override-cdp")
+	instance.Spec.Chromium.Enabled = true
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{
+			Raw: []byte(`{"browser":{"profiles":{"default":{"cdpUrl":"ws://custom:1234"}}}}`),
+		},
+	}
+
+	cm := BuildConfigMap(instance, "")
+	content := cm.Data["openclaw.json"]
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config JSON: %v", err)
+	}
+
+	browser := parsed["browser"].(map[string]interface{})
+	profiles := browser["profiles"].(map[string]interface{})
+	defaultProfile := profiles["default"].(map[string]interface{})
+
+	if defaultProfile["cdpUrl"] != "ws://custom:1234" {
+		t.Errorf("user-set cdpUrl should be preserved, got %v", defaultProfile["cdpUrl"])
+	}
+}
+
+func TestBuildConfigMap_ChromiumUserOverrideCdpPort(t *testing.T) {
+	instance := newTestInstance("cr-override-port")
+	instance.Spec.Chromium.Enabled = true
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{
+			Raw: []byte(`{"browser":{"profiles":{"default":{"cdpPort":18800}}}}`),
+		},
+	}
+
+	cm := BuildConfigMap(instance, "")
+	content := cm.Data["openclaw.json"]
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config JSON: %v", err)
+	}
+
+	browser := parsed["browser"].(map[string]interface{})
+	profiles := browser["profiles"].(map[string]interface{})
+	defaultProfile := profiles["default"].(map[string]interface{})
+
+	// cdpUrl should NOT be injected when user set cdpPort
+	if _, hasCdpUrl := defaultProfile["cdpUrl"]; hasCdpUrl {
+		t.Error("cdpUrl should not be injected when user set cdpPort")
+	}
+	// cdpPort should be preserved
+	if defaultProfile["cdpPort"] != float64(18800) {
+		t.Errorf("user-set cdpPort should be preserved, got %v", defaultProfile["cdpPort"])
 	}
 }
 

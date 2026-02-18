@@ -272,7 +272,7 @@ func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecre
 	if instance.Spec.Chromium.Enabled {
 		env = append(env, corev1.EnvVar{
 			Name:  "CHROMIUM_URL",
-			Value: "ws://localhost:9222",
+			Value: fmt.Sprintf("http://localhost:%d", BrowserlessCDPPort),
 		})
 	}
 

@@ -27,8 +27,13 @@ const (
 	// CanvasPort is the port for the OpenClaw canvas HTTP server
 	CanvasPort = 18793
 
-	// ChromiumPort is the port for Chrome DevTools Protocol
+	// ChromiumPort is the port declared on the container (metadata only).
+	// The browserless image actually listens on BrowserlessCDPPort.
 	ChromiumPort = 9222
+
+	// BrowserlessCDPPort is the actual port the ghcr.io/browserless/chromium
+	// image listens on for CDP and HTTP API requests.
+	BrowserlessCDPPort = 3000
 
 	// OllamaPort is the port for the Ollama API
 	OllamaPort = 11434

@@ -18,6 +18,7 @@ package resources
 
 import (
 	"encoding/json"
+	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -37,7 +38,7 @@ func BuildConfigMap(instance *openclawv1alpha1.OpenClawInstance, gatewayToken st
 		configBytes = instance.Spec.Config.Raw.Raw
 	}
 
-	// Enrichment pipeline: modules → gateway auth → gateway bind
+	// Enrichment pipeline: modules → gateway auth → tailscale → browser → gateway bind
 	if enriched, err := enrichConfigWithModules(configBytes); err == nil {
 		configBytes = enriched
 	}
@@ -48,6 +49,11 @@ func BuildConfigMap(instance *openclawv1alpha1.OpenClawInstance, gatewayToken st
 	}
 	if instance.Spec.Tailscale.Enabled {
 		if enriched, err := enrichConfigWithTailscale(configBytes, instance); err == nil {
+			configBytes = enriched
+		}
+	}
+	if instance.Spec.Chromium.Enabled {
+		if enriched, err := enrichConfigWithBrowser(configBytes); err == nil {
 			configBytes = enriched
 		}
 	}
@@ -222,6 +228,67 @@ func enrichConfigWithTailscale(configJSON []byte, instance *openclawv1alpha1.Ope
 	}
 
 	config["gateway"] = gw
+	return json.Marshal(config)
+}
+
+// enrichConfigWithBrowser injects browser config into the config JSON so the
+// agent uses the Chromium sidecar instead of the Chrome extension relay.
+// Configures both "default" and "chrome" profiles to point at the sidecar CDP
+// port. The "chrome" profile must be redirected because LLMs frequently pass
+// profile="chrome" explicitly in browser tool calls, bypassing defaultProfile.
+// Without this override the built-in "chrome" profile falls back to the
+// extension relay which does not work in a headless container.
+// Does not override user-set values.
+func enrichConfigWithBrowser(configJSON []byte) ([]byte, error) {
+	var config map[string]interface{}
+	if err := json.Unmarshal(configJSON, &config); err != nil {
+		return configJSON, nil // not a JSON object, return unchanged
+	}
+
+	browser, _ := config["browser"].(map[string]interface{})
+	if browser == nil {
+		browser = make(map[string]interface{})
+	}
+
+	// Set defaultProfile to "default" if not already set
+	if _, ok := browser["defaultProfile"]; !ok {
+		browser["defaultProfile"] = "default"
+	}
+
+	profiles, _ := browser["profiles"].(map[string]interface{})
+	if profiles == nil {
+		profiles = make(map[string]interface{})
+	}
+
+	cdpURL := fmt.Sprintf("http://localhost:%d", BrowserlessCDPPort)
+
+	// Configure both "default" and "chrome" profiles to point at the sidecar.
+	// LLMs often explicitly pass profile="chrome", so we redirect it to the
+	// sidecar CDP endpoint instead of the extension relay.
+	for _, profileName := range []string{"default", "chrome"} {
+		profile, _ := profiles[profileName].(map[string]interface{})
+		if profile == nil {
+			profile = make(map[string]interface{})
+		}
+
+		// Only set cdpUrl if the user hasn't configured cdpUrl or cdpPort
+		if _, hasURL := profile["cdpUrl"]; !hasURL {
+			if _, hasPort := profile["cdpPort"]; !hasPort {
+				profile["cdpUrl"] = cdpURL
+			}
+		}
+
+		// color is required by OpenClaw's config validation
+		if _, hasColor := profile["color"]; !hasColor {
+			profile["color"] = "#4285F4"
+		}
+
+		profiles[profileName] = profile
+	}
+
+	browser["profiles"] = profiles
+	config["browser"] = browser
+
 	return json.Marshal(config)
 }
 
