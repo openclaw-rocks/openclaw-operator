@@ -367,6 +367,74 @@ var _ = Describe("OpenClawInstance Controller", func() {
 		})
 	})
 
+	Context("When deleting an OpenClawInstance without B2 backup credentials", func() {
+		var namespace string
+
+		BeforeEach(func() {
+			namespace = "test-no-b2-" + time.Now().Format("20060102150405")
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: namespace,
+				},
+			}
+			Expect(k8sClient.Create(ctx, ns)).Should(Succeed())
+		})
+
+		AfterEach(func() {
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: namespace,
+				},
+			}
+			_ = k8sClient.Delete(ctx, ns)
+		})
+
+		It("Should delete cleanly when B2 backup credentials are not configured", func() {
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instanceName := "no-b2-delete"
+
+			// No B2 secret exists in the namespace or operator namespace
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			instanceKey := types.NamespacedName{Name: instanceName, Namespace: namespace}
+
+			// Wait for StatefulSet to be created (proves reconciliation happened)
+			statefulSet := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName,
+					Namespace: namespace,
+				}, statefulSet)
+			}, timeout, interval).Should(Succeed())
+
+			// Delete the instance — should succeed without B2 credentials
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+
+			// Instance should be fully garbage collected (finalizer removed)
+			Eventually(func() bool {
+				inst := &openclawv1alpha1.OpenClawInstance{}
+				err := k8sClient.Get(ctx, instanceKey, inst)
+				return err != nil // NotFound means fully deleted
+			}, timeout, interval).Should(BeTrue())
+		})
+	})
+
 	Context("When creating an OpenClawInstance with Ingress", func() {
 		var namespace string
 

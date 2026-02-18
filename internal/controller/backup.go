@@ -114,9 +114,20 @@ func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Conte
 	// Step 4: Create/check backup Job
 	creds, err := r.getB2Credentials(ctx)
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			// B2 credentials not configured — skip backup gracefully
+			logger.Info("B2 backup credentials not configured, skipping backup")
+			r.Recorder.Event(instance, corev1.EventTypeNormal, "BackupSkipped",
+				"B2 backup credentials Secret not found — skipping pre-delete backup")
+			instance.Status.Phase = openclawv1alpha1.PhaseTerminating
+			if err := r.Status().Update(ctx, instance); err != nil {
+				return ctrl.Result{}, err
+			}
+			return r.removeFinalizer(ctx, instance)
+		}
+		// Other errors (RBAC, network) — retry with warning
 		logger.Error(err, "Failed to get B2 credentials, cannot backup")
 		r.Recorder.Event(instance, corev1.EventTypeWarning, "BackupCredentialsFailed", err.Error())
-		// Keep finalizer — manual intervention needed
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
