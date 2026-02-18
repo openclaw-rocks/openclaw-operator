@@ -3138,8 +3138,8 @@ func TestBuildInitScript_OverwriteMode(t *testing.T) {
 	if !strings.Contains(script, "cp /config/") {
 		t.Errorf("overwrite mode should use cp, got: %q", script)
 	}
-	if strings.Contains(script, "jq") {
-		t.Error("overwrite mode should not use jq")
+	if strings.Contains(script, "node -e") {
+		t.Error("overwrite mode should not use node deep merge")
 	}
 }
 
@@ -3151,20 +3151,20 @@ func TestBuildInitScript_MergeMode(t *testing.T) {
 	instance.Spec.Config.MergeMode = ConfigMergeModeMerge
 
 	script := BuildInitScript(instance)
-	if !strings.Contains(script, "jq -s '.[0] * .[1]'") {
-		t.Errorf("merge mode should use jq, got: %q", script)
+	// Merge now uses Node.js deep merge instead of jq (jq image is distroless, no shell)
+	if !strings.Contains(script, "node -e") {
+		t.Errorf("merge mode should use node deep merge, got: %q", script)
 	}
-	if !strings.Contains(script, "if [ -f /data/openclaw.json ]") {
-		t.Errorf("merge mode should check for existing file, got: %q", script)
+	if !strings.Contains(script, "fs.existsSync") {
+		t.Errorf("merge mode should check for existing file via fs.existsSync, got: %q", script)
 	}
-	// Should also have a cp fallback for first boot
-	if !strings.Contains(script, "cp /config/") {
-		t.Errorf("merge mode should fall back to cp for first boot, got: %q", script)
+	if !strings.Contains(script, "/tmp/merged.json") {
+		t.Errorf("merge mode should write to /tmp/merged.json atomically, got: %q", script)
 	}
 }
 
-func TestBuildStatefulSet_MergeMode_JqImage(t *testing.T) {
-	instance := newTestInstance("merge-jq")
+func TestBuildStatefulSet_MergeMode_OpenClawImage(t *testing.T) {
+	instance := newTestInstance("merge-oci")
 	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
 	}
@@ -3177,12 +3177,35 @@ func TestBuildStatefulSet_MergeMode_JqImage(t *testing.T) {
 	}
 
 	initC := initContainers[0]
-	if initC.Image != JqImage {
-		t.Errorf("merge mode init container image = %q, want %q", initC.Image, JqImage)
+	wantImage := GetImage(instance)
+	if initC.Image != wantImage {
+		t.Errorf("merge mode init container image = %q, want %q", initC.Image, wantImage)
 	}
 
 	// Should have init-tmp mount
 	assertVolumeMount(t, initC.VolumeMounts, "init-tmp", "/tmp")
+
+	// Should have HOME and NPM_CONFIG_CACHE env vars
+	var hasHome, hasNpm bool
+	for _, e := range initC.Env {
+		if e.Name == "HOME" && e.Value == "/tmp" {
+			hasHome = true
+		}
+		if e.Name == "NPM_CONFIG_CACHE" && e.Value == "/tmp/.npm" {
+			hasNpm = true
+		}
+	}
+	if !hasHome {
+		t.Error("merge mode init container should have HOME=/tmp")
+	}
+	if !hasNpm {
+		t.Error("merge mode init container should have NPM_CONFIG_CACHE=/tmp/.npm")
+	}
+
+	// Should have writable rootfs (Node.js may need it)
+	if initC.SecurityContext.ReadOnlyRootFilesystem == nil || *initC.SecurityContext.ReadOnlyRootFilesystem {
+		t.Error("merge mode init container should have writable rootfs")
+	}
 }
 
 func TestBuildStatefulSet_OverwriteMode_BusyboxImage(t *testing.T) {
@@ -3242,8 +3265,8 @@ func TestBuildInitScript_MergeMode_NoConfig(t *testing.T) {
 
 	script := BuildInitScript(instance)
 	// Should produce a merge script since configMapKey() now always returns "openclaw.json"
-	if !strings.Contains(script, "jq -s") {
-		t.Errorf("merge mode should produce jq merge script, got: %q", script)
+	if !strings.Contains(script, "node -e") {
+		t.Errorf("merge mode should produce node deep merge script, got: %q", script)
 	}
 }
 

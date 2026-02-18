@@ -323,7 +323,7 @@ func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance) []corev1.C
 			mounts = append(mounts, corev1.VolumeMount{Name: "config", MountPath: "/config"})
 		}
 
-		// Tmp mount for merge mode (jq writes to /tmp/merged.json) or JSON5 mode (npx writes to /tmp/converted.json)
+		// Tmp mount for merge mode (node writes to /tmp/merged.json) or JSON5 mode (npx writes to /tmp/converted.json)
 		if instance.Spec.Config.MergeMode == ConfigMergeModeMerge || instance.Spec.Config.Format == ConfigFormatJSON5 {
 			mounts = append(mounts, corev1.VolumeMount{Name: "init-tmp", MountPath: "/tmp"})
 		}
@@ -333,19 +333,20 @@ func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance) []corev1.C
 			mounts = append(mounts, corev1.VolumeMount{Name: "workspace-init", MountPath: "/workspace-init", ReadOnly: true})
 		}
 
-		// Use jq image for merge mode, OpenClaw image for JSON5 (has Node.js + npx), busybox for overwrite
+		// Merge and JSON5 modes use the OpenClaw image (has Node.js + sh);
+		// overwrite mode uses busybox (lightweight, only needs cp).
+		// Note: ghcr.io/jqlang/jq and ghcr.io/astral-sh/uv base tags are
+		// distroless (no shell), so we cannot use them with "sh -c".
 		initImage := "busybox:1.37"
-		if instance.Spec.Config.MergeMode == ConfigMergeModeMerge {
-			initImage = JqImage
-		} else if instance.Spec.Config.Format == ConfigFormatJSON5 {
+		if instance.Spec.Config.MergeMode == ConfigMergeModeMerge || instance.Spec.Config.Format == ConfigFormatJSON5 {
 			initImage = GetImage(instance)
 		}
 
-		// JSON5 mode needs writable rootfs (npx writes to node_modules) and HOME env
+		// Merge and JSON5 modes use the OpenClaw image which needs writable rootfs and HOME env
 		readOnlyRoot := true
 		var initEnv []corev1.EnvVar
 		initPullPolicy := corev1.PullIfNotPresent
-		if instance.Spec.Config.Format == ConfigFormatJSON5 {
+		if instance.Spec.Config.MergeMode == ConfigMergeModeMerge || instance.Spec.Config.Format == ConfigFormatJSON5 {
 			readOnlyRoot = false
 			initEnv = []corev1.EnvVar{
 				{Name: "HOME", Value: "/tmp"},
@@ -410,14 +411,21 @@ func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance) string {
 	if key := configMapKey(instance); key != "" {
 		switch {
 		case instance.Spec.Config.MergeMode == ConfigMergeModeMerge:
-			// Deep-merge operator config with existing PVC config, preserving runtime changes
+			// Deep-merge operator config with existing PVC config via Node.js.
+			// Uses the OpenClaw image (has Node.js + sh); the jq distroless image
+			// cannot be used because it has no shell (#105).
+			// The config path is passed via env var to avoid shell/JS quoting issues.
 			lines = append(lines, fmt.Sprintf(
-				"if [ -f /data/openclaw.json ]; then\n"+
-					"  jq -s '.[0] * .[1]' /data/openclaw.json /config/%s > /tmp/merged.json && mv /tmp/merged.json /data/openclaw.json\n"+
-					"else\n"+
-					"  cp /config/%s /data/openclaw.json\n"+
-					"fi",
-				shellQuote(key), shellQuote(key)))
+				`__cfgpath=/config/%s node -e "`+
+					`const fs=require('fs');`+
+					`function dm(a,b){const r={...a};for(const k in b){r[k]=b[k]&&typeof b[k]==='object'&&!Array.isArray(b[k])&&r[k]&&typeof r[k]==='object'&&!Array.isArray(r[k])?dm(r[k],b[k]):b[k]}return r}`+
+					`const e='/data/openclaw.json',c=process.env.__cfgpath,t='/tmp/merged.json';`+
+					`const base=fs.existsSync(e)?JSON.parse(fs.readFileSync(e,'utf8')):{};`+
+					`const inc=JSON.parse(fs.readFileSync(c,'utf8'));`+
+					`fs.writeFileSync(t,JSON.stringify(dm(base,inc),null,2));`+
+					`fs.renameSync(t,e);`+
+					`"`,
+				shellQuote(key)))
 		case instance.Spec.Config.Format == ConfigFormatJSON5:
 			// JSON5 overwrite — convert to standard JSON via npx json5
 			lines = append(lines, fmt.Sprintf(
@@ -863,7 +871,7 @@ func buildVolumes(instance *openclawv1alpha1.OpenClawInstance) []corev1.Volume {
 		})
 	}
 
-	// Init-tmp volume for merge mode (jq writes to /tmp/merged.json) or JSON5 mode (npx writes to /tmp/converted.json)
+	// Init-tmp volume for merge mode (node writes to /tmp/merged.json) or JSON5 mode (npx writes to /tmp/converted.json)
 	if instance.Spec.Config.MergeMode == ConfigMergeModeMerge || instance.Spec.Config.Format == ConfigFormatJSON5 {
 		volumes = append(volumes, corev1.Volume{
 			Name: "init-tmp",

@@ -172,6 +172,120 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			}, timeout, interval).Should(BeTrue())
 		})
 
+		It("Should use shell-capable image for merge mode init container", func() {
+			instanceName := "merge-mode-instance"
+
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					Config: openclawv1alpha1.ConfigSpec{
+						MergeMode: "merge",
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			statefulSet := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName,
+					Namespace: namespace,
+				}, statefulSet)
+			}, timeout, interval).Should(Succeed())
+
+			// Find init-config container
+			var initConfig *corev1.Container
+			for i := range statefulSet.Spec.Template.Spec.InitContainers {
+				if statefulSet.Spec.Template.Spec.InitContainers[i].Name == "init-config" {
+					initConfig = &statefulSet.Spec.Template.Spec.InitContainers[i]
+					break
+				}
+			}
+			Expect(initConfig).NotTo(BeNil(), "merge mode should have init-config container")
+
+			// Must use the OpenClaw image (has shell), NOT the distroless jq image
+			Expect(initConfig.Image).To(Equal("ghcr.io/openclaw/openclaw:latest"),
+				"merge mode init container should use the OpenClaw image (shell-capable)")
+
+			// Command should use node deep merge, not jq
+			Expect(initConfig.Command).To(HaveLen(3))
+			Expect(initConfig.Command[0]).To(Equal("sh"))
+			Expect(initConfig.Command[2]).To(ContainSubstring("node -e"),
+				"merge script should use Node.js deep merge")
+
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+
+		It("Should use shell-capable uv image for python runtime deps", func() {
+			instanceName := "python-deps-instance"
+
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					RuntimeDeps: openclawv1alpha1.RuntimeDepsSpec{
+						Python: true,
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			statefulSet := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName,
+					Namespace: namespace,
+				}, statefulSet)
+			}, timeout, interval).Should(Succeed())
+
+			// Find init-python container
+			var initPython *corev1.Container
+			for i := range statefulSet.Spec.Template.Spec.InitContainers {
+				if statefulSet.Spec.Template.Spec.InitContainers[i].Name == "init-python" {
+					initPython = &statefulSet.Spec.Template.Spec.InitContainers[i]
+					break
+				}
+			}
+			Expect(initPython).NotTo(BeNil(), "python runtime deps should have init-python container")
+
+			// Must use bookworm-slim variant (has shell), NOT the distroless base tag
+			Expect(initPython.Image).To(Equal(resources.UvImage),
+				"init-python should use the shell-capable uv image")
+			Expect(initPython.Image).To(ContainSubstring("bookworm-slim"),
+				"uv image must be a Debian variant with shell")
+
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+
 		It("Should mount default config for vanilla deployment", func() {
 			instanceName := "vanilla-instance"
 

@@ -133,6 +133,7 @@ After modifying types in `api/v1alpha1/openclawinstance_types.go`:
 - Resource builders: unit tests in `internal/resources/resources_test.go` (fast, no deps)
 - Controller integration: envtest suite in `internal/controller/` (needs kubebuilder binaries)
 - E2E: `test/e2e/` (needs kind cluster, runs in CI on main only)
+- **Always add e2e tests when feasible** — any new feature or bug fix that changes the behavior of managed Kubernetes resources should include an e2e test verifying the resources are created correctly on a real cluster
 - The `RawConfig` type embeds `runtime.RawExtension` — in tests use:
   ```go
   instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
