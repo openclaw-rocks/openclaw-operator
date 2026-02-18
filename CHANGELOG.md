@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.12](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.11...v0.9.12) (2026-02-18)
+
+
+### Features
+
+* add first-class Ollama sidecar support ([860225e](https://github.com/openclaw-rocks/k8s-operator/commit/860225e8e656d228218056ed6be8937f897ba582))
+* add native Tailscale integration via CRD fields ([#115](https://github.com/openclaw-rocks/k8s-operator/issues/115)) ([c3a2ae4](https://github.com/openclaw-rocks/k8s-operator/commit/c3a2ae49b73836780aebb192fdfe931d445a1751))
+
 ## [0.9.11](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.10...v0.9.11) (2026-02-18)
 
 
