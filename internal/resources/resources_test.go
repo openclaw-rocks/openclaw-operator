@@ -5115,3 +5115,532 @@ func TestBuildConfigMap_TailscaleNoAuthSSO(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Ollama sidecar tests
+// ---------------------------------------------------------------------------
+
+func TestBuildStatefulSet_OllamaEnabled(t *testing.T) {
+	instance := newTestInstance("ollama-test")
+	instance.Spec.Ollama.Enabled = true
+
+	sts := BuildStatefulSet(instance)
+	containers := sts.Spec.Template.Spec.Containers
+
+	if len(containers) != 2 {
+		t.Fatalf("expected 2 containers (main + ollama), got %d", len(containers))
+	}
+
+	var ollama *corev1.Container
+	for i := range containers {
+		if containers[i].Name == "ollama" {
+			ollama = &containers[i]
+			break
+		}
+	}
+	if ollama == nil {
+		t.Fatal("ollama container not found")
+	}
+
+	// Main container should have OLLAMA_HOST env var
+	mainContainer := containers[0]
+	foundOllamaHost := false
+	for _, env := range mainContainer.Env {
+		if env.Name == "OLLAMA_HOST" {
+			foundOllamaHost = true
+			if env.Value != "http://localhost:11434" {
+				t.Errorf("OLLAMA_HOST = %q, want %q", env.Value, "http://localhost:11434")
+			}
+			break
+		}
+	}
+	if !foundOllamaHost {
+		t.Error("main container should have OLLAMA_HOST env var when ollama is enabled")
+	}
+
+	// Ollama image defaults
+	if ollama.Image != "ollama/ollama:latest" {
+		t.Errorf("ollama image = %q, want default", ollama.Image)
+	}
+
+	// Ollama port
+	if len(ollama.Ports) != 1 {
+		t.Fatalf("ollama container should have 1 port, got %d", len(ollama.Ports))
+	}
+	if ollama.Ports[0].ContainerPort != OllamaPort {
+		t.Errorf("ollama port = %d, want %d", ollama.Ports[0].ContainerPort, OllamaPort)
+	}
+	if ollama.Ports[0].Name != "ollama" {
+		t.Errorf("ollama port name = %q, want %q", ollama.Ports[0].Name, "ollama")
+	}
+
+	// Ollama security context — runs as root
+	osc := ollama.SecurityContext
+	if osc == nil {
+		t.Fatal("ollama security context is nil")
+	}
+	if osc.ReadOnlyRootFilesystem == nil || *osc.ReadOnlyRootFilesystem {
+		t.Error("ollama: readOnlyRootFilesystem should be false")
+	}
+	if osc.RunAsUser == nil || *osc.RunAsUser != 0 {
+		t.Errorf("ollama: runAsUser = %v, want 0 (root)", osc.RunAsUser)
+	}
+	if osc.RunAsNonRoot == nil || *osc.RunAsNonRoot {
+		t.Error("ollama: runAsNonRoot should be false")
+	}
+
+	// Ollama resource defaults
+	cpuReq := ollama.Resources.Requests[corev1.ResourceCPU]
+	if cpuReq.String() != "500m" {
+		t.Errorf("ollama cpu request = %v, want 500m", cpuReq.String())
+	}
+	memReq := ollama.Resources.Requests[corev1.ResourceMemory]
+	if memReq.Cmp(resource.MustParse("1Gi")) != 0 {
+		t.Errorf("ollama memory request = %v, want 1Gi", memReq.String())
+	}
+
+	// Ollama volume mount
+	assertVolumeMount(t, ollama.VolumeMounts, "ollama-models", "/root/.ollama")
+
+	// Volumes — check ollama-models volume exists with emptyDir
+	volumes := sts.Spec.Template.Spec.Volumes
+	var ollamaVol *corev1.Volume
+	for i := range volumes {
+		if volumes[i].Name == "ollama-models" {
+			ollamaVol = &volumes[i]
+			break
+		}
+	}
+	if ollamaVol == nil {
+		t.Fatal("ollama-models volume not found")
+	}
+	if ollamaVol.EmptyDir == nil {
+		t.Fatal("ollama-models volume should be emptyDir by default")
+	}
+	if ollamaVol.EmptyDir.SizeLimit == nil {
+		t.Fatal("ollama-models emptyDir should have a sizeLimit")
+	}
+	if ollamaVol.EmptyDir.SizeLimit.Cmp(resource.MustParse("20Gi")) != 0 {
+		t.Errorf("ollama-models sizeLimit = %v, want 20Gi", ollamaVol.EmptyDir.SizeLimit.String())
+	}
+
+	// No init container when no models specified
+	for _, ic := range sts.Spec.Template.Spec.InitContainers {
+		if ic.Name == "init-ollama" {
+			t.Error("init-ollama should not be present when no models are specified")
+		}
+	}
+}
+
+func TestBuildStatefulSet_OllamaEnabled_WithModels(t *testing.T) {
+	instance := newTestInstance("ollama-models")
+	instance.Spec.Ollama.Enabled = true
+	instance.Spec.Ollama.Models = []string{"llama3.2", "nomic-embed-text"}
+
+	sts := BuildStatefulSet(instance)
+	initContainers := sts.Spec.Template.Spec.InitContainers
+
+	var initOllama *corev1.Container
+	for i := range initContainers {
+		if initContainers[i].Name == "init-ollama" {
+			initOllama = &initContainers[i]
+			break
+		}
+	}
+	if initOllama == nil {
+		t.Fatal("init-ollama container not found")
+	}
+
+	// Verify command pulls both models
+	cmd := initOllama.Command[2] // ["sh", "-c", "..."]
+	if !strings.Contains(cmd, "ollama pull 'llama3.2'") {
+		t.Errorf("init-ollama command should pull llama3.2, got: %s", cmd)
+	}
+	if !strings.Contains(cmd, "ollama pull 'nomic-embed-text'") {
+		t.Errorf("init-ollama command should pull nomic-embed-text, got: %s", cmd)
+	}
+	if !strings.Contains(cmd, "ollama serve") {
+		t.Errorf("init-ollama command should start ollama serve, got: %s", cmd)
+	}
+	if !strings.Contains(cmd, "kill %1") {
+		t.Errorf("init-ollama command should kill server, got: %s", cmd)
+	}
+
+	// Verify init container mounts ollama-models
+	assertVolumeMount(t, initOllama.VolumeMounts, "ollama-models", "/root/.ollama")
+
+	// Verify init container runs as root
+	if initOllama.SecurityContext.RunAsUser == nil || *initOllama.SecurityContext.RunAsUser != 0 {
+		t.Errorf("init-ollama: runAsUser = %v, want 0", initOllama.SecurityContext.RunAsUser)
+	}
+}
+
+func TestBuildStatefulSet_OllamaEnabled_NoModels(t *testing.T) {
+	instance := newTestInstance("ollama-no-models")
+	instance.Spec.Ollama.Enabled = true
+
+	sts := BuildStatefulSet(instance)
+
+	// Sidecar should be present
+	found := false
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		if c.Name == "ollama" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("ollama sidecar should be present")
+	}
+
+	// No init container
+	for _, ic := range sts.Spec.Template.Spec.InitContainers {
+		if ic.Name == "init-ollama" {
+			t.Error("init-ollama should not be present when no models are specified")
+		}
+	}
+}
+
+func TestBuildStatefulSet_OllamaEnabled_GPU(t *testing.T) {
+	instance := newTestInstance("ollama-gpu")
+	instance.Spec.Ollama.Enabled = true
+	instance.Spec.Ollama.GPU = Ptr(int32(2))
+
+	sts := BuildStatefulSet(instance)
+
+	var ollama *corev1.Container
+	for i := range sts.Spec.Template.Spec.Containers {
+		if sts.Spec.Template.Spec.Containers[i].Name == "ollama" {
+			ollama = &sts.Spec.Template.Spec.Containers[i]
+			break
+		}
+	}
+	if ollama == nil {
+		t.Fatal("ollama container not found")
+	}
+
+	gpuRes := corev1.ResourceName("nvidia.com/gpu")
+
+	// Check requests
+	gpuReq, ok := ollama.Resources.Requests[gpuRes]
+	if !ok {
+		t.Fatal("nvidia.com/gpu request not found")
+	}
+	if gpuReq.String() != "2" {
+		t.Errorf("gpu request = %v, want 2", gpuReq.String())
+	}
+
+	// Check limits
+	gpuLim, ok := ollama.Resources.Limits[gpuRes]
+	if !ok {
+		t.Fatal("nvidia.com/gpu limit not found")
+	}
+	if gpuLim.String() != "2" {
+		t.Errorf("gpu limit = %v, want 2", gpuLim.String())
+	}
+}
+
+func TestBuildStatefulSet_OllamaEnabled_ExistingClaim(t *testing.T) {
+	instance := newTestInstance("ollama-pvc")
+	instance.Spec.Ollama.Enabled = true
+	instance.Spec.Ollama.Storage.ExistingClaim = "my-model-pvc"
+
+	sts := BuildStatefulSet(instance)
+	volumes := sts.Spec.Template.Spec.Volumes
+
+	var ollamaVol *corev1.Volume
+	for i := range volumes {
+		if volumes[i].Name == "ollama-models" {
+			ollamaVol = &volumes[i]
+			break
+		}
+	}
+	if ollamaVol == nil {
+		t.Fatal("ollama-models volume not found")
+	}
+	if ollamaVol.PersistentVolumeClaim == nil {
+		t.Fatal("ollama-models should use PVC when existingClaim is set")
+	}
+	if ollamaVol.PersistentVolumeClaim.ClaimName != "my-model-pvc" {
+		t.Errorf("PVC claim name = %q, want %q", ollamaVol.PersistentVolumeClaim.ClaimName, "my-model-pvc")
+	}
+}
+
+func TestBuildStatefulSet_OllamaEnabled_CustomImage(t *testing.T) {
+	instance := newTestInstance("ollama-custom-img")
+	instance.Spec.Ollama.Enabled = true
+	instance.Spec.Ollama.Image = openclawv1alpha1.OllamaImageSpec{
+		Repository: "my-registry.io/ollama",
+		Tag:        "v0.3.0",
+	}
+
+	sts := BuildStatefulSet(instance)
+
+	var ollama *corev1.Container
+	for i := range sts.Spec.Template.Spec.Containers {
+		if sts.Spec.Template.Spec.Containers[i].Name == "ollama" {
+			ollama = &sts.Spec.Template.Spec.Containers[i]
+			break
+		}
+	}
+	if ollama == nil {
+		t.Fatal("ollama container not found")
+	}
+	if ollama.Image != "my-registry.io/ollama:v0.3.0" {
+		t.Errorf("ollama image = %q, want %q", ollama.Image, "my-registry.io/ollama:v0.3.0")
+	}
+}
+
+func TestBuildStatefulSet_OllamaEnabled_CustomImageDigest(t *testing.T) {
+	instance := newTestInstance("ollama-digest")
+	instance.Spec.Ollama.Enabled = true
+	instance.Spec.Ollama.Image = openclawv1alpha1.OllamaImageSpec{
+		Repository: "ollama/ollama",
+		Tag:        "v0.3.0",
+		Digest:     "sha256:ollamahash",
+	}
+
+	sts := BuildStatefulSet(instance)
+
+	var ollama *corev1.Container
+	for i := range sts.Spec.Template.Spec.Containers {
+		if sts.Spec.Template.Spec.Containers[i].Name == "ollama" {
+			ollama = &sts.Spec.Template.Spec.Containers[i]
+			break
+		}
+	}
+	if ollama == nil {
+		t.Fatal("ollama container not found")
+	}
+	if ollama.Image != "ollama/ollama@sha256:ollamahash" {
+		t.Errorf("ollama image = %q, want %q", ollama.Image, "ollama/ollama@sha256:ollamahash")
+	}
+}
+
+func TestBuildStatefulSet_OllamaEnabled_CustomResources(t *testing.T) {
+	instance := newTestInstance("ollama-res")
+	instance.Spec.Ollama.Enabled = true
+	instance.Spec.Ollama.Resources = openclawv1alpha1.ResourcesSpec{
+		Requests: openclawv1alpha1.ResourceList{
+			CPU:    "1",
+			Memory: "4Gi",
+		},
+		Limits: openclawv1alpha1.ResourceList{
+			CPU:    "4",
+			Memory: "16Gi",
+		},
+	}
+
+	sts := BuildStatefulSet(instance)
+
+	var ollama *corev1.Container
+	for i := range sts.Spec.Template.Spec.Containers {
+		if sts.Spec.Template.Spec.Containers[i].Name == "ollama" {
+			ollama = &sts.Spec.Template.Spec.Containers[i]
+			break
+		}
+	}
+	if ollama == nil {
+		t.Fatal("ollama container not found")
+	}
+
+	cpuReq := ollama.Resources.Requests[corev1.ResourceCPU]
+	if cpuReq.String() != "1" {
+		t.Errorf("cpu request = %v, want 1", cpuReq.String())
+	}
+	memLim := ollama.Resources.Limits[corev1.ResourceMemory]
+	if memLim.Cmp(resource.MustParse("16Gi")) != 0 {
+		t.Errorf("memory limit = %v, want 16Gi", memLim.String())
+	}
+}
+
+func TestBuildStatefulSet_OllamaAndChromiumEnabled(t *testing.T) {
+	instance := newTestInstance("both-sidecars")
+	instance.Spec.Chromium.Enabled = true
+	instance.Spec.Ollama.Enabled = true
+	instance.Spec.Ollama.Models = []string{"llama3.2"}
+
+	sts := BuildStatefulSet(instance)
+	containers := sts.Spec.Template.Spec.Containers
+
+	if len(containers) != 3 {
+		t.Fatalf("expected 3 containers (main + chromium + ollama), got %d", len(containers))
+	}
+
+	names := make(map[string]bool)
+	for _, c := range containers {
+		names[c.Name] = true
+	}
+	if !names["openclaw"] {
+		t.Error("main container not found")
+	}
+	if !names["chromium"] {
+		t.Error("chromium container not found")
+	}
+	if !names["ollama"] {
+		t.Error("ollama container not found")
+	}
+
+	// Both env vars should be present on main container
+	mainContainer := containers[0]
+	foundChromiumURL := false
+	foundOllamaHost := false
+	for _, env := range mainContainer.Env {
+		if env.Name == "CHROMIUM_URL" {
+			foundChromiumURL = true
+		}
+		if env.Name == "OLLAMA_HOST" {
+			foundOllamaHost = true
+		}
+	}
+	if !foundChromiumURL {
+		t.Error("main container should have CHROMIUM_URL")
+	}
+	if !foundOllamaHost {
+		t.Error("main container should have OLLAMA_HOST")
+	}
+
+	// Both volumes should exist
+	volumes := sts.Spec.Template.Spec.Volumes
+	volumeNames := make(map[string]bool)
+	for _, v := range volumes {
+		volumeNames[v.Name] = true
+	}
+	if !volumeNames["chromium-tmp"] {
+		t.Error("chromium-tmp volume not found")
+	}
+	if !volumeNames["chromium-shm"] {
+		t.Error("chromium-shm volume not found")
+	}
+	if !volumeNames["ollama-models"] {
+		t.Error("ollama-models volume not found")
+	}
+
+	// Init container for model pull
+	foundInitOllama := false
+	for _, ic := range sts.Spec.Template.Spec.InitContainers {
+		if ic.Name == "init-ollama" {
+			foundInitOllama = true
+			break
+		}
+	}
+	if !foundInitOllama {
+		t.Error("init-ollama container not found when models are specified")
+	}
+}
+
+func TestBuildStatefulSet_OllamaDisabled(t *testing.T) {
+	instance := newTestInstance("no-ollama")
+
+	sts := BuildStatefulSet(instance)
+
+	// No ollama container
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		if c.Name == "ollama" {
+			t.Error("ollama container should not be present when disabled")
+		}
+	}
+
+	// No ollama-models volume
+	for _, v := range sts.Spec.Template.Spec.Volumes {
+		if v.Name == "ollama-models" {
+			t.Error("ollama-models volume should not be present when disabled")
+		}
+	}
+
+	// No OLLAMA_HOST env var
+	mainContainer := sts.Spec.Template.Spec.Containers[0]
+	for _, env := range mainContainer.Env {
+		if env.Name == "OLLAMA_HOST" {
+			t.Error("OLLAMA_HOST should not be set when ollama is disabled")
+		}
+	}
+}
+
+func TestBuildStatefulSet_OllamaEnabled_CustomStorageSize(t *testing.T) {
+	instance := newTestInstance("ollama-storage")
+	instance.Spec.Ollama.Enabled = true
+	instance.Spec.Ollama.Storage.SizeLimit = "50Gi"
+
+	sts := BuildStatefulSet(instance)
+
+	var ollamaVol *corev1.Volume
+	for i := range sts.Spec.Template.Spec.Volumes {
+		if sts.Spec.Template.Spec.Volumes[i].Name == "ollama-models" {
+			ollamaVol = &sts.Spec.Template.Spec.Volumes[i]
+			break
+		}
+	}
+	if ollamaVol == nil {
+		t.Fatal("ollama-models volume not found")
+	}
+	if ollamaVol.EmptyDir == nil {
+		t.Fatal("expected emptyDir")
+	}
+	if ollamaVol.EmptyDir.SizeLimit.Cmp(resource.MustParse("50Gi")) != 0 {
+		t.Errorf("sizeLimit = %v, want 50Gi", ollamaVol.EmptyDir.SizeLimit.String())
+	}
+}
+
+func TestBuildStatefulSet_OllamaContainerDefaults(t *testing.T) {
+	instance := newTestInstance("ollama-defaults")
+	instance.Spec.Ollama.Enabled = true
+
+	sts := BuildStatefulSet(instance)
+	if len(sts.Spec.Template.Spec.Containers) < 2 {
+		t.Fatal("expected ollama sidecar container")
+	}
+
+	var ollama corev1.Container
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		if c.Name == "ollama" {
+			ollama = c
+			break
+		}
+	}
+
+	// Verify Kubernetes default fields are set
+	if ollama.TerminationMessagePath != corev1.TerminationMessagePathDefault {
+		t.Errorf("TerminationMessagePath = %q, want default", ollama.TerminationMessagePath)
+	}
+	if ollama.TerminationMessagePolicy != corev1.TerminationMessageReadFile {
+		t.Errorf("TerminationMessagePolicy = %v, want ReadFile", ollama.TerminationMessagePolicy)
+	}
+	if ollama.ImagePullPolicy != corev1.PullIfNotPresent {
+		t.Errorf("ImagePullPolicy = %v, want IfNotPresent", ollama.ImagePullPolicy)
+	}
+
+	// Seccomp profile
+	if ollama.SecurityContext.SeccompProfile == nil {
+		t.Fatal("seccomp profile should be set")
+	}
+	if ollama.SecurityContext.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Errorf("seccomp type = %v, want RuntimeDefault", ollama.SecurityContext.SeccompProfile.Type)
+	}
+}
+
+func TestBuildStatefulSet_OllamaEnabled_InitContainerUsesCustomImage(t *testing.T) {
+	instance := newTestInstance("ollama-init-img")
+	instance.Spec.Ollama.Enabled = true
+	instance.Spec.Ollama.Models = []string{"llama3.2"}
+	instance.Spec.Ollama.Image = openclawv1alpha1.OllamaImageSpec{
+		Repository: "my-registry.io/ollama",
+		Tag:        "v0.3.0",
+	}
+
+	sts := BuildStatefulSet(instance)
+
+	var initOllama *corev1.Container
+	for i := range sts.Spec.Template.Spec.InitContainers {
+		if sts.Spec.Template.Spec.InitContainers[i].Name == "init-ollama" {
+			initOllama = &sts.Spec.Template.Spec.InitContainers[i]
+			break
+		}
+	}
+	if initOllama == nil {
+		t.Fatal("init-ollama container not found")
+	}
+	if initOllama.Image != "my-registry.io/ollama:v0.3.0" {
+		t.Errorf("init-ollama image = %q, want %q", initOllama.Image, "my-registry.io/ollama:v0.3.0")
+	}
+}

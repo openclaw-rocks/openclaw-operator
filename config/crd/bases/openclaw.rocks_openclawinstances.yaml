@@ -4815,6 +4815,83 @@ spec:
                         type: object
                     type: object
                 type: object
+              ollama:
+                description: Ollama enables the Ollama sidecar for local LLM inference
+                properties:
+                  enabled:
+                    default: false
+                    description: Enabled enables the Ollama sidecar
+                    type: boolean
+                  gpu:
+                    description: GPU is the number of NVIDIA GPUs to allocate (sets
+                      nvidia.com/gpu resource limit)
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  image:
+                    description: Image configures the Ollama container image
+                    properties:
+                      digest:
+                        description: Digest is the container image digest for supply
+                          chain security
+                        type: string
+                      repository:
+                        default: ollama/ollama
+                        description: Repository is the container image repository
+                        type: string
+                      tag:
+                        default: latest
+                        description: Tag is the container image tag
+                        type: string
+                    type: object
+                  models:
+                    description: Models is a list of models to pre-pull during pod
+                      init (e.g. ["llama3.2", "nomic-embed-text"])
+                    items:
+                      type: string
+                    maxItems: 10
+                    type: array
+                  resources:
+                    description: Resources specifies compute resources for the Ollama
+                      container
+                    properties:
+                      limits:
+                        description: Limits describes the maximum amount of compute
+                          resources allowed
+                        properties:
+                          cpu:
+                            description: CPU resource (e.g., "500m", "2")
+                            type: string
+                          memory:
+                            description: Memory resource (e.g., "512Mi", "2Gi")
+                            type: string
+                        type: object
+                      requests:
+                        description: Requests describes the minimum amount of compute
+                          resources required
+                        properties:
+                          cpu:
+                            description: CPU resource (e.g., "500m", "2")
+                            type: string
+                          memory:
+                            description: Memory resource (e.g., "512Mi", "2Gi")
+                            type: string
+                        type: object
+                    type: object
+                  storage:
+                    description: Storage configures the model cache volume
+                    properties:
+                      existingClaim:
+                        description: ExistingClaim is the name of an existing PVC
+                          for persistent model storage
+                        type: string
+                      sizeLimit:
+                        default: 20Gi
+                        description: SizeLimit is the size limit for the emptyDir
+                          model cache (default "20Gi")
+                        type: string
+                    type: object
+                type: object
               probes:
                 description: Probes configures health probes for the OpenClaw container
                 properties:

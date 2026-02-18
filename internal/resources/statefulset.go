@@ -185,6 +185,11 @@ func buildContainers(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSe
 		containers = append(containers, buildChromiumContainer(instance))
 	}
 
+	// Add Ollama sidecar if enabled
+	if instance.Spec.Ollama.Enabled {
+		containers = append(containers, buildOllamaContainer(instance))
+	}
+
 	// Add custom sidecars
 	containers = append(containers, instance.Spec.Sidecars...)
 
@@ -268,6 +273,13 @@ func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecre
 		env = append(env, corev1.EnvVar{
 			Name:  "CHROMIUM_URL",
 			Value: "ws://localhost:9222",
+		})
+	}
+
+	if instance.Spec.Ollama.Enabled {
+		env = append(env, corev1.EnvVar{
+			Name:  "OLLAMA_HOST",
+			Value: fmt.Sprintf("http://localhost:%d", OllamaPort),
 		})
 	}
 
@@ -415,6 +427,11 @@ func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance) []corev1.C
 	// Skills init container (only if skills are defined)
 	if skillsContainer := buildSkillsInitContainer(instance); skillsContainer != nil {
 		initContainers = append(initContainers, *skillsContainer)
+	}
+
+	// Ollama model-pulling init container (only if enabled and models are specified)
+	if instance.Spec.Ollama.Enabled && len(instance.Spec.Ollama.Models) > 0 {
+		initContainers = append(initContainers, buildOllamaModelPullInitContainer(instance))
 	}
 
 	// Custom init containers (user-defined, run after operator-managed ones)
@@ -729,7 +746,7 @@ func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.
 
 	tag := instance.Spec.Chromium.Image.Tag
 	if tag == "" {
-		tag = "latest"
+		tag = DefaultImageTag
 	}
 
 	image := repo + ":" + tag
@@ -796,6 +813,154 @@ func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.
 		Resources:    buildChromiumResourceRequirements(instance),
 		Env:          chromiumEnv,
 		VolumeMounts: chromiumMounts,
+	}
+}
+
+// buildOllamaContainer creates the Ollama sidecar container
+func buildOllamaContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
+	repo := instance.Spec.Ollama.Image.Repository
+	if repo == "" {
+		repo = "ollama/ollama"
+	}
+
+	tag := instance.Spec.Ollama.Image.Tag
+	if tag == "" {
+		tag = DefaultImageTag
+	}
+
+	image := repo + ":" + tag
+	if instance.Spec.Ollama.Image.Digest != "" {
+		image = repo + "@" + instance.Spec.Ollama.Image.Digest
+	}
+
+	container := corev1.Container{
+		Name:                     "ollama",
+		Image:                    image,
+		ImagePullPolicy:          corev1.PullIfNotPresent,
+		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
+		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: Ptr(false),
+			ReadOnlyRootFilesystem:   Ptr(false), // Ollama needs writable dirs
+			RunAsNonRoot:             Ptr(false), // Ollama requires root
+			RunAsUser:                Ptr(int64(0)),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+			SeccompProfile: &corev1.SeccompProfile{
+				Type: corev1.SeccompProfileTypeRuntimeDefault,
+			},
+		},
+		Ports: []corev1.ContainerPort{
+			{
+				Name:          "ollama",
+				ContainerPort: OllamaPort,
+				Protocol:      corev1.ProtocolTCP,
+			},
+		},
+		Resources: buildOllamaResourceRequirements(instance),
+		VolumeMounts: []corev1.VolumeMount{
+			{
+				Name:      "ollama-models",
+				MountPath: "/root/.ollama",
+			},
+		},
+	}
+
+	return container
+}
+
+// buildOllamaResourceRequirements creates resource requirements for the Ollama container
+func buildOllamaResourceRequirements(instance *openclawv1alpha1.OpenClawInstance) corev1.ResourceRequirements {
+	req := corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{},
+		Limits:   corev1.ResourceList{},
+	}
+
+	// Requests
+	cpuReq := instance.Spec.Ollama.Resources.Requests.CPU
+	if cpuReq == "" {
+		cpuReq = "500m"
+	}
+	req.Requests[corev1.ResourceCPU] = resource.MustParse(cpuReq)
+
+	memReq := instance.Spec.Ollama.Resources.Requests.Memory
+	if memReq == "" {
+		memReq = "1Gi"
+	}
+	req.Requests[corev1.ResourceMemory] = resource.MustParse(memReq)
+
+	// Limits
+	cpuLim := instance.Spec.Ollama.Resources.Limits.CPU
+	if cpuLim == "" {
+		cpuLim = "2000m"
+	}
+	req.Limits[corev1.ResourceCPU] = resource.MustParse(cpuLim)
+
+	memLim := instance.Spec.Ollama.Resources.Limits.Memory
+	if memLim == "" {
+		memLim = "4Gi"
+	}
+	req.Limits[corev1.ResourceMemory] = resource.MustParse(memLim)
+
+	// GPU support
+	if instance.Spec.Ollama.GPU != nil && *instance.Spec.Ollama.GPU > 0 {
+		gpuQty := resource.MustParse(fmt.Sprintf("%d", *instance.Spec.Ollama.GPU))
+		req.Requests[corev1.ResourceName("nvidia.com/gpu")] = gpuQty
+		req.Limits[corev1.ResourceName("nvidia.com/gpu")] = gpuQty
+	}
+
+	return req
+}
+
+// buildOllamaModelPullInitContainer creates the init container that pre-pulls Ollama models.
+func buildOllamaModelPullInitContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
+	// Build the pull command: start server, pull each model, then stop server
+	var pullCmds []string
+	for _, model := range instance.Spec.Ollama.Models {
+		pullCmds = append(pullCmds, fmt.Sprintf("ollama pull %s", shellQuote(model)))
+	}
+	script := fmt.Sprintf("ollama serve & sleep 2 && %s && kill %%1", strings.Join(pullCmds, " && "))
+
+	repo := instance.Spec.Ollama.Image.Repository
+	if repo == "" {
+		repo = "ollama/ollama"
+	}
+	tag := instance.Spec.Ollama.Image.Tag
+	if tag == "" {
+		tag = DefaultImageTag
+	}
+	image := repo + ":" + tag
+	if instance.Spec.Ollama.Image.Digest != "" {
+		image = repo + "@" + instance.Spec.Ollama.Image.Digest
+	}
+
+	return corev1.Container{
+		Name:                     "init-ollama",
+		Image:                    image,
+		Command:                  []string{"sh", "-c", script},
+		ImagePullPolicy:          corev1.PullIfNotPresent,
+		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
+		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: Ptr(false),
+			ReadOnlyRootFilesystem:   Ptr(false), // Ollama needs writable dirs
+			RunAsNonRoot:             Ptr(false), // Ollama requires root
+			RunAsUser:                Ptr(int64(0)),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+			SeccompProfile: &corev1.SeccompProfile{
+				Type: corev1.SeccompProfileTypeRuntimeDefault,
+			},
+		},
+		Resources: buildOllamaResourceRequirements(instance),
+		VolumeMounts: []corev1.VolumeMount{
+			{
+				Name:      "ollama-models",
+				MountPath: "/root/.ollama",
+			},
+		},
 	}
 }
 
@@ -937,6 +1102,34 @@ func buildVolumes(instance *openclawv1alpha1.OpenClawInstance) []corev1.Volume {
 				},
 			},
 		)
+	}
+
+	// Ollama model cache volume
+	if instance.Spec.Ollama.Enabled {
+		if instance.Spec.Ollama.Storage.ExistingClaim != "" {
+			volumes = append(volumes, corev1.Volume{
+				Name: "ollama-models",
+				VolumeSource: corev1.VolumeSource{
+					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+						ClaimName: instance.Spec.Ollama.Storage.ExistingClaim,
+					},
+				},
+			})
+		} else {
+			sizeLimit := instance.Spec.Ollama.Storage.SizeLimit
+			if sizeLimit == "" {
+				sizeLimit = "20Gi"
+			}
+			qty := resource.MustParse(sizeLimit)
+			volumes = append(volumes, corev1.Volume{
+				Name: "ollama-models",
+				VolumeSource: corev1.VolumeSource{
+					EmptyDir: &corev1.EmptyDirVolumeSource{
+						SizeLimit: &qty,
+					},
+				},
+			})
+		}
 	}
 
 	// CA bundle volume

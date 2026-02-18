@@ -755,6 +755,108 @@ var _ = Describe("OpenClawInstance Controller", func() {
 		})
 	})
 
+	Context("When creating an OpenClawInstance with Ollama", func() {
+		var namespace string
+
+		BeforeEach(func() {
+			namespace = "test-ollama-" + time.Now().Format("20060102150405")
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: namespace,
+				},
+			}
+			Expect(k8sClient.Create(ctx, ns)).Should(Succeed())
+		})
+
+		AfterEach(func() {
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: namespace,
+				},
+			}
+			_ = k8sClient.Delete(ctx, ns)
+		})
+
+		It("Should create Ollama sidecar when enabled", func() {
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instanceName := "ollama-test"
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					Ollama: openclawv1alpha1.OllamaSpec{
+						Enabled: true,
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			// Verify StatefulSet has ollama sidecar container
+			statefulSet := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName,
+					Namespace: namespace,
+				}, statefulSet)
+			}, timeout, interval).Should(Succeed())
+
+			// Verify ollama container exists
+			var ollamaContainer *corev1.Container
+			for i := range statefulSet.Spec.Template.Spec.Containers {
+				if statefulSet.Spec.Template.Spec.Containers[i].Name == "ollama" {
+					ollamaContainer = &statefulSet.Spec.Template.Spec.Containers[i]
+					break
+				}
+			}
+			Expect(ollamaContainer).NotTo(BeNil(), "ollama sidecar container should exist")
+			Expect(ollamaContainer.Image).To(Equal("ollama/ollama:latest"))
+
+			// Verify ollama-models volume exists
+			var ollamaVol *corev1.Volume
+			for i := range statefulSet.Spec.Template.Spec.Volumes {
+				if statefulSet.Spec.Template.Spec.Volumes[i].Name == "ollama-models" {
+					ollamaVol = &statefulSet.Spec.Template.Spec.Volumes[i]
+					break
+				}
+			}
+			Expect(ollamaVol).NotTo(BeNil(), "ollama-models volume should exist")
+
+			// Verify main container has OLLAMA_HOST env var
+			mainContainer := statefulSet.Spec.Template.Spec.Containers[0]
+			var foundOllamaHost bool
+			for _, env := range mainContainer.Env {
+				if env.Name == "OLLAMA_HOST" {
+					foundOllamaHost = true
+					Expect(env.Value).To(Equal("http://localhost:11434"))
+					break
+				}
+			}
+			Expect(foundOllamaHost).To(BeTrue(), "OLLAMA_HOST env var should be set")
+
+			// No init-ollama since no models specified
+			for _, ic := range statefulSet.Spec.Template.Spec.InitContainers {
+				Expect(ic.Name).NotTo(Equal("init-ollama"), "init-ollama should not be present without models")
+			}
+
+			// Clean up
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+	})
+
 	Context("When the operator is running", func() {
 		It("Should have the controller manager deployment available", func() {
 			deployment := &appsv1.Deployment{}

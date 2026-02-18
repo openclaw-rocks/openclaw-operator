@@ -30,6 +30,9 @@ const (
 	// ChromiumPort is the port for Chrome DevTools Protocol
 	ChromiumPort = 9222
 
+	// OllamaPort is the port for the Ollama API
+	OllamaPort = 11434
+
 	// ConfigMergeModeMerge is the merge mode that deep-merges config with existing PVC config
 	ConfigMergeModeMerge = "merge"
 
@@ -45,6 +48,9 @@ const (
 
 	// RuntimeDepsLocalBin is the path where runtime dependency binaries are installed on the PVC
 	RuntimeDepsLocalBin = "/home/openclaw/.openclaw/.local/bin"
+
+	// DefaultImageTag is the default tag used for container images
+	DefaultImageTag = "latest"
 
 	// AppName is the application name used in labels
 	AppName = "openclaw"
@@ -160,7 +166,7 @@ func GetImageTag(instance *openclawv1alpha1.OpenClawInstance) string {
 	if instance.Spec.Image.Tag != "" {
 		return instance.Spec.Image.Tag
 	}
-	return "latest"
+	return DefaultImageTag
 }
 
 // GetImage returns the full image reference

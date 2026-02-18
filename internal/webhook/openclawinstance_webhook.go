@@ -149,6 +149,14 @@ func (v *OpenClawInstanceValidator) validate(instance *openclawv1alpha1.OpenClaw
 		}
 	}
 
+	// 5b. Warn if Ollama is enabled
+	if instance.Spec.Ollama.Enabled {
+		if instance.Spec.Ollama.Image.Digest == "" {
+			warnings = append(warnings, "Ollama sidecar is enabled without image digest pinning - consider pinning to a specific digest for supply chain security")
+		}
+		warnings = append(warnings, "Ollama sidecar runs as root (UID 0) - required by the official Ollama image")
+	}
+
 	// 6. Warn if no AI provider API keys detected
 	warnings = append(warnings, validateProviderKeys(instance)...)
 
@@ -384,6 +392,7 @@ var reservedInitContainerNames = map[string]bool{
 	"init-pnpm":   true,
 	"init-python": true,
 	"init-skills": true,
+	"init-ollama": true,
 }
 
 // validateInitContainers checks custom init container names.

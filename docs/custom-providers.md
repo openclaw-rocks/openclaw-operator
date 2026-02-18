@@ -4,6 +4,11 @@ This guide covers common patterns for connecting OpenClaw to self-hosted or alte
 
 ## Ollama as a Sidecar
 
+> **Tip:** Since v0.10.0, the operator has first-class Ollama support via `spec.ollama`.
+> The manual sidecar approach below still works but the built-in integration handles
+> model pulling, GPU resources, and volume setup automatically.
+> See the [README](../README.md#ollama-sidecar) for details.
+
 Run Ollama alongside OpenClaw in the same pod. This is the simplest option when you want local model inference without network hops.
 
 ```yaml

@@ -58,6 +58,10 @@ type OpenClawInstanceSpec struct {
 	// +optional
 	Tailscale TailscaleSpec `json:"tailscale,omitempty"`
 
+	// Ollama enables the Ollama sidecar for local LLM inference
+	// +optional
+	Ollama OllamaSpec `json:"ollama,omitempty"`
+
 	// InitContainers is a list of additional init containers to run before the main container.
 	// They run after the operator-managed init-config and init-skills containers.
 	// +kubebuilder:validation:MaxItems=10
@@ -490,6 +494,65 @@ type TailscaleSpec struct {
 	// +kubebuilder:default=false
 	// +optional
 	AuthSSO bool `json:"authSSO,omitempty"`
+}
+
+// OllamaSpec defines the Ollama sidecar configuration
+type OllamaSpec struct {
+	// Enabled enables the Ollama sidecar
+	// +kubebuilder:default=false
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
+
+	// Image configures the Ollama container image
+	// +optional
+	Image OllamaImageSpec `json:"image,omitempty"`
+
+	// Models is a list of models to pre-pull during pod init (e.g. ["llama3.2", "nomic-embed-text"])
+	// +kubebuilder:validation:MaxItems=10
+	// +optional
+	Models []string `json:"models,omitempty"`
+
+	// Resources specifies compute resources for the Ollama container
+	// +optional
+	Resources ResourcesSpec `json:"resources,omitempty"`
+
+	// Storage configures the model cache volume
+	// +optional
+	Storage OllamaStorageSpec `json:"storage,omitempty"`
+
+	// GPU is the number of NVIDIA GPUs to allocate (sets nvidia.com/gpu resource limit)
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	GPU *int32 `json:"gpu,omitempty"`
+}
+
+// OllamaImageSpec defines the Ollama container image
+type OllamaImageSpec struct {
+	// Repository is the container image repository
+	// +kubebuilder:default="ollama/ollama"
+	// +optional
+	Repository string `json:"repository,omitempty"`
+
+	// Tag is the container image tag
+	// +kubebuilder:default="latest"
+	// +optional
+	Tag string `json:"tag,omitempty"`
+
+	// Digest is the container image digest for supply chain security
+	// +optional
+	Digest string `json:"digest,omitempty"`
+}
+
+// OllamaStorageSpec configures the Ollama model cache volume
+type OllamaStorageSpec struct {
+	// SizeLimit is the size limit for the emptyDir model cache (default "20Gi")
+	// +kubebuilder:default="20Gi"
+	// +optional
+	SizeLimit string `json:"sizeLimit,omitempty"`
+
+	// ExistingClaim is the name of an existing PVC for persistent model storage
+	// +optional
+	ExistingClaim string `json:"existingClaim,omitempty"`
 }
 
 // NetworkingSpec defines network-related configuration

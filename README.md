@@ -53,7 +53,7 @@ The operator reconciles this into a fully managed stack of 9+ Kubernetes resourc
 | **Backup/Restore** | B2-backed snapshots | Automatic backup to Backblaze B2 on instance deletion; restore into a new instance from any snapshot |
 | **Workspace Seeding** | Initial files & dirs | Pre-populate the workspace with files and directories before the agent starts |
 | **Gateway Auth** | Auto-generated tokens | Automatic gateway token Secret per instance, bypassing mDNS pairing (unusable in k8s) |
-| **Extensible** | Sidecars & init containers | Chromium sidecar for browser automation, plus custom init containers and sidecars for proxies, log forwarders, etc. |
+| **Extensible** | Sidecars & init containers | Chromium for browser automation, Ollama for local LLMs, plus custom init containers and sidecars |
 | **Cloud Native** | SA annotations & CA bundles | AWS IRSA / GCP Workload Identity via ServiceAccount annotations; CA bundle injection for corporate proxies |
 
 
@@ -88,8 +88,8 @@ The operator reconciles this into a fully managed stack of 9+ Kubernetes resourc
 │  │ Init: config -> pnpm* -> python* -> skills* -> custom  │  │
 │  │                                        (* = opt-in)    │  │
 │  ├────────────────────────────────────────────────────────┤  │
-│  │ OpenClaw Container        Chromium Sidecar (optional)  │  │
-│  │ (AI agent runtime)        + custom sidecars            │  │
+│  │ OpenClaw Container   Chromium (opt) / Ollama (opt)  │  │
+│  │ (AI agent runtime)   + custom sidecars              │  │
 │  └────────────────────────────────────────────────────────┘  │
 │                                                              │
 │  Service (ports 18789, 18793) ─► Ingress (optional)          │
@@ -230,6 +230,37 @@ spec:
 
 When enabled, the operator automatically injects a `CHROMIUM_URL` environment variable into the main container and configures shared memory, security contexts, and health probes for the sidecar.
 
+### Ollama sidecar
+
+Run local LLMs alongside your agent for private, low-latency inference without external API calls:
+
+```yaml
+spec:
+  ollama:
+    enabled: true
+    models:
+      - llama3.2
+      - nomic-embed-text
+    gpu: 1
+    storage:
+      sizeLimit: 30Gi
+    resources:
+      requests:
+        cpu: "1"
+        memory: "4Gi"
+      limits:
+        cpu: "4"
+        memory: "16Gi"
+```
+
+When enabled, the operator:
+- Injects an `OLLAMA_HOST` environment variable into the main container
+- Pre-pulls specified models via an init container before the agent starts
+- Configures GPU resource limits when `gpu` is set (`nvidia.com/gpu`)
+- Mounts a model cache volume (emptyDir by default, or an existing PVC via `storage.existingClaim`)
+
+See [Custom AI Providers](docs/custom-providers.md) for configuring OpenClaw to use Ollama models via `llmConfig`.
+
 ### Config merge mode
 
 By default, the operator overwrites the config file on every pod restart. Set `mergeMode: merge` to deep-merge operator config with existing PVC config, preserving runtime changes made by the agent:
@@ -292,7 +323,7 @@ spec:
         secretName: cloud-sql-proxy-sa
 ```
 
-Reserved init container names (`init-config`, `init-pnpm`, `init-python`, `init-skills`) are rejected by the webhook.
+Reserved init container names (`init-config`, `init-pnpm`, `init-python`, `init-skills`, `init-ollama`) are rejected by the webhook.
 
 ### Extra volumes and mounts
 
@@ -434,6 +465,14 @@ Auto-update is a no-op for digest-pinned images (`spec.image.digest`). The opera
 | `spec.gateway.existingSecret` | Use existing Secret for gateway token (key: `token`) | auto-generated |
 | **Chromium** | | |
 | `spec.chromium.enabled` | Chromium sidecar | `false` |
+| **Ollama** | | |
+| `spec.ollama.enabled` | Ollama sidecar | `false` |
+| `spec.ollama.models` | Models to pre-pull (max 10) | `[]` |
+| `spec.ollama.gpu` | NVIDIA GPUs to allocate | - |
+| `spec.ollama.image.repository` | Container image | `ollama/ollama` |
+| `spec.ollama.image.tag` | Image tag | `latest` |
+| `spec.ollama.storage.sizeLimit` | Model cache emptyDir size | `20Gi` |
+| `spec.ollama.storage.existingClaim` | Existing PVC for model persistence | - |
 | **Networking** | | |
 | `spec.networking.service.type` | Service type | `ClusterIP` |
 | `spec.networking.ingress.enabled` | Ingress | `false` |
@@ -465,7 +504,7 @@ The operator follows a **secure-by-default** philosophy. Every instance ships wi
 
 ### Defaults
 
-- **Non-root execution**: containers run as UID 1000; root (UID 0) is blocked by the validating webhook
+- **Non-root execution**: containers run as UID 1000; root (UID 0) is blocked by the validating webhook (exception: Ollama sidecar requires root per the official image)
 - **Read-only root filesystem**: enabled by default for the main container and the Chromium sidecar; the PVC at `~/.openclaw/` provides writable home, and a `/tmp` emptyDir handles temp files
 - **All capabilities dropped**: no ambient Linux capabilities
 - **Seccomp RuntimeDefault**: syscall filtering enabled
@@ -479,7 +518,7 @@ The operator follows a **secure-by-default** philosophy. Every instance ships wi
 | Check | Severity | Behavior |
 |-------|----------|----------|
 | `runAsUser: 0` | Error | Blocked: root execution not allowed |
-| Reserved init container name | Error | `init-config`, `init-pnpm`, `init-python`, `init-skills` are reserved |
+| Reserved init container name | Error | `init-config`, `init-pnpm`, `init-python`, `init-skills`, `init-ollama` are reserved |
 | Invalid skill name | Error | Only alphanumeric, `-`, `_`, `/`, `.`, `@` allowed (max 128 chars) |
 | Invalid CA bundle config | Error | Exactly one of `configMapName` or `secretName` must be set |
 | JSON5 with inline raw config | Error | JSON5 requires `configMapRef` (inline must be valid JSON) |
@@ -490,6 +529,8 @@ The operator follows a **secure-by-default** philosophy. Every instance ships wi
 | NetworkPolicy disabled | Warning | Deployment proceeds with a warning |
 | Ingress without TLS | Warning | Deployment proceeds with a warning |
 | Chromium without digest pinning | Warning | Deployment proceeds with a warning |
+| Ollama without digest pinning | Warning | Deployment proceeds with a warning |
+| Ollama runs as root | Warning | Required by official image; informational |
 | Auto-update with digest pin | Warning | Digest overrides auto-update; updates won't apply |
 | `readOnlyRootFilesystem` disabled | Warning | Proceeds with a security recommendation |
 | No AI provider keys detected | Warning | Scans `env`/`envFrom` for known provider env vars |
