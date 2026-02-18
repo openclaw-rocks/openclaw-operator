@@ -3315,6 +3315,13 @@ func TestBuildInitScript_MergeMode(t *testing.T) {
 	if !strings.Contains(script, "/tmp/merged.json") {
 		t.Errorf("merge mode should write to /tmp/merged.json atomically, got: %q", script)
 	}
+	// Regression: renameSync fails across mount boundaries (EXDEV) - #120
+	if strings.Contains(script, "renameSync") {
+		t.Errorf("merge mode must not use renameSync (fails cross-device between /tmp and /data), got: %q", script)
+	}
+	if !strings.Contains(script, "copyFileSync") {
+		t.Errorf("merge mode should use copyFileSync to move merged config to /data, got: %q", script)
+	}
 }
 
 func TestBuildStatefulSet_MergeMode_OpenClawImage(t *testing.T) {

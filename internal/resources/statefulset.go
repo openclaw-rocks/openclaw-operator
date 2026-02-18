@@ -469,7 +469,7 @@ func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance) string {
 					`const base=fs.existsSync(e)?JSON.parse(fs.readFileSync(e,'utf8')):{};`+
 					`const inc=JSON.parse(fs.readFileSync(c,'utf8'));`+
 					`fs.writeFileSync(t,JSON.stringify(dm(base,inc),null,2));`+
-					`fs.renameSync(t,e);`+
+					`fs.copyFileSync(t,e);`+
 					`"`,
 				shellQuote(key)))
 		case instance.Spec.Config.Format == ConfigFormatJSON5:
