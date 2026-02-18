@@ -614,6 +614,147 @@ var _ = Describe("OpenClawInstance Controller", func() {
 		})
 	})
 
+	Context("When creating an instance with Tailscale enabled", func() {
+		var namespace string
+
+		BeforeEach(func() {
+			namespace = "test-ts-" + time.Now().Format("20060102150405")
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+			Expect(k8sClient.Create(ctx, ns)).Should(Succeed())
+		})
+
+		AfterEach(func() {
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+			_ = k8sClient.Delete(ctx, ns)
+		})
+
+		It("Should inject Tailscale config, env vars, and NetworkPolicy egress", func() {
+			instanceName := "ts-e2e-instance"
+
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			// Create auth key Secret
+			tsSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "ts-auth",
+					Namespace: namespace,
+				},
+				StringData: map[string]string{
+					"authkey": "tskey-auth-test-XXXXX",
+				},
+			}
+			Expect(k8sClient.Create(ctx, tsSecret)).Should(Succeed())
+
+			// Create instance with Tailscale enabled
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					Tailscale: openclawv1alpha1.TailscaleSpec{
+						Enabled: true,
+						Mode:    "serve",
+						AuthKeySecretRef: &corev1.LocalObjectReference{
+							Name: "ts-auth",
+						},
+						AuthSSO: true,
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			// Verify ConfigMap contains tailscale config
+			cm := &corev1.ConfigMap{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.ConfigMapName(instance),
+					Namespace: namespace,
+				}, cm)
+			}, timeout, interval).Should(Succeed())
+
+			configContent, ok := cm.Data["openclaw.json"]
+			Expect(ok).To(BeTrue(), "ConfigMap should have openclaw.json key")
+
+			var parsed map[string]interface{}
+			Expect(json.Unmarshal([]byte(configContent), &parsed)).To(Succeed())
+			gw, ok := parsed["gateway"].(map[string]interface{})
+			Expect(ok).To(BeTrue(), "config should have gateway key")
+			ts, ok := gw["tailscale"].(map[string]interface{})
+			Expect(ok).To(BeTrue(), "gateway should have tailscale key")
+			Expect(ts["mode"]).To(Equal("serve"), "tailscale mode should be serve")
+			Expect(ts["resetOnExit"]).To(BeTrue(), "tailscale resetOnExit should be true")
+
+			// Verify AuthSSO sets gateway.auth.allowTailscale
+			auth, ok := gw["auth"].(map[string]interface{})
+			Expect(ok).To(BeTrue(), "gateway should have auth key when AuthSSO is enabled")
+			Expect(auth["allowTailscale"]).To(BeTrue(), "auth.allowTailscale should be true")
+
+			// Verify StatefulSet env vars
+			statefulSet := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName,
+					Namespace: namespace,
+				}, statefulSet)
+			}, timeout, interval).Should(Succeed())
+
+			mainContainer := statefulSet.Spec.Template.Spec.Containers[0]
+			var foundAuthKey, foundHostname bool
+			for _, env := range mainContainer.Env {
+				if env.Name == "TS_AUTHKEY" {
+					foundAuthKey = true
+					Expect(env.ValueFrom).NotTo(BeNil(), "TS_AUTHKEY should use ValueFrom")
+					Expect(env.ValueFrom.SecretKeyRef).NotTo(BeNil(), "TS_AUTHKEY should use SecretKeyRef")
+					Expect(env.ValueFrom.SecretKeyRef.Name).To(Equal("ts-auth"))
+					Expect(env.ValueFrom.SecretKeyRef.Key).To(Equal("authkey"))
+				}
+				if env.Name == "TS_HOSTNAME" {
+					foundHostname = true
+					Expect(env.Value).To(Equal(instanceName), "TS_HOSTNAME should default to instance name")
+				}
+			}
+			Expect(foundAuthKey).To(BeTrue(), "TS_AUTHKEY env var should be present")
+			Expect(foundHostname).To(BeTrue(), "TS_HOSTNAME env var should be present")
+
+			// Verify NetworkPolicy has STUN and WireGuard egress
+			np := &networkingv1.NetworkPolicy{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.NetworkPolicyName(instance),
+					Namespace: namespace,
+				}, np)
+			}, timeout, interval).Should(Succeed())
+
+			var foundSTUN, foundWG bool
+			for _, rule := range np.Spec.Egress {
+				for _, p := range rule.Ports {
+					if p.Protocol != nil && *p.Protocol == corev1.ProtocolUDP && p.Port != nil {
+						switch p.Port.IntValue() {
+						case 3478:
+							foundSTUN = true
+						case 41641:
+							foundWG = true
+						}
+					}
+				}
+			}
+			Expect(foundSTUN).To(BeTrue(), "NetworkPolicy should have STUN egress (UDP 3478)")
+			Expect(foundWG).To(BeTrue(), "NetworkPolicy should have WireGuard egress (UDP 41641)")
+
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+	})
+
 	Context("When the operator is running", func() {
 		It("Should have the controller manager deployment available", func() {
 			deployment := &appsv1.Deployment{}

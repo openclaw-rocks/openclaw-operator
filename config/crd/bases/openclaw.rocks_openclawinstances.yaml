@@ -8546,6 +8546,56 @@ spec:
                         type: string
                     type: object
                 type: object
+              tailscale:
+                description: Tailscale configures Tailscale integration for tailnet
+                  access and HTTPS
+                properties:
+                  authKeySecretKey:
+                    default: authkey
+                    description: AuthKeySecretKey is the key in the referenced Secret.
+                    type: string
+                  authKeySecretRef:
+                    description: |-
+                      AuthKeySecretRef references a Secret containing the Tailscale auth key.
+                      The Secret must have a key matching AuthKeySecretKey (default: "authkey").
+                      Use ephemeral+reusable keys from the Tailscale admin console.
+                    properties:
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  authSSO:
+                    default: false
+                    description: |-
+                      AuthSSO enables passwordless login for tailnet members.
+                      Sets gateway.auth.allowTailscale=true in the OpenClaw config.
+                    type: boolean
+                  enabled:
+                    default: false
+                    description: Enabled enables Tailscale integration
+                    type: boolean
+                  hostname:
+                    description: Hostname sets the Tailscale device name (defaults
+                      to instance name).
+                    type: string
+                  mode:
+                    default: serve
+                    description: |-
+                      Mode selects the Tailscale mode.
+                      "serve" exposes the instance to tailnet members only (default).
+                      "funnel" exposes the instance to the public internet via Tailscale Funnel.
+                    enum:
+                    - serve
+                    - funnel
+                    type: string
+                type: object
               workspace:
                 description: |-
                   Workspace configures initial workspace files seeded into the instance.

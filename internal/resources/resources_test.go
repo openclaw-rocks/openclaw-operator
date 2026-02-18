@@ -4755,3 +4755,363 @@ func TestConfigHash_ChangesWithRuntimeDeps(t *testing.T) {
 		t.Error("config hash should change when runtime deps are enabled")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Tailscale integration tests
+// ---------------------------------------------------------------------------
+
+func TestBuildConfigMap_WithTailscale(t *testing.T) {
+	instance := newTestInstance("ts-serve")
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.Mode = "serve"
+
+	cm := BuildConfigMap(instance, "")
+	content, ok := cm.Data["openclaw.json"]
+	if !ok {
+		t.Fatal("ConfigMap should have openclaw.json key")
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config JSON: %v", err)
+	}
+
+	gw, ok := parsed["gateway"].(map[string]interface{})
+	if !ok {
+		t.Fatal("config should have gateway key")
+	}
+
+	ts, ok := gw["tailscale"].(map[string]interface{})
+	if !ok {
+		t.Fatal("gateway should have tailscale key")
+	}
+
+	if ts["mode"] != "serve" {
+		t.Errorf("expected tailscale.mode=serve, got %v", ts["mode"])
+	}
+	if ts["resetOnExit"] != true {
+		t.Errorf("expected tailscale.resetOnExit=true, got %v", ts["resetOnExit"])
+	}
+}
+
+func TestBuildConfigMap_TailscaleFunnel(t *testing.T) {
+	instance := newTestInstance("ts-funnel")
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.Mode = "funnel"
+
+	cm := BuildConfigMap(instance, "")
+	content := cm.Data["openclaw.json"]
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config JSON: %v", err)
+	}
+
+	gw := parsed["gateway"].(map[string]interface{})
+	ts := gw["tailscale"].(map[string]interface{})
+
+	if ts["mode"] != "funnel" {
+		t.Errorf("expected tailscale.mode=funnel, got %v", ts["mode"])
+	}
+}
+
+func TestBuildConfigMap_TailscaleAuthSSO(t *testing.T) {
+	instance := newTestInstance("ts-sso")
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.AuthSSO = true
+
+	cm := BuildConfigMap(instance, "")
+	content := cm.Data["openclaw.json"]
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config JSON: %v", err)
+	}
+
+	gw := parsed["gateway"].(map[string]interface{})
+	auth, ok := gw["auth"].(map[string]interface{})
+	if !ok {
+		t.Fatal("gateway should have auth key when AuthSSO is enabled")
+	}
+
+	if auth["allowTailscale"] != true {
+		t.Errorf("expected auth.allowTailscale=true, got %v", auth["allowTailscale"])
+	}
+}
+
+func TestBuildConfigMap_TailscaleUserOverride(t *testing.T) {
+	instance := newTestInstance("ts-override")
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.Mode = "serve"
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{
+			Raw: []byte(`{"gateway":{"tailscale":{"mode":"funnel","resetOnExit":false}}}`),
+		},
+	}
+
+	cm := BuildConfigMap(instance, "")
+	content := cm.Data["openclaw.json"]
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config JSON: %v", err)
+	}
+
+	gw := parsed["gateway"].(map[string]interface{})
+	ts := gw["tailscale"].(map[string]interface{})
+
+	if ts["mode"] != "funnel" {
+		t.Errorf("user-set mode should be preserved, expected funnel, got %v", ts["mode"])
+	}
+	if ts["resetOnExit"] != false {
+		t.Errorf("user-set resetOnExit should be preserved, expected false, got %v", ts["resetOnExit"])
+	}
+}
+
+func TestBuildStatefulSet_TailscaleAuthKey(t *testing.T) {
+	instance := newTestInstance("ts-authkey")
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.AuthKeySecretRef = &corev1.LocalObjectReference{Name: "ts-auth"}
+
+	sts := BuildStatefulSet(instance)
+	main := sts.Spec.Template.Spec.Containers[0]
+
+	var tsAuthKey *corev1.EnvVar
+	for i := range main.Env {
+		if main.Env[i].Name == "TS_AUTHKEY" {
+			tsAuthKey = &main.Env[i]
+			break
+		}
+	}
+	if tsAuthKey == nil {
+		t.Fatal("TS_AUTHKEY env var should be present")
+	}
+	if tsAuthKey.ValueFrom == nil || tsAuthKey.ValueFrom.SecretKeyRef == nil {
+		t.Fatal("TS_AUTHKEY should use SecretKeyRef")
+	}
+	if tsAuthKey.ValueFrom.SecretKeyRef.Name != "ts-auth" {
+		t.Errorf("expected secret name ts-auth, got %s", tsAuthKey.ValueFrom.SecretKeyRef.Name)
+	}
+	if tsAuthKey.ValueFrom.SecretKeyRef.Key != "authkey" {
+		t.Errorf("expected secret key authkey, got %s", tsAuthKey.ValueFrom.SecretKeyRef.Key)
+	}
+}
+
+func TestBuildStatefulSet_TailscaleHostname(t *testing.T) {
+	instance := newTestInstance("ts-hostname")
+	instance.Spec.Tailscale.Enabled = true
+
+	sts := BuildStatefulSet(instance)
+	main := sts.Spec.Template.Spec.Containers[0]
+
+	var tsHostname *corev1.EnvVar
+	for i := range main.Env {
+		if main.Env[i].Name == "TS_HOSTNAME" {
+			tsHostname = &main.Env[i]
+			break
+		}
+	}
+	if tsHostname == nil {
+		t.Fatal("TS_HOSTNAME env var should be present")
+	}
+	if tsHostname.Value != "ts-hostname" {
+		t.Errorf("expected TS_HOSTNAME=ts-hostname (instance name), got %s", tsHostname.Value)
+	}
+}
+
+func TestBuildStatefulSet_TailscaleCustomHostname(t *testing.T) {
+	instance := newTestInstance("ts-custom")
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.Hostname = "my-custom-host"
+
+	sts := BuildStatefulSet(instance)
+	main := sts.Spec.Template.Spec.Containers[0]
+
+	var tsHostname *corev1.EnvVar
+	for i := range main.Env {
+		if main.Env[i].Name == "TS_HOSTNAME" {
+			tsHostname = &main.Env[i]
+			break
+		}
+	}
+	if tsHostname == nil {
+		t.Fatal("TS_HOSTNAME env var should be present")
+	}
+	if tsHostname.Value != "my-custom-host" {
+		t.Errorf("expected TS_HOSTNAME=my-custom-host, got %s", tsHostname.Value)
+	}
+}
+
+func TestBuildStatefulSet_TailscaleCustomSecretKey(t *testing.T) {
+	instance := newTestInstance("ts-customkey")
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.AuthKeySecretRef = &corev1.LocalObjectReference{Name: "ts-secret"}
+	instance.Spec.Tailscale.AuthKeySecretKey = "my-key"
+
+	sts := BuildStatefulSet(instance)
+	main := sts.Spec.Template.Spec.Containers[0]
+
+	var tsAuthKey *corev1.EnvVar
+	for i := range main.Env {
+		if main.Env[i].Name == "TS_AUTHKEY" {
+			tsAuthKey = &main.Env[i]
+			break
+		}
+	}
+	if tsAuthKey == nil {
+		t.Fatal("TS_AUTHKEY env var should be present")
+	}
+	if tsAuthKey.ValueFrom.SecretKeyRef.Key != "my-key" {
+		t.Errorf("expected custom secret key my-key, got %s", tsAuthKey.ValueFrom.SecretKeyRef.Key)
+	}
+}
+
+func TestBuildStatefulSet_TailscaleDisabled(t *testing.T) {
+	instance := newTestInstance("ts-disabled")
+
+	sts := BuildStatefulSet(instance)
+	main := sts.Spec.Template.Spec.Containers[0]
+
+	for _, env := range main.Env {
+		if env.Name == "TS_AUTHKEY" || env.Name == "TS_HOSTNAME" {
+			t.Errorf("unexpected Tailscale env var %s when Tailscale is disabled", env.Name)
+		}
+	}
+}
+
+func TestBuildNetworkPolicy_TailscaleEgress(t *testing.T) {
+	instance := newTestInstance("ts-np")
+	instance.Spec.Tailscale.Enabled = true
+
+	np := BuildNetworkPolicy(instance)
+
+	// Default egress: DNS (0), HTTPS (1), Tailscale STUN+WireGuard (2)
+	if len(np.Spec.Egress) < 3 {
+		t.Fatalf("expected at least 3 egress rules, got %d", len(np.Spec.Egress))
+	}
+
+	tsRule := np.Spec.Egress[2]
+	if len(tsRule.Ports) != 2 {
+		t.Fatalf("expected 2 Tailscale egress ports, got %d", len(tsRule.Ports))
+	}
+
+	foundSTUN := false
+	foundWG := false
+	for _, p := range tsRule.Ports {
+		if p.Protocol != nil && *p.Protocol == corev1.ProtocolUDP && p.Port != nil {
+			switch p.Port.IntValue() {
+			case 3478:
+				foundSTUN = true
+			case 41641:
+				foundWG = true
+			}
+		}
+	}
+	if !foundSTUN {
+		t.Error("expected STUN egress rule (UDP 3478)")
+	}
+	if !foundWG {
+		t.Error("expected WireGuard egress rule (UDP 41641)")
+	}
+}
+
+func TestBuildNetworkPolicy_TailscaleDisabled(t *testing.T) {
+	instance := newTestInstance("ts-np-off")
+
+	np := BuildNetworkPolicy(instance)
+
+	// Default egress: DNS (0), HTTPS (1) - no Tailscale rules
+	if len(np.Spec.Egress) != 2 {
+		t.Errorf("expected 2 egress rules when Tailscale is disabled, got %d", len(np.Spec.Egress))
+	}
+
+	for _, rule := range np.Spec.Egress {
+		for _, p := range rule.Ports {
+			if p.Protocol != nil && *p.Protocol == corev1.ProtocolUDP && p.Port != nil {
+				if p.Port.IntValue() == 3478 || p.Port.IntValue() == 41641 {
+					t.Errorf("unexpected Tailscale egress port %d when disabled", p.Port.IntValue())
+				}
+			}
+		}
+	}
+}
+
+func TestBuildStatefulSet_Idempotent_WithTailscale(t *testing.T) {
+	instance := newTestInstance("idempotent-ts")
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{Raw: []byte(`{"key":"val"}`)},
+	}
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.Mode = "serve"
+	instance.Spec.Tailscale.AuthKeySecretRef = &corev1.LocalObjectReference{Name: "ts-auth"}
+	instance.Spec.Tailscale.Hostname = "my-ts-host"
+
+	dep1 := BuildStatefulSet(instance)
+	dep2 := BuildStatefulSet(instance)
+
+	b1, _ := json.Marshal(dep1.Spec)
+	b2, _ := json.Marshal(dep2.Spec)
+
+	if !bytes.Equal(b1, b2) {
+		t.Error("BuildStatefulSet with Tailscale is not idempotent")
+	}
+}
+
+func TestConfigHash_ChangesWithTailscale(t *testing.T) {
+	instance := newTestInstance("hash-ts")
+
+	sts1 := BuildStatefulSet(instance)
+	hash1 := sts1.Spec.Template.Annotations["openclaw.rocks/config-hash"]
+
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.Mode = "serve"
+
+	sts2 := BuildStatefulSet(instance)
+	hash2 := sts2.Spec.Template.Annotations["openclaw.rocks/config-hash"]
+
+	if hash1 == hash2 {
+		t.Error("config hash should change when Tailscale is enabled")
+	}
+}
+
+func TestBuildConfigMap_TailscaleDefaultMode(t *testing.T) {
+	instance := newTestInstance("ts-default-mode")
+	instance.Spec.Tailscale.Enabled = true
+	// Mode is empty - should default to "serve"
+
+	cm := BuildConfigMap(instance, "")
+	content := cm.Data["openclaw.json"]
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config JSON: %v", err)
+	}
+
+	gw := parsed["gateway"].(map[string]interface{})
+	ts := gw["tailscale"].(map[string]interface{})
+
+	if ts["mode"] != "serve" {
+		t.Errorf("expected default mode=serve, got %v", ts["mode"])
+	}
+}
+
+func TestBuildConfigMap_TailscaleNoAuthSSO(t *testing.T) {
+	instance := newTestInstance("ts-no-sso")
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.AuthSSO = false
+
+	cm := BuildConfigMap(instance, "")
+	content := cm.Data["openclaw.json"]
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config JSON: %v", err)
+	}
+
+	gw := parsed["gateway"].(map[string]interface{})
+	if auth, ok := gw["auth"].(map[string]interface{}); ok {
+		if _, hasAllowTS := auth["allowTailscale"]; hasAllowTS {
+			t.Error("auth.allowTailscale should not be set when AuthSSO is disabled")
+		}
+	}
+}

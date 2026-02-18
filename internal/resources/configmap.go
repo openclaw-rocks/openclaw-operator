@@ -46,6 +46,11 @@ func BuildConfigMap(instance *openclawv1alpha1.OpenClawInstance, gatewayToken st
 			configBytes = enriched
 		}
 	}
+	if instance.Spec.Tailscale.Enabled {
+		if enriched, err := enrichConfigWithTailscale(configBytes, instance); err == nil {
+			configBytes = enriched
+		}
+	}
 	if enriched, err := enrichConfigWithGatewayBind(configBytes); err == nil {
 		configBytes = enriched
 	}
@@ -169,6 +174,54 @@ func enrichConfigWithGatewayAuth(configJSON []byte, token string) ([]byte, error
 	gw["auth"] = auth
 	config["gateway"] = gw
 
+	return json.Marshal(config)
+}
+
+// enrichConfigWithTailscale injects gateway.tailscale settings into the config JSON.
+// Sets gateway.tailscale.mode and gateway.tailscale.resetOnExit.
+// If authSSO is enabled, also sets gateway.auth.allowTailscale=true.
+// Does not override user-set values.
+func enrichConfigWithTailscale(configJSON []byte, instance *openclawv1alpha1.OpenClawInstance) ([]byte, error) {
+	var config map[string]interface{}
+	if err := json.Unmarshal(configJSON, &config); err != nil {
+		return configJSON, nil
+	}
+
+	gw, _ := config["gateway"].(map[string]interface{})
+	if gw == nil {
+		gw = make(map[string]interface{})
+	}
+
+	// Set tailscale config (respect user overrides)
+	ts, _ := gw["tailscale"].(map[string]interface{})
+	if ts == nil {
+		ts = make(map[string]interface{})
+	}
+	if _, ok := ts["mode"]; !ok {
+		mode := instance.Spec.Tailscale.Mode
+		if mode == "" {
+			mode = TailscaleModeServe
+		}
+		ts["mode"] = mode
+	}
+	if _, ok := ts["resetOnExit"]; !ok {
+		ts["resetOnExit"] = true
+	}
+	gw["tailscale"] = ts
+
+	// Set gateway.auth.allowTailscale when AuthSSO is enabled
+	if instance.Spec.Tailscale.AuthSSO {
+		auth, _ := gw["auth"].(map[string]interface{})
+		if auth == nil {
+			auth = make(map[string]interface{})
+		}
+		if _, ok := auth["allowTailscale"]; !ok {
+			auth["allowTailscale"] = true
+		}
+		gw["auth"] = auth
+	}
+
+	config["gateway"] = gw
 	return json.Marshal(config)
 }
 

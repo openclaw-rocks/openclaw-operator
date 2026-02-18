@@ -54,6 +54,12 @@ const (
 
 	// GatewayTokenSecretKey is the data key used in the gateway token Secret
 	GatewayTokenSecretKey = "token"
+
+	// DefaultTailscaleAuthKeySecretKey is the default key in the Tailscale auth key Secret
+	DefaultTailscaleAuthKeySecretKey = "authkey"
+
+	// TailscaleModeServe is the default Tailscale mode (tailnet-only access)
+	TailscaleModeServe = "serve"
 )
 
 // Labels returns the standard labels for an OpenClawInstance

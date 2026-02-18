@@ -165,6 +165,23 @@ func buildEgressRules(instance *openclawv1alpha1.OpenClawInstance) []networkingv
 		},
 	})
 
+	// Allow Tailscale STUN and WireGuard egress when enabled
+	if instance.Spec.Tailscale.Enabled {
+		rules = append(rules, networkingv1.NetworkPolicyEgressRule{
+			To: []networkingv1.NetworkPolicyPeer{},
+			Ports: []networkingv1.NetworkPolicyPort{
+				{
+					Protocol: Ptr(corev1.ProtocolUDP),
+					Port:     Ptr(intstr.FromInt(3478)),
+				},
+				{
+					Protocol: Ptr(corev1.ProtocolUDP),
+					Port:     Ptr(intstr.FromInt(41641)),
+				},
+			},
+		})
+	}
+
 	// Allow additional egress CIDRs if specified
 	for _, cidr := range instance.Spec.Security.NetworkPolicy.AllowedEgressCIDRs {
 		rules = append(rules, networkingv1.NetworkPolicyEgressRule{

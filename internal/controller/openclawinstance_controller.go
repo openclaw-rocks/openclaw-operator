@@ -950,6 +950,11 @@ func (r *OpenClawInstanceReconciler) computeSecretHash(ctx context.Context, inst
 	}
 	secretNames = append(secretNames, gwSecretName)
 
+	// Include the Tailscale auth key Secret so rotations trigger a pod rollout
+	if instance.Spec.Tailscale.Enabled && instance.Spec.Tailscale.AuthKeySecretRef != nil {
+		secretNames = append(secretNames, instance.Spec.Tailscale.AuthKeySecretRef.Name)
+	}
+
 	if len(secretNames) == 0 {
 		return "", nil, nil
 	}
@@ -1006,6 +1011,11 @@ func (r *OpenClawInstanceReconciler) findInstancesForSecret(ctx context.Context,
 			}
 		}
 		if !matched && instance.Spec.Gateway.ExistingSecret == secret.Name {
+			matched = true
+		}
+		if !matched && instance.Spec.Tailscale.Enabled &&
+			instance.Spec.Tailscale.AuthKeySecretRef != nil &&
+			instance.Spec.Tailscale.AuthKeySecretRef.Name == secret.Name {
 			matched = true
 		}
 		if matched {

@@ -284,6 +284,35 @@ func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecre
 		})
 	}
 
+	// Tailscale auth key injection
+	if instance.Spec.Tailscale.Enabled && instance.Spec.Tailscale.AuthKeySecretRef != nil {
+		secretKey := instance.Spec.Tailscale.AuthKeySecretKey
+		if secretKey == "" {
+			secretKey = DefaultTailscaleAuthKeySecretKey
+		}
+		env = append(env, corev1.EnvVar{
+			Name: "TS_AUTHKEY",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: *instance.Spec.Tailscale.AuthKeySecretRef,
+					Key:                  secretKey,
+				},
+			},
+		})
+	}
+
+	// Tailscale hostname
+	if instance.Spec.Tailscale.Enabled {
+		hostname := instance.Spec.Tailscale.Hostname
+		if hostname == "" {
+			hostname = instance.Name
+		}
+		env = append(env, corev1.EnvVar{
+			Name:  "TS_HOSTNAME",
+			Value: hostname,
+		})
+	}
+
 	// Prepend runtime deps bin directory to PATH so pnpm/python are discoverable
 	if instance.Spec.RuntimeDeps.Pnpm || instance.Spec.RuntimeDeps.Python {
 		env = append(env, corev1.EnvVar{
@@ -1161,6 +1190,10 @@ func calculateConfigHash(instance *openclawv1alpha1.OpenClawInstance) string {
 	if instance.Spec.RuntimeDeps.Pnpm || instance.Spec.RuntimeDeps.Python {
 		rdData, _ := json.Marshal(instance.Spec.RuntimeDeps)
 		h.Write(rdData)
+	}
+	if instance.Spec.Tailscale.Enabled {
+		tsData, _ := json.Marshal(instance.Spec.Tailscale)
+		h.Write(tsData)
 	}
 	return hex.EncodeToString(h.Sum(nil)[:8])
 }

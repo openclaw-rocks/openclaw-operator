@@ -54,6 +54,10 @@ type OpenClawInstanceSpec struct {
 	// +optional
 	Chromium ChromiumSpec `json:"chromium,omitempty"`
 
+	// Tailscale configures Tailscale integration for tailnet access and HTTPS
+	// +optional
+	Tailscale TailscaleSpec `json:"tailscale,omitempty"`
+
 	// InitContainers is a list of additional init containers to run before the main container.
 	// They run after the operator-managed init-config and init-skills containers.
 	// +kubebuilder:validation:MaxItems=10
@@ -447,6 +451,45 @@ type ChromiumImageSpec struct {
 	// Digest is the container image digest for supply chain security
 	// +optional
 	Digest string `json:"digest,omitempty"`
+}
+
+// TailscaleSpec configures Tailscale integration for secure tailnet access.
+// When enabled, the operator merges gateway.tailscale settings into the
+// OpenClaw config and injects the auth key.
+type TailscaleSpec struct {
+	// Enabled enables Tailscale integration
+	// +kubebuilder:default=false
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
+
+	// Mode selects the Tailscale mode.
+	// "serve" exposes the instance to tailnet members only (default).
+	// "funnel" exposes the instance to the public internet via Tailscale Funnel.
+	// +kubebuilder:validation:Enum=serve;funnel
+	// +kubebuilder:default="serve"
+	// +optional
+	Mode string `json:"mode,omitempty"`
+
+	// AuthKeySecretRef references a Secret containing the Tailscale auth key.
+	// The Secret must have a key matching AuthKeySecretKey (default: "authkey").
+	// Use ephemeral+reusable keys from the Tailscale admin console.
+	// +optional
+	AuthKeySecretRef *corev1.LocalObjectReference `json:"authKeySecretRef,omitempty"`
+
+	// AuthKeySecretKey is the key in the referenced Secret.
+	// +kubebuilder:default="authkey"
+	// +optional
+	AuthKeySecretKey string `json:"authKeySecretKey,omitempty"`
+
+	// Hostname sets the Tailscale device name (defaults to instance name).
+	// +optional
+	Hostname string `json:"hostname,omitempty"`
+
+	// AuthSSO enables passwordless login for tailnet members.
+	// Sets gateway.auth.allowTailscale=true in the OpenClaw config.
+	// +kubebuilder:default=false
+	// +optional
+	AuthSSO bool `json:"authSSO,omitempty"`
 }
 
 // NetworkingSpec defines network-related configuration
