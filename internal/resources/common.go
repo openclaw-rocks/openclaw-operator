@@ -31,7 +31,7 @@ const (
 	ChromiumPort = 9222
 
 	// JqImage is the image used for jq-based config merge operations
-	JqImage = "ghcr.io/jqlang/jq:1.7.1"
+	JqImage = "ghcr.io/jqlang/jq:1.7.1-alpine"
 
 	// ConfigMergeModeMerge is the merge mode that deep-merges config with existing PVC config
 	ConfigMergeModeMerge = "merge"
@@ -43,7 +43,7 @@ const (
 	DefaultCABundleKey = "ca-bundle.crt"
 
 	// UvImage is the image used for Python/uv runtime dependency installation
-	UvImage = "ghcr.io/astral-sh/uv:0.6"
+	UvImage = "ghcr.io/astral-sh/uv:0.6-debian"
 
 	// RuntimeDepsLocalBin is the path where runtime dependency binaries are installed on the PVC
 	RuntimeDepsLocalBin = "/home/openclaw/.openclaw/.local/bin"
