@@ -130,6 +130,21 @@ var _ = Describe("Backup on Delete", func() {
 				err := k8sClient.Get(ctx, instanceKey, inst)
 				return err != nil // NotFound means deleted
 			}, timeout, interval).Should(BeTrue())
+
+			// Re-create the B2 secret so subsequent tests that need it are not affected
+			b2SecretRestore := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      BackupSecretName,
+					Namespace: "default",
+				},
+				Data: map[string][]byte{
+					"B2_BUCKET":   []byte("test-bucket"),
+					"B2_KEY_ID":   []byte("key123"),
+					"B2_APP_KEY":  []byte("secret456"),
+					"B2_ENDPOINT": []byte("https://s3.example.com"),
+				},
+			}
+			Expect(k8sClient.Create(ctx, b2SecretRestore)).Should(Succeed())
 		})
 	})
 
