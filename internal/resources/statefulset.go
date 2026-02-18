@@ -920,7 +920,7 @@ func buildOllamaModelPullInitContainer(instance *openclawv1alpha1.OpenClawInstan
 	for _, model := range instance.Spec.Ollama.Models {
 		pullCmds = append(pullCmds, fmt.Sprintf("ollama pull %s", shellQuote(model)))
 	}
-	script := fmt.Sprintf("ollama serve & sleep 2 && %s && kill %%1", strings.Join(pullCmds, " && "))
+	script := fmt.Sprintf("ollama serve & sleep 2 && %s; kill %%1 2>/dev/null; exit 0", strings.Join(pullCmds, " && "))
 
 	repo := instance.Spec.Ollama.Image.Repository
 	if repo == "" {

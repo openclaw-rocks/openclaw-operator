@@ -5262,7 +5262,7 @@ func TestBuildStatefulSet_OllamaEnabled_WithModels(t *testing.T) {
 	if !strings.Contains(cmd, "ollama serve") {
 		t.Errorf("init-ollama command should start ollama serve, got: %s", cmd)
 	}
-	if !strings.Contains(cmd, "kill %1") {
+	if !strings.Contains(cmd, "kill %1 2>/dev/null; exit 0") {
 		t.Errorf("init-ollama command should kill server, got: %s", cmd)
 	}
 
