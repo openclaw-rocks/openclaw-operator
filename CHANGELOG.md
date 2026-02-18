@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.11](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.10...v0.9.11) (2026-02-18)
+
+
+### Bug Fixes
+
+* resolve flaky backup/restore tests and autorelease label API ([#117](https://github.com/openclaw-rocks/k8s-operator/issues/117)) ([da7a2a5](https://github.com/openclaw-rocks/k8s-operator/commit/da7a2a58f0cb82bac091e954179efdd4827d2b78))
+
 ## [0.9.10](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.9...v0.9.10) (2026-02-18)
 
 
