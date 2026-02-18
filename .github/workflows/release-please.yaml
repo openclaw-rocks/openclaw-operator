@@ -69,9 +69,10 @@ jobs:
 
           for PR in $STALE_PRS; do
             echo "Fixing stale label on PR #${PR}"
-            gh pr edit "$PR" \
-              --remove-label "autorelease: pending" \
-              --add-label "autorelease: tagged" || true
+            gh api "repos/${{ github.repository }}/issues/${PR}/labels/autorelease:%20pending" \
+              -X DELETE || true
+            gh api "repos/${{ github.repository }}/issues/${PR}/labels" \
+              -f "labels[]=autorelease: tagged" || true
           done
 
           if [ -z "$STALE_PRS" ]; then
