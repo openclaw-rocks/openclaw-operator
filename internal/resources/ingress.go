@@ -18,11 +18,21 @@ package resources
 
 import (
 	"strconv"
+	"strings"
 
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+)
+
+// IngressProvider represents the detected ingress controller type
+type IngressProvider string
+
+const (
+	IngressProviderNginx   IngressProvider = "nginx"
+	IngressProviderTraefik IngressProvider = "traefik"
+	IngressProviderUnknown IngressProvider = "unknown"
 )
 
 // BuildIngress creates an Ingress for the OpenClawInstance
@@ -47,7 +57,27 @@ func BuildIngress(instance *openclawv1alpha1.OpenClawInstance) *networkingv1.Ing
 	return ingress
 }
 
-// buildIngressAnnotations creates annotations for the Ingress with security settings
+// DetectIngressProvider determines the ingress controller type from the className.
+// Returns IngressProviderNginx if className contains "nginx" (case-insensitive),
+// IngressProviderTraefik if it contains "traefik", or IngressProviderUnknown otherwise.
+func DetectIngressProvider(className *string) IngressProvider {
+	if className == nil {
+		return IngressProviderUnknown
+	}
+	lower := strings.ToLower(*className)
+	if strings.Contains(lower, "nginx") {
+		return IngressProviderNginx
+	}
+	if strings.Contains(lower, "traefik") {
+		return IngressProviderTraefik
+	}
+	return IngressProviderUnknown
+}
+
+// buildIngressAnnotations creates annotations for the Ingress with security settings.
+// Annotations are provider-aware: only nginx-specific annotations are emitted for nginx,
+// only traefik-specific annotations for traefik. Unknown/nil providers get no provider-specific
+// annotations — users can still add their own via spec.networking.ingress.annotations.
 func buildIngressAnnotations(instance *openclawv1alpha1.OpenClawInstance) map[string]string {
 	annotations := map[string]string{}
 
@@ -56,44 +86,50 @@ func buildIngressAnnotations(instance *openclawv1alpha1.OpenClawInstance) map[st
 		annotations[k] = v
 	}
 
+	provider := DetectIngressProvider(instance.Spec.Networking.Ingress.ClassName)
+	emitNginx := provider == IngressProviderNginx
+	emitTraefik := provider == IngressProviderTraefik
+
 	// Apply security settings
 	security := instance.Spec.Networking.Ingress.Security
 
 	// Force HTTPS redirect
 	forceHTTPS := security.ForceHTTPS == nil || *security.ForceHTTPS
 	if forceHTTPS {
-		// nginx ingress controller
-		annotations["nginx.ingress.kubernetes.io/ssl-redirect"] = "true"
-		annotations["nginx.ingress.kubernetes.io/force-ssl-redirect"] = "true"
-		// traefik
-		annotations["traefik.ingress.kubernetes.io/router.middlewares"] = instance.Namespace + "-redirect-https@kubernetescrd"
+		if emitNginx {
+			annotations["nginx.ingress.kubernetes.io/ssl-redirect"] = "true"
+			annotations["nginx.ingress.kubernetes.io/force-ssl-redirect"] = "true"
+		}
+		if emitTraefik {
+			annotations["traefik.ingress.kubernetes.io/router.entrypoints"] = "websecure"
+		}
 	}
 
-	// Enable HSTS
+	// Enable HSTS (nginx only — traefik HSTS requires a Middleware CRD)
 	enableHSTS := security.EnableHSTS == nil || *security.EnableHSTS
-	if enableHSTS {
-		// nginx ingress controller
+	if enableHSTS && emitNginx {
 		annotations["nginx.ingress.kubernetes.io/configuration-snippet"] = `more_set_headers "Strict-Transport-Security: max-age=31536000; includeSubDomains";`
 	}
 
-	// Rate limiting
+	// Rate limiting (nginx only — traefik rate limiting requires a Middleware CRD)
 	if security.RateLimiting != nil {
 		enabled := security.RateLimiting.Enabled == nil || *security.RateLimiting.Enabled
-		if enabled {
+		if enabled && emitNginx {
 			rps := int32(10)
 			if security.RateLimiting.RequestsPerSecond != nil {
 				rps = *security.RateLimiting.RequestsPerSecond
 			}
-			// nginx ingress controller
 			annotations["nginx.ingress.kubernetes.io/limit-rps"] = strconv.Itoa(int(rps))
 		}
 	}
 
-	// WebSocket support (required for OpenClaw gateway)
-	annotations["nginx.ingress.kubernetes.io/proxy-read-timeout"] = "3600"
-	annotations["nginx.ingress.kubernetes.io/proxy-send-timeout"] = "3600"
-	annotations["nginx.ingress.kubernetes.io/proxy-http-version"] = "1.1"
-	annotations["nginx.ingress.kubernetes.io/upstream-hash-by"] = "$binary_remote_addr"
+	// WebSocket support (nginx only — traefik auto-detects WebSocket upgrades)
+	if emitNginx {
+		annotations["nginx.ingress.kubernetes.io/proxy-read-timeout"] = "3600"
+		annotations["nginx.ingress.kubernetes.io/proxy-send-timeout"] = "3600"
+		annotations["nginx.ingress.kubernetes.io/proxy-http-version"] = "1.1"
+		annotations["nginx.ingress.kubernetes.io/upstream-hash-by"] = "$binary_remote_addr"
+	}
 
 	return annotations
 }

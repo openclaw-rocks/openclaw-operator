@@ -27,6 +27,7 @@ import (
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -248,6 +249,185 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			Expect(gw["bind"]).To(Equal("lan"), "gateway.bind should be lan")
 
 			// Clean up via owner-reference garbage collection
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+	})
+
+	Context("When creating an OpenClawInstance with Ingress", func() {
+		var namespace string
+
+		BeforeEach(func() {
+			namespace = "test-ingress-" + time.Now().Format("20060102150405")
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: namespace,
+				},
+			}
+			Expect(k8sClient.Create(ctx, ns)).Should(Succeed())
+		})
+
+		AfterEach(func() {
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: namespace,
+				},
+			}
+			_ = k8sClient.Delete(ctx, ns)
+		})
+
+		It("Should emit only nginx annotations for nginx className", func() {
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instanceName := "ingress-nginx"
+			className := "nginx"
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					Networking: openclawv1alpha1.NetworkingSpec{
+						Ingress: openclawv1alpha1.IngressSpec{
+							Enabled:   true,
+							ClassName: &className,
+							Hosts: []openclawv1alpha1.IngressHost{
+								{Host: "test.example.com"},
+							},
+						},
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			ingress := &networkingv1.Ingress{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.IngressName(instance),
+					Namespace: namespace,
+				}, ingress)
+			}, timeout, interval).Should(Succeed())
+
+			ann := ingress.Annotations
+			Expect(ann).To(HaveKey("nginx.ingress.kubernetes.io/ssl-redirect"))
+			Expect(ann).To(HaveKey("nginx.ingress.kubernetes.io/proxy-read-timeout"))
+			Expect(ann).NotTo(HaveKey("traefik.ingress.kubernetes.io/router.entrypoints"))
+			Expect(ann).NotTo(HaveKey("traefik.ingress.kubernetes.io/router.middlewares"))
+
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+
+		It("Should emit only traefik annotations for traefik className", func() {
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instanceName := "ingress-traefik"
+			className := "traefik"
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					Networking: openclawv1alpha1.NetworkingSpec{
+						Ingress: openclawv1alpha1.IngressSpec{
+							Enabled:   true,
+							ClassName: &className,
+							Hosts: []openclawv1alpha1.IngressHost{
+								{Host: "test.example.com"},
+							},
+						},
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			ingress := &networkingv1.Ingress{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.IngressName(instance),
+					Namespace: namespace,
+				}, ingress)
+			}, timeout, interval).Should(Succeed())
+
+			ann := ingress.Annotations
+			Expect(ann).To(HaveKeyWithValue("traefik.ingress.kubernetes.io/router.entrypoints", "websecure"))
+			Expect(ann).NotTo(HaveKey("nginx.ingress.kubernetes.io/ssl-redirect"))
+			Expect(ann).NotTo(HaveKey("nginx.ingress.kubernetes.io/proxy-read-timeout"))
+			Expect(ann).NotTo(HaveKey("traefik.ingress.kubernetes.io/router.middlewares"))
+
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+
+		It("Should emit no provider-specific annotations when className is nil", func() {
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instanceName := "ingress-nil-class"
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					Networking: openclawv1alpha1.NetworkingSpec{
+						Ingress: openclawv1alpha1.IngressSpec{
+							Enabled: true,
+							// ClassName intentionally nil
+							Hosts: []openclawv1alpha1.IngressHost{
+								{Host: "test.example.com"},
+							},
+						},
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			ingress := &networkingv1.Ingress{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.IngressName(instance),
+					Namespace: namespace,
+				}, ingress)
+			}, timeout, interval).Should(Succeed())
+
+			ann := ingress.Annotations
+			// No provider-specific annotations for nil className
+			Expect(ann).NotTo(HaveKey("nginx.ingress.kubernetes.io/ssl-redirect"))
+			Expect(ann).NotTo(HaveKey("nginx.ingress.kubernetes.io/proxy-read-timeout"))
+			Expect(ann).NotTo(HaveKey("traefik.ingress.kubernetes.io/router.entrypoints"))
+			Expect(ann).NotTo(HaveKey("traefik.ingress.kubernetes.io/router.middlewares"))
+
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})
 	})

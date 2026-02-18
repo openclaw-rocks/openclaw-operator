@@ -2084,44 +2084,27 @@ func TestBuildIngress_DefaultAnnotations(t *testing.T) {
 	ing := BuildIngress(instance)
 	ann := ing.Annotations
 
-	// Force HTTPS (default: true)
-	if ann["nginx.ingress.kubernetes.io/ssl-redirect"] != "true" {
-		t.Error("ssl-redirect should be true by default")
+	// No className = unknown provider = no provider-specific annotations
+	if _, ok := ann["nginx.ingress.kubernetes.io/ssl-redirect"]; ok {
+		t.Error("nginx annotations should not be emitted for unknown provider")
 	}
-	if ann["nginx.ingress.kubernetes.io/force-ssl-redirect"] != "true" {
-		t.Error("force-ssl-redirect should be true by default")
+	if _, ok := ann["traefik.ingress.kubernetes.io/router.entrypoints"]; ok {
+		t.Error("traefik annotations should not be emitted for unknown provider")
 	}
-
-	// HSTS (default: true)
-	if _, ok := ann["nginx.ingress.kubernetes.io/configuration-snippet"]; !ok {
-		t.Error("HSTS configuration snippet should be present by default")
+	if _, ok := ann["traefik.ingress.kubernetes.io/router.middlewares"]; ok {
+		t.Error("router.middlewares annotation should never be emitted")
 	}
-
-	// WebSocket support
-	if ann["nginx.ingress.kubernetes.io/proxy-read-timeout"] != "3600" {
-		t.Error("proxy-read-timeout should be 3600")
-	}
-	if ann["nginx.ingress.kubernetes.io/proxy-send-timeout"] != "3600" {
-		t.Error("proxy-send-timeout should be 3600")
-	}
-	if ann["nginx.ingress.kubernetes.io/proxy-http-version"] != "1.1" {
-		t.Error("proxy-http-version should be 1.1")
-	}
-	if ann["nginx.ingress.kubernetes.io/upstream-hash-by"] != "$binary_remote_addr" {
-		t.Error("upstream-hash-by should be $binary_remote_addr")
-	}
-
-	// Traefik annotation for HTTPS redirect
-	expectedTraefik := "test-ns-redirect-https@kubernetescrd"
-	if ann["traefik.ingress.kubernetes.io/router.middlewares"] != expectedTraefik {
-		t.Errorf("traefik middleware = %q, want %q", ann["traefik.ingress.kubernetes.io/router.middlewares"], expectedTraefik)
+	if _, ok := ann["nginx.ingress.kubernetes.io/proxy-read-timeout"]; ok {
+		t.Error("nginx WebSocket annotations should not be emitted for unknown provider")
 	}
 }
 
 func TestBuildIngress_SecurityDisabled(t *testing.T) {
 	instance := newTestInstance("ing-nosec")
+	className := "nginx"
 	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
-		Enabled: true,
+		Enabled:   true,
+		ClassName: &className,
 		Hosts: []openclawv1alpha1.IngressHost{
 			{Host: "test.example.com"},
 		},
@@ -2143,8 +2126,11 @@ func TestBuildIngress_SecurityDisabled(t *testing.T) {
 	if _, ok := ann["nginx.ingress.kubernetes.io/configuration-snippet"]; ok {
 		t.Error("HSTS configuration snippet should not be set when EnableHSTS is false")
 	}
+	if _, ok := ann["traefik.ingress.kubernetes.io/router.entrypoints"]; ok {
+		t.Error("traefik annotations should not be emitted for nginx provider")
+	}
 
-	// WebSocket annotations should still be present
+	// WebSocket annotations should still be present for nginx provider
 	if ann["nginx.ingress.kubernetes.io/proxy-read-timeout"] != "3600" {
 		t.Error("proxy-read-timeout should still be 3600")
 	}
@@ -2154,7 +2140,8 @@ func TestBuildIngress_RateLimiting(t *testing.T) {
 	instance := newTestInstance("ing-rl")
 	rps := int32(20)
 	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
-		Enabled: true,
+		Enabled:   true,
+		ClassName: Ptr("nginx"),
 		Hosts: []openclawv1alpha1.IngressHost{
 			{Host: "test.example.com"},
 		},
@@ -2176,7 +2163,8 @@ func TestBuildIngress_RateLimiting(t *testing.T) {
 func TestBuildIngress_RateLimitingDefault(t *testing.T) {
 	instance := newTestInstance("ing-rl-default")
 	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
-		Enabled: true,
+		Enabled:   true,
+		ClassName: Ptr("nginx"),
 		Hosts: []openclawv1alpha1.IngressHost{
 			{Host: "test.example.com"},
 		},
@@ -2198,7 +2186,8 @@ func TestBuildIngress_RateLimitingDefault(t *testing.T) {
 func TestBuildIngress_RateLimitingDisabled(t *testing.T) {
 	instance := newTestInstance("ing-rl-off")
 	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
-		Enabled: true,
+		Enabled:   true,
+		ClassName: Ptr("nginx"),
 		Hosts: []openclawv1alpha1.IngressHost{
 			{Host: "test.example.com"},
 		},
@@ -2219,8 +2208,10 @@ func TestBuildIngress_RateLimitingDisabled(t *testing.T) {
 
 func TestBuildIngress_CustomAnnotations(t *testing.T) {
 	instance := newTestInstance("ing-custom-ann")
+	className := "nginx"
 	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
-		Enabled: true,
+		Enabled:   true,
+		ClassName: &className,
 		Annotations: map[string]string{
 			"custom-key": "custom-value",
 		},
@@ -2234,9 +2225,9 @@ func TestBuildIngress_CustomAnnotations(t *testing.T) {
 	if ing.Annotations["custom-key"] != "custom-value" {
 		t.Error("custom annotation not preserved")
 	}
-	// Default annotations should still be present
+	// Provider annotations should coexist with custom annotations
 	if ing.Annotations["nginx.ingress.kubernetes.io/proxy-http-version"] != "1.1" {
-		t.Error("default annotations should coexist with custom annotations")
+		t.Error("nginx annotations should coexist with custom annotations")
 	}
 }
 
@@ -2326,6 +2317,169 @@ func TestBuildIngress_NoHosts(t *testing.T) {
 
 	if len(ing.Spec.Rules) != 0 {
 		t.Errorf("expected 0 rules with no hosts, got %d", len(ing.Spec.Rules))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Provider detection tests
+// ---------------------------------------------------------------------------
+
+func TestDetectIngressProvider(t *testing.T) {
+	tests := []struct {
+		name     string
+		class    *string
+		expected IngressProvider
+	}{
+		{"nil className", nil, IngressProviderUnknown},
+		{"nginx", Ptr("nginx"), IngressProviderNginx},
+		{"NGINX uppercase", Ptr("NGINX"), IngressProviderNginx},
+		{"nginx-internal", Ptr("nginx-internal"), IngressProviderNginx},
+		{"traefik", Ptr("traefik"), IngressProviderTraefik},
+		{"Traefik mixed case", Ptr("Traefik"), IngressProviderTraefik},
+		{"traefik-external", Ptr("traefik-external"), IngressProviderTraefik},
+		{"haproxy", Ptr("haproxy"), IngressProviderUnknown},
+		{"empty string", Ptr(""), IngressProviderUnknown},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := DetectIngressProvider(tt.class)
+			if got != tt.expected {
+				t.Errorf("DetectIngressProvider(%v) = %q, want %q", tt.class, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestBuildIngress_NginxProvider(t *testing.T) {
+	instance := newTestInstance("ing-nginx")
+	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+		Enabled:   true,
+		ClassName: Ptr("nginx"),
+		Hosts: []openclawv1alpha1.IngressHost{
+			{Host: "test.example.com"},
+		},
+	}
+
+	ing := BuildIngress(instance)
+	ann := ing.Annotations
+
+	// nginx annotations should be present
+	if ann["nginx.ingress.kubernetes.io/ssl-redirect"] != "true" {
+		t.Error("nginx ssl-redirect should be present")
+	}
+	if ann["nginx.ingress.kubernetes.io/force-ssl-redirect"] != "true" {
+		t.Error("nginx force-ssl-redirect should be present")
+	}
+	if _, ok := ann["nginx.ingress.kubernetes.io/configuration-snippet"]; !ok {
+		t.Error("nginx HSTS snippet should be present")
+	}
+	if ann["nginx.ingress.kubernetes.io/proxy-read-timeout"] != "3600" {
+		t.Error("nginx proxy-read-timeout should be present")
+	}
+
+	// traefik annotations should NOT be present
+	if _, ok := ann["traefik.ingress.kubernetes.io/router.entrypoints"]; ok {
+		t.Error("traefik annotation should not be emitted for nginx provider")
+	}
+	if _, ok := ann["traefik.ingress.kubernetes.io/router.middlewares"]; ok {
+		t.Error("traefik middleware annotation should never be emitted")
+	}
+}
+
+func TestBuildIngress_TraefikProvider(t *testing.T) {
+	instance := newTestInstance("ing-traefik")
+	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+		Enabled:   true,
+		ClassName: Ptr("traefik"),
+		Hosts: []openclawv1alpha1.IngressHost{
+			{Host: "test.example.com"},
+		},
+	}
+
+	ing := BuildIngress(instance)
+	ann := ing.Annotations
+
+	// traefik annotation should be present
+	if ann["traefik.ingress.kubernetes.io/router.entrypoints"] != "websecure" {
+		t.Errorf("traefik router.entrypoints = %q, want %q", ann["traefik.ingress.kubernetes.io/router.entrypoints"], "websecure")
+	}
+
+	// nginx annotations should NOT be present
+	if _, ok := ann["nginx.ingress.kubernetes.io/ssl-redirect"]; ok {
+		t.Error("nginx ssl-redirect should not be emitted for traefik provider")
+	}
+	if _, ok := ann["nginx.ingress.kubernetes.io/force-ssl-redirect"]; ok {
+		t.Error("nginx force-ssl-redirect should not be emitted for traefik provider")
+	}
+	if _, ok := ann["nginx.ingress.kubernetes.io/configuration-snippet"]; ok {
+		t.Error("nginx HSTS snippet should not be emitted for traefik provider")
+	}
+	if _, ok := ann["nginx.ingress.kubernetes.io/proxy-read-timeout"]; ok {
+		t.Error("nginx proxy-read-timeout should not be emitted for traefik provider")
+	}
+	if _, ok := ann["nginx.ingress.kubernetes.io/proxy-send-timeout"]; ok {
+		t.Error("nginx proxy-send-timeout should not be emitted for traefik provider")
+	}
+	if _, ok := ann["nginx.ingress.kubernetes.io/proxy-http-version"]; ok {
+		t.Error("nginx proxy-http-version should not be emitted for traefik provider")
+	}
+	if _, ok := ann["nginx.ingress.kubernetes.io/upstream-hash-by"]; ok {
+		t.Error("nginx upstream-hash-by should not be emitted for traefik provider")
+	}
+
+	// Old middleware annotation must never appear
+	if _, ok := ann["traefik.ingress.kubernetes.io/router.middlewares"]; ok {
+		t.Error("traefik middleware annotation should never be emitted")
+	}
+}
+
+func TestBuildIngress_UnknownProvider(t *testing.T) {
+	instance := newTestInstance("ing-haproxy")
+	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+		Enabled:   true,
+		ClassName: Ptr("haproxy"),
+		Hosts: []openclawv1alpha1.IngressHost{
+			{Host: "test.example.com"},
+		},
+	}
+
+	ing := BuildIngress(instance)
+	ann := ing.Annotations
+
+	// No provider-specific annotations for unknown provider
+	if _, ok := ann["nginx.ingress.kubernetes.io/ssl-redirect"]; ok {
+		t.Error("nginx annotations should not be emitted for unknown provider")
+	}
+	if _, ok := ann["traefik.ingress.kubernetes.io/router.entrypoints"]; ok {
+		t.Error("traefik annotations should not be emitted for unknown provider")
+	}
+	if _, ok := ann["nginx.ingress.kubernetes.io/proxy-read-timeout"]; ok {
+		t.Error("nginx WebSocket annotations should not be emitted for unknown provider")
+	}
+}
+
+func TestBuildIngress_TraefikNoRateLimiting(t *testing.T) {
+	instance := newTestInstance("ing-traefik-rl")
+	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+		Enabled:   true,
+		ClassName: Ptr("traefik"),
+		Hosts: []openclawv1alpha1.IngressHost{
+			{Host: "test.example.com"},
+		},
+		Security: openclawv1alpha1.IngressSecuritySpec{
+			RateLimiting: &openclawv1alpha1.RateLimitingSpec{
+				// Enabled defaults to true
+			},
+		},
+	}
+
+	ing := BuildIngress(instance)
+	ann := ing.Annotations
+
+	// Rate limiting annotation should NOT be emitted for traefik (requires Middleware CRD)
+	if _, ok := ann["nginx.ingress.kubernetes.io/limit-rps"]; ok {
+		t.Error("rate limiting annotation should not be emitted for traefik provider")
 	}
 }
 
