@@ -423,7 +423,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				}, statefulSet)
 			}, timeout, interval).Should(Succeed())
 
-			// Delete the instance — should succeed without B2 credentials
+			// Delete the instance - should succeed without B2 credentials
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 
 			// Instance should be fully garbage collected (finalizer removed)

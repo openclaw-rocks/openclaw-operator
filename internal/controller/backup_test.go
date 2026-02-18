@@ -91,7 +91,7 @@ var _ = Describe("Backup on Delete", func() {
 
 	Context("When deleting an instance without B2 credentials Secret", func() {
 		It("Should remove the finalizer and delete cleanly", func() {
-			// Do NOT create the b2-backup-credentials Secret — it should not exist
+			// Do NOT create the b2-backup-credentials Secret - it should not exist
 			// (the skip-backup test above may have created one; delete it if present)
 			b2Secret := &corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{

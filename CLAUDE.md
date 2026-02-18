@@ -108,9 +108,10 @@ Set `controllerutil.SetControllerReference` on all managed resources. This enabl
 ## Coding Conventions
 
 ### Go style
-- Use `0o644` (not `0644`) for octal literals — gocritic lint enforces this
+- Use `0o644` (not `0644`) for octal literals - gocritic lint enforces this
 - Wrap errors: `fmt.Errorf("context: %w", err)`
 - Use the generic `Ptr[T]` helper from `internal/resources/common.go` for pointer values
+- Never use em dashes or en dashes in code, comments, or strings - use regular hyphens/dashes (`-` or `--`) instead
 - Run `make fmt` and `make lint` before committing
 
 ### Commit messages
