@@ -37,6 +37,42 @@ var _ = Describe("Backup on Delete", func() {
 		interval = time.Millisecond * 250
 	)
 
+	// This test MUST run first (before any test creates the B2 secret)
+	// to avoid race conditions with the shared controller.
+	Context("When deleting an instance without B2 credentials Secret", func() {
+		It("Should remove the finalizer and delete cleanly", func() {
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "backup-no-b2-test",
+					Namespace: "default",
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{},
+			}
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			instanceKey := types.NamespacedName{Name: "backup-no-b2-test", Namespace: "default"}
+
+			// Wait for instance to be provisioned (finalizer added)
+			Eventually(func() bool {
+				inst := &openclawv1alpha1.OpenClawInstance{}
+				if err := k8sClient.Get(ctx, instanceKey, inst); err != nil {
+					return false
+				}
+				return inst.Status.Phase != "" && inst.Status.Phase != openclawv1alpha1.PhasePending
+			}, timeout, interval).Should(BeTrue())
+
+			// Delete the instance
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+
+			// The instance should be fully deleted (finalizer removed, no stuck requeue)
+			Eventually(func() bool {
+				inst := &openclawv1alpha1.OpenClawInstance{}
+				err := k8sClient.Get(ctx, instanceKey, inst)
+				return err != nil // NotFound means deleted
+			}, timeout, interval).Should(BeTrue())
+		})
+	})
+
 	Context("When deleting an instance with skip-backup annotation", func() {
 		It("Should remove the finalizer immediately", func() {
 			// Create a B2 credentials secret (needed by controller)
@@ -86,65 +122,6 @@ var _ = Describe("Backup on Delete", func() {
 				err := k8sClient.Get(ctx, instanceKey, inst)
 				return err != nil // NotFound means deleted
 			}, timeout, interval).Should(BeTrue())
-		})
-	})
-
-	Context("When deleting an instance without B2 credentials Secret", func() {
-		It("Should remove the finalizer and delete cleanly", func() {
-			// Do NOT create the b2-backup-credentials Secret - it should not exist
-			// (the skip-backup test above may have created one; delete it if present)
-			b2Secret := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      BackupSecretName,
-					Namespace: "default",
-				},
-			}
-			_ = k8sClient.Delete(ctx, b2Secret)
-
-			instance := &openclawv1alpha1.OpenClawInstance{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "backup-no-b2-test",
-					Namespace: "default",
-				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{},
-			}
-			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
-
-			instanceKey := types.NamespacedName{Name: "backup-no-b2-test", Namespace: "default"}
-
-			// Wait for instance to be provisioned (finalizer added)
-			Eventually(func() bool {
-				inst := &openclawv1alpha1.OpenClawInstance{}
-				if err := k8sClient.Get(ctx, instanceKey, inst); err != nil {
-					return false
-				}
-				return inst.Status.Phase != "" && inst.Status.Phase != openclawv1alpha1.PhasePending
-			}, timeout, interval).Should(BeTrue())
-
-			// Delete the instance
-			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
-
-			// The instance should be fully deleted (finalizer removed, no stuck requeue)
-			Eventually(func() bool {
-				inst := &openclawv1alpha1.OpenClawInstance{}
-				err := k8sClient.Get(ctx, instanceKey, inst)
-				return err != nil // NotFound means deleted
-			}, timeout, interval).Should(BeTrue())
-
-			// Re-create the B2 secret so subsequent tests that need it are not affected
-			b2SecretRestore := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      BackupSecretName,
-					Namespace: "default",
-				},
-				Data: map[string][]byte{
-					"B2_BUCKET":   []byte("test-bucket"),
-					"B2_KEY_ID":   []byte("key123"),
-					"B2_APP_KEY":  []byte("secret456"),
-					"B2_ENDPOINT": []byte("https://s3.example.com"),
-				},
-			}
-			Expect(k8sClient.Create(ctx, b2SecretRestore)).Should(Succeed())
 		})
 	})
 
