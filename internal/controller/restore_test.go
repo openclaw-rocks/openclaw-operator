@@ -68,9 +68,7 @@ var _ = Describe("Restore from Backup", func() {
 				Expect(job.Labels).NotTo(HaveKeyWithValue("openclaw.rocks/job-type", "restore"))
 			}
 
-			// Clean up
-			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
-			// Skip backup for cleanup
+			// Clean up: add skip-backup BEFORE deleting to prevent backup flow
 			Eventually(func() error {
 				inst := &openclawv1alpha1.OpenClawInstance{}
 				if err := k8sClient.Get(ctx, instanceKey, inst); err != nil {
@@ -82,6 +80,12 @@ var _ = Describe("Restore from Backup", func() {
 				inst.Annotations[AnnotationSkipBackup] = "true"
 				return k8sClient.Update(ctx, inst)
 			}, timeout, interval).Should(Succeed())
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+			// Wait for full deletion
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, instanceKey, &openclawv1alpha1.OpenClawInstance{})
+				return err != nil
+			}, timeout, interval).Should(BeTrue())
 		})
 	})
 

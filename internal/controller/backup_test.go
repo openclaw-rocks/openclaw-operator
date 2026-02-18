@@ -37,10 +37,16 @@ var _ = Describe("Backup on Delete", func() {
 		interval = time.Millisecond * 250
 	)
 
-	// This test MUST run first (before any test creates the B2 secret)
-	// to avoid race conditions with the shared controller.
 	Context("When deleting an instance without B2 credentials Secret", func() {
 		It("Should remove the finalizer and delete cleanly", func() {
+			// Ensure B2 secret doesn't exist (may have been created by another test)
+			_ = k8sClient.Delete(ctx, &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      BackupSecretName,
+					Namespace: "default",
+				},
+			})
+
 			instance := &openclawv1alpha1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "backup-no-b2-test",
