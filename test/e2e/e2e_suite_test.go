@@ -73,9 +73,9 @@ var _ = AfterSuite(func() {
 	cancel()
 })
 
-// kubectlExec runs a command inside a container via kubectl exec.
-func kubectlExec(namespace, podName, container string, command ...string) (string, error) {
-	args := []string{"exec", podName, "-n", namespace, "-c", container, "--"}
+// kubectlExec runs a command inside the openclaw container via kubectl exec.
+func kubectlExec(namespace, podName string, command ...string) (string, error) {
+	args := []string{"exec", podName, "-n", namespace, "-c", "openclaw", "--"}
 	args = append(args, command...)
 	cmd := exec.Command("kubectl", args...)
 	out, err := cmd.CombinedOutput()
@@ -935,19 +935,19 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				"openclaw container should be Running")
 
 			// Verify config was written by the postStart hook
-			out, err := kubectlExec(namespace, podName, "openclaw",
+			out, err := kubectlExec(namespace, podName,
 				"cat", "/home/openclaw/.openclaw/openclaw.json")
 			Expect(err).NotTo(HaveOccurred(), "should read config file: %s", out)
 			Expect(out).To(ContainSubstring(`"lan"`),
 				"config should contain gateway.bind=lan from operator enrichment")
 
 			// Corrupt the config file on the PVC
-			_, err = kubectlExec(namespace, podName, "openclaw",
+			_, err = kubectlExec(namespace, podName,
 				"sh", "-c", `echo '{"corrupted":true}' > /home/openclaw/.openclaw/openclaw.json`)
 			Expect(err).NotTo(HaveOccurred(), "should be able to write to PVC")
 
 			// Verify config is corrupted
-			out, err = kubectlExec(namespace, podName, "openclaw",
+			out, err = kubectlExec(namespace, podName,
 				"cat", "/home/openclaw/.openclaw/openclaw.json")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(out).To(ContainSubstring("corrupted"),
@@ -969,17 +969,17 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			// Kill PID 1 to trigger a container restart (not pod recreation).
 			// Init containers do NOT re-run on container restarts - only the
 			// postStart lifecycle hook runs again.
-			_, _ = kubectlExec(namespace, podName, "openclaw", "kill", "-9", "1")
+			_, _ = kubectlExec(namespace, podName, "kill", "-9", "1")
 
 			// Wait for restart count to increase
 			Eventually(func() int32 {
-				pod := &corev1.Pod{}
-				if err := k8sClient.Get(ctx, types.NamespacedName{
+				p := &corev1.Pod{}
+				if getErr := k8sClient.Get(ctx, types.NamespacedName{
 					Name: podName, Namespace: namespace,
-				}, pod); err != nil {
+				}, p); getErr != nil {
 					return -1
 				}
-				for _, cs := range pod.Status.ContainerStatuses {
+				for _, cs := range p.Status.ContainerStatuses {
 					if cs.Name == "openclaw" {
 						return cs.RestartCount
 					}
@@ -990,13 +990,13 @@ var _ = Describe("OpenClawInstance Controller", func() {
 
 			// Wait for container to be Running again (postStart must complete first)
 			Eventually(func() bool {
-				pod := &corev1.Pod{}
-				if err := k8sClient.Get(ctx, types.NamespacedName{
+				p := &corev1.Pod{}
+				if getErr := k8sClient.Get(ctx, types.NamespacedName{
 					Name: podName, Namespace: namespace,
-				}, pod); err != nil {
+				}, p); getErr != nil {
 					return false
 				}
-				for _, cs := range pod.Status.ContainerStatuses {
+				for _, cs := range p.Status.ContainerStatuses {
 					if cs.Name == "openclaw" && cs.State.Running != nil {
 						return true
 					}
@@ -1006,7 +1006,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				"openclaw container should be Running after restart")
 
 			// Verify the postStart hook restored the config
-			out, err = kubectlExec(namespace, podName, "openclaw",
+			out, err = kubectlExec(namespace, podName,
 				"cat", "/home/openclaw/.openclaw/openclaw.json")
 			Expect(err).NotTo(HaveOccurred(),
 				"should read config after restart: %s", out)
