@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.14](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.13...v0.9.14) (2026-02-19)
+
+
+### Bug Fixes
+
+* restore config on container restart via postStart hook ([#128](https://github.com/openclaw-rocks/k8s-operator/issues/128)) ([38ea2c5](https://github.com/openclaw-rocks/k8s-operator/commit/38ea2c53adc1a4ba71bf307780b8c415d18fad6d))
+
 ## [0.9.13](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.12...v0.9.13) (2026-02-19)
 
 
