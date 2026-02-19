@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.13](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.12...v0.9.13) (2026-02-19)
+
+
+### Bug Fixes
+
+* inject browser config for Chromium sidecar ([#126](https://github.com/openclaw-rocks/k8s-operator/issues/126)) ([570344e](https://github.com/openclaw-rocks/k8s-operator/commit/570344e167702092bd7e5640d7c1aff0340e01e1))
+* use copyFileSync instead of renameSync in merge mode init container ([#121](https://github.com/openclaw-rocks/k8s-operator/issues/121)) ([72bd962](https://github.com/openclaw-rocks/k8s-operator/commit/72bd962d492fdfd3ccc525523e3bb6f12de3ac70)), closes [#120](https://github.com/openclaw-rocks/k8s-operator/issues/120)
+
 ## [0.9.12](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.11...v0.9.12) (2026-02-18)
 
 
