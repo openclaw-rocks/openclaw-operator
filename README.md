@@ -45,55 +45,56 @@ The operator reconciles this into a fully managed stack of 9+ Kubernetes resourc
 | **Secure** | Hardened by default | Non-root (UID 1000), read-only root filesystem, all capabilities dropped, seccomp RuntimeDefault, default-deny NetworkPolicy, validating webhook |
 | **Observable** | Built-in metrics | Prometheus metrics, ServiceMonitor integration, structured JSON logging, Kubernetes events |
 | **Flexible** | Provider-agnostic config | Use any AI provider (Anthropic, OpenAI, or others) via environment variables and inline or external config |
-| **Config Modes** | Merge or overwrite | `overwrite` replaces config on restart; `merge` deep-merges with PVC config, preserving runtime changes |
-| **Skills** | Declarative install | Install ClawHub skills via `spec.skills` — the operator runs an init container to fetch them before the agent starts |
+| **Config Modes** | Merge or overwrite | `overwrite` replaces config on restart; `merge` deep-merges with PVC config, preserving runtime changes. Config is restored on every container restart via init container. |
+| **Skills** | Declarative install | Install ClawHub skills via `spec.skills` - the operator runs an init container to fetch them before the agent starts |
 | **Runtime Deps** | pnpm & Python/uv | Built-in init containers install pnpm (via corepack) or Python 3.12 + uv for MCP servers and skills |
 | **Auto-Update** | OCI registry polling | Opt-in version tracking: checks the registry for new semver releases, backs up first, rolls out, and auto-rolls back if the new version fails health checks |
 | **Resilient** | Self-healing lifecycle | PodDisruptionBudgets, health probes, automatic config rollouts via content hashing, 5-minute drift detection |
 | **Backup/Restore** | B2-backed snapshots | Automatic backup to Backblaze B2 on instance deletion; restore into a new instance from any snapshot |
 | **Workspace Seeding** | Initial files & dirs | Pre-populate the workspace with files and directories before the agent starts |
 | **Gateway Auth** | Auto-generated tokens | Automatic gateway token Secret per instance, bypassing mDNS pairing (unusable in k8s) |
-| **Extensible** | Sidecars & init containers | Chromium for browser automation, Ollama for local LLMs, plus custom init containers and sidecars |
+| **Tailscale** | Tailnet access | Expose via Tailscale Serve or Funnel with SSO auth - no Ingress needed |
+| **Extensible** | Sidecars & init containers | Chromium for browser automation, Ollama for local LLMs, Tailscale for tailnet access, plus custom init containers and sidecars |
 | **Cloud Native** | SA annotations & CA bundles | AWS IRSA / GCP Workload Identity via ServiceAccount annotations; CA bundle injection for corporate proxies |
 
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  OpenClawInstance CR                                         │
-│  (your declarative config)                                   │
-└──────────────┬───────────────────────────────────────────────┘
-               │ watch
-               ▼
-┌──────────────────────────────────────────────────────────────┐
-│  OpenClaw Operator                                           │
-│  ┌────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
-│  │ Reconciler │  │   Webhooks   │  │  Prometheus Metrics  │  │
-│  │            │  │  (validate   │  │  (reconcile count,   │  │
-│  │  creates → │  │   & default) │  │   duration, phases)  │  │
-│  └────────────┘  └──────────────┘  └──────────────────────┘  │
-└──────────────┬───────────────────────────────────────────────┘
-               │ manages
-               ▼
-┌──────────────────────────────────────────────────────────────┐
-│  Managed Resources (per instance)                            │
-│                                                              │
-│  ServiceAccount ─► Role ─► RoleBinding    NetworkPolicy      │
-│  ConfigMap        PVC      PDB            ServiceMonitor     │
-│  GatewayToken Secret                                         │
-│                                                              │
-│  StatefulSet                                                 │
-│  ┌────────────────────────────────────────────────────────┐  │
-│  │ Init: config -> pnpm* -> python* -> skills* -> custom  │  │
-│  │                                        (* = opt-in)    │  │
-│  ├────────────────────────────────────────────────────────┤  │
-│  │ OpenClaw Container   Chromium (opt) / Ollama (opt)  │  │
-│  │ (AI agent runtime)   + custom sidecars              │  │
-│  └────────────────────────────────────────────────────────┘  │
-│                                                              │
-│  Service (ports 18789, 18793) ─► Ingress (optional)          │
-└──────────────────────────────────────────────────────────────┘
++-----------------------------------------------------------------+
+|  OpenClawInstance CR                                             |
+|  (your declarative config)                                      |
++---------------+-------------------------------------------------+
+                | watch
+                v
++-----------------------------------------------------------------+
+|  OpenClaw Operator                                              |
+|  +-----------+  +-------------+  +----------------------------+ |
+|  | Reconciler|  |   Webhooks  |  |   Prometheus Metrics       | |
+|  |           |  |  (validate  |  |  (reconcile count,         | |
+|  |  creates ->  |   & default)|  |   duration, phases)        | |
+|  +-----------+  +-------------+  +----------------------------+ |
++---------------+-------------------------------------------------+
+                | manages
+                v
++-----------------------------------------------------------------+
+|  Managed Resources (per instance)                               |
+|                                                                 |
+|  ServiceAccount -> Role -> RoleBinding    NetworkPolicy         |
+|  ConfigMap        PVC      PDB            ServiceMonitor        |
+|  GatewayToken Secret                                            |
+|                                                                 |
+|  StatefulSet                                                    |
+|  +-----------------------------------------------------------+ |
+|  | Init: config -> pnpm* -> python* -> skills* -> custom      | |
+|  |                                        (* = opt-in)        | |
+|  +------------------------------------------------------------+ |
+|  | OpenClaw Container  Chromium (opt) / Ollama (opt)          | |
+|  |                     Tailscale (opt) + custom sidecars      | |
+|  +------------------------------------------------------------+ |
+|                                                                 |
+|  Service (ports 18789, 18793) -> Ingress (optional)             |
++-----------------------------------------------------------------+
 ```
 
 ## Quick Start
@@ -203,10 +204,9 @@ Config changes are detected via SHA-256 hashing and automatically trigger a roll
 
 The operator automatically generates a gateway token Secret for each instance and injects it into both the config JSON (`gateway.auth.mode: token`) and the `OPENCLAW_GATEWAY_TOKEN` env var. This bypasses Bonjour/mDNS pairing, which is unusable in Kubernetes.
 
-- The token is generated once and never overwritten — rotate it by editing the Secret directly
+- The token is generated once and never overwritten - rotate it by editing the Secret directly
 - If you set `gateway.auth.token` in your config or `OPENCLAW_GATEWAY_TOKEN` in `spec.env`, your value takes precedence
-- `OPENCLAW_DISABLE_BONJOUR=1` is always set (mDNS does not work in k8s)
-- To bring your own token Secret, set `spec.gateway.existingSecret` — the operator will use it instead of auto-generating one (the Secret must have a key named `token`)
+- To bring your own token Secret, set `spec.gateway.existingSecret` - the operator will use it instead of auto-generating one (the Secret must have a key named `token`)
 
 ### Chromium sidecar
 
@@ -228,7 +228,10 @@ spec:
         memory: "2Gi"
 ```
 
-When enabled, the operator automatically injects a `CHROMIUM_URL` environment variable into the main container and configures shared memory, security contexts, and health probes for the sidecar.
+When enabled, the operator automatically:
+- Injects a `CHROMIUM_URL` environment variable into the main container
+- Configures browser profiles in the OpenClaw config - both `"default"` and `"chrome"` profiles are set to point at the sidecar's CDP endpoint, so browser tool calls work regardless of which profile name the LLM passes
+- Sets up shared memory, security contexts, and health probes for the sidecar
 
 ### Ollama sidecar
 
@@ -260,6 +263,23 @@ When enabled, the operator:
 - Mounts a model cache volume (emptyDir by default, or an existing PVC via `storage.existingClaim`)
 
 See [Custom AI Providers](docs/custom-providers.md) for configuring OpenClaw to use Ollama models via `llmConfig`.
+
+### Tailscale integration
+
+Expose your instance via [Tailscale](https://tailscale.com) Serve (tailnet-only) or Funnel (public internet) - no Ingress or LoadBalancer needed:
+
+```yaml
+spec:
+  tailscale:
+    enabled: true
+    mode: serve          # "serve" (tailnet only) or "funnel" (public internet)
+    authKeySecretRef:
+      name: tailscale-auth
+    authSSO: true        # allow passwordless login for tailnet members
+    hostname: my-agent   # defaults to instance name
+```
+
+The operator merges Tailscale gateway settings into the OpenClaw config and injects the auth key from the referenced Secret. Use ephemeral+reusable auth keys from the [Tailscale admin console](https://login.tailscale.com/admin/settings/keys). When `authSSO` is enabled, tailnet members can authenticate without a gateway token.
 
 ### Config merge mode
 
@@ -377,126 +397,33 @@ Opt into automatic version tracking so the operator detects new releases and rol
 spec:
   autoUpdate:
     enabled: true
-    checkInterval: "24h"         # how often to poll the registry (1h–168h)
+    checkInterval: "24h"         # how often to poll the registry (1h-168h)
     backupBeforeUpdate: true     # back up the PVC before applying an update
     rollbackOnFailure: true      # auto-rollback if the new version fails health checks
-    healthCheckTimeout: "10m"    # how long to wait for the pod to become ready (2m–30m)
+    healthCheckTimeout: "10m"    # how long to wait for the pod to become ready (2m-30m)
 ```
 
-When enabled, the operator:
+When enabled, the operator resolves `latest` to the highest stable semver tag on creation, then polls for newer versions on each `checkInterval`. Before updating, it optionally runs a B2 backup, then patches the image tag and monitors the rollout. If the pod fails to become ready within `healthCheckTimeout`, it reverts the image tag and (optionally) restores the PVC from the pre-update snapshot.
 
-1. **Resolves `latest` on creation** — if `spec.image.tag` is `latest`, the operator queries the OCI registry for the highest stable semver tag and pins the instance to it
-2. **Polls for new versions** — on each `checkInterval`, the operator checks the registry for newer semver tags
-3. **Backs up first** (optional) — if `backupBeforeUpdate` is true and persistence is enabled, a B2 backup job runs before updating
-4. **Applies the update** — patches `spec.image.tag` to the new version, triggering a StatefulSet rolling update
-5. **Health checks** — monitors the StatefulSet for `healthCheckTimeout`; if the pod becomes ready, the update is confirmed
-6. **Auto-rollback** — if the pod fails to become ready within the timeout, the operator reverts the image tag (and optionally restores the PVC from the pre-update backup)
+Safety mechanisms include failed-version tracking (skips versions that failed health checks), a circuit breaker (pauses after 3 consecutive rollbacks), and full data restore when `backupBeforeUpdate` is enabled. Auto-update is a no-op for digest-pinned images (`spec.image.digest`).
 
-The rollback system includes safety mechanisms:
+See `status.autoUpdate` for update progress: `kubectl get openclawinstance my-agent -o jsonpath='{.status.autoUpdate}'`
 
-- **Failed version tracking** — a version that fails health checks is recorded and skipped in future checks (cleared when a newer version is published)
-- **Circuit breaker** — after 3 consecutive rollbacks, auto-update pauses and emits a warning event; reset on any successful update
-- **Backup restore** — when `backupBeforeUpdate` is true, rollback restores the PVC from the pre-update snapshot, fully reverting both code and data
+### What the operator manages automatically
 
-Update progress is tracked in `status.autoUpdate`:
+These behaviors are always applied - no configuration needed:
 
-```bash
-kubectl get openclawinstance my-agent -o jsonpath='{.status.autoUpdate}' | jq .
-```
+| Behavior | Details |
+|----------|---------|
+| `gateway.bind=lan` | Always injected into config so health probes can reach the gateway |
+| Gateway auth token | Auto-generated Secret per instance; injected into config and env |
+| `OPENCLAW_DISABLE_BONJOUR=1` | Always set (mDNS does not work in Kubernetes) |
+| Browser profiles | When Chromium is enabled, `"default"` and `"chrome"` profiles are auto-configured with the sidecar's CDP endpoint |
+| Tailscale config | When Tailscale is enabled, gateway.tailscale settings are merged into config |
+| Config hash rollouts | Config changes trigger rolling updates via SHA-256 hash annotation |
+| Config restoration | The init container restores config on every pod restart (overwrite or merge mode) |
 
-```json
-{
-  "currentVersion": "2026.2.15",
-  "latestVersion": "2026.2.15",
-  "lastCheckTime": "2026-02-16T10:30:00Z",
-  "lastUpdateTime": "2026-02-16T10:30:05Z"
-}
-```
-
-Auto-update is a no-op for digest-pinned images (`spec.image.digest`). The operator only considers stable releases (no pre-release tags).
-
-### All configuration options
-
-| Field | Description | Default |
-|-------|-------------|---------|
-| **Image** | | |
-| `spec.image.repository` | Container image | `ghcr.io/openclaw/openclaw` |
-| `spec.image.tag` | Image tag | `latest` |
-| `spec.image.digest` | Image digest (overrides tag) | - |
-| `spec.image.pullPolicy` | Image pull policy | `IfNotPresent` |
-| `spec.image.pullSecrets` | Secrets for private registries | `[]` |
-| **Config** | | |
-| `spec.config.raw` | Inline openclaw.json | - |
-| `spec.config.configMapRef` | External ConfigMap reference | - |
-| `spec.config.mergeMode` | Config apply strategy: `overwrite` or `merge` | `overwrite` |
-| `spec.config.format` | Config file format: `json` or `json5` | `json` |
-| **Environment** | | |
-| `spec.envFrom` | Secret/ConfigMap env sources | `[]` |
-| `spec.env` | Additional environment variables | `[]` |
-| **Skills & Runtime** | | |
-| `spec.skills` | ClawHub skills to install via init container | `[]` |
-| `spec.runtimeDeps.pnpm` | Install pnpm via corepack | `false` |
-| `spec.runtimeDeps.python` | Install Python 3.12 + uv | `false` |
-| **Custom Containers** | | |
-| `spec.initContainers` | Additional init containers (max 10) | `[]` |
-| `spec.sidecars` | Additional sidecar containers | `[]` |
-| `spec.sidecarVolumes` | Volumes for sidecar containers | `[]` |
-| `spec.extraVolumes` | Additional pod volumes (max 10) | `[]` |
-| `spec.extraVolumeMounts` | Additional volume mounts for main container (max 10) | `[]` |
-| **Resources** | | |
-| `spec.resources.requests.cpu` | CPU request | `500m` |
-| `spec.resources.requests.memory` | Memory request | `1Gi` |
-| `spec.resources.limits.cpu` | CPU limit | `2000m` |
-| `spec.resources.limits.memory` | Memory limit | `4Gi` |
-| **Storage** | | |
-| `spec.storage.persistence.enabled` | Persistent storage | `true` |
-| `spec.storage.persistence.size` | PVC size | `10Gi` |
-| `spec.storage.persistence.storageClass` | StorageClass name | cluster default |
-| **Security** | | |
-| `spec.security.containerSecurityContext.readOnlyRootFilesystem` | Read-only root filesystem | `true` |
-| `spec.security.podSecurityContext.fsGroupChangePolicy` | Volume ownership change policy | - |
-| `spec.security.networkPolicy.enabled` | NetworkPolicy | `true` |
-| `spec.security.networkPolicy.additionalEgress` | Custom egress rules | `[]` |
-| `spec.security.rbac.serviceAccountAnnotations` | ServiceAccount annotations (IRSA/WI) | `{}` |
-| `spec.security.caBundle.configMapName` | CA bundle ConfigMap name | - |
-| `spec.security.caBundle.secretName` | CA bundle Secret name | - |
-| `spec.security.caBundle.key` | Key in ConfigMap/Secret containing CA bundle | `ca-bundle.crt` |
-| **Gateway** | | |
-| `spec.gateway.existingSecret` | Use existing Secret for gateway token (key: `token`) | auto-generated |
-| **Chromium** | | |
-| `spec.chromium.enabled` | Chromium sidecar | `false` |
-| **Ollama** | | |
-| `spec.ollama.enabled` | Ollama sidecar | `false` |
-| `spec.ollama.models` | Models to pre-pull (max 10) | `[]` |
-| `spec.ollama.gpu` | NVIDIA GPUs to allocate | - |
-| `spec.ollama.image.repository` | Container image | `ollama/ollama` |
-| `spec.ollama.image.tag` | Image tag | `latest` |
-| `spec.ollama.storage.sizeLimit` | Model cache emptyDir size | `20Gi` |
-| `spec.ollama.storage.existingClaim` | Existing PVC for model persistence | - |
-| **Networking** | | |
-| `spec.networking.service.type` | Service type | `ClusterIP` |
-| `spec.networking.ingress.enabled` | Ingress | `false` |
-| **Observability** | | |
-| `spec.observability.metrics.enabled` | Prometheus metrics | `true` |
-| `spec.observability.metrics.serviceMonitor.enabled` | ServiceMonitor | `false` |
-| **Availability** | | |
-| `spec.availability.podDisruptionBudget.enabled` | PDB | `true` |
-| `spec.availability.nodeSelector` | Node label selector for scheduling | `{}` |
-| `spec.availability.tolerations` | Pod tolerations | `[]` |
-| `spec.availability.affinity` | Pod affinity/anti-affinity rules | - |
-| **Workspace** | | |
-| `spec.workspace.initialFiles` | Files to create in workspace before start | `{}` |
-| `spec.workspace.initialDirectories` | Directories to create in workspace before start | `[]` |
-| **Auto-Update** | | |
-| `spec.autoUpdate.enabled` | Automatic version updates | `false` |
-| `spec.autoUpdate.checkInterval` | Registry poll interval (Go duration) | `24h` |
-| `spec.autoUpdate.backupBeforeUpdate` | Backup PVC before updating | `true` |
-| `spec.autoUpdate.rollbackOnFailure` | Auto-rollback if update fails health check | `true` |
-| `spec.autoUpdate.healthCheckTimeout` | Time to wait for pod readiness after update (2m–30m) | `10m` |
-| **Backup/Restore** | | |
-| `spec.restoreFrom` | B2 backup path to restore workspace from | - |
-
-See the [full example](config/samples/openclaw_v1alpha1_openclawinstance_full.yaml) for every available field, or the [API reference](docs/api-reference.md) for detailed documentation.
+For the full list of configuration options, see the [API reference](docs/api-reference.md) and the [full sample YAML](config/samples/openclaw_v1alpha1_openclawinstance_full.yaml).
 
 ## Security
 
@@ -526,33 +453,22 @@ The operator follows a **secure-by-default** philosophy. Every instance ships wi
 | Invalid `checkInterval` | Error | Must be a valid Go duration between 1h and 168h |
 | Invalid `healthCheckTimeout` | Error | Must be a valid Go duration between 2m and 30m |
 
-| NetworkPolicy disabled | Warning | Deployment proceeds with a warning |
-| Ingress without TLS | Warning | Deployment proceeds with a warning |
-| Chromium without digest pinning | Warning | Deployment proceeds with a warning |
-| Ollama without digest pinning | Warning | Deployment proceeds with a warning |
-| Ollama runs as root | Warning | Required by official image; informational |
-| Auto-update with digest pin | Warning | Digest overrides auto-update; updates won't apply |
-| `readOnlyRootFilesystem` disabled | Warning | Proceeds with a security recommendation |
-| No AI provider keys detected | Warning | Scans `env`/`envFrom` for known provider env vars |
-| Unknown config keys | Warning | Warns on unrecognized top-level keys in `spec.config.raw` |
+<details>
+<summary>Warning-level checks (deployment proceeds with a warning)</summary>
 
-### Custom network rules
+| Check | Behavior |
+|-------|----------|
+| NetworkPolicy disabled | Deployment proceeds with a warning |
+| Ingress without TLS | Deployment proceeds with a warning |
+| Chromium without digest pinning | Deployment proceeds with a warning |
+| Ollama without digest pinning | Deployment proceeds with a warning |
+| Ollama runs as root | Required by official image; informational |
+| Auto-update with digest pin | Digest overrides auto-update; updates won't apply |
+| `readOnlyRootFilesystem` disabled | Proceeds with a security recommendation |
+| No AI provider keys detected | Scans `env`/`envFrom` for known provider env vars |
+| Unknown config keys | Warns on unrecognized top-level keys in `spec.config.raw` |
 
-Allow egress to internal services or specific CIDRs:
-
-```yaml
-spec:
-  security:
-    networkPolicy:
-      enabled: true
-      additionalEgress:
-        - ports:
-            - protocol: TCP
-              port: 5432
-          to:
-            - ipBlock:
-                cidr: 10.0.0.0/8
-```
+</details>
 
 ## Observability
 
@@ -581,27 +497,7 @@ spec:
           release: prometheus
 ```
 
-### Instance status
-
-```bash
-kubectl get openclawinstance my-agent -o yaml
-```
-
-```yaml
-status:
-  phase: Running
-  conditions:
-    - type: Ready
-      status: "True"
-    - type: StatefulSetReady
-      status: "True"
-    - type: NetworkPolicyReady
-      status: "True"
-  gatewayEndpoint: my-agent.default.svc:18789
-  canvasEndpoint: my-agent.default.svc:18793
-```
-
-Phases: `Pending` → `Restoring` → `Provisioning` → `Running` | `Updating` | `BackingUp` | `Degraded` | `Failed` | `Terminating`
+Phases: `Pending` -> `Restoring` -> `Provisioning` -> `Running` | `Updating` | `BackingUp` | `Degraded` | `Failed` | `Terminating`
 
 ## Deployment Guides
 
@@ -653,7 +549,7 @@ Contributions are welcome. Please open an issue to discuss significant changes b
 
 ## Disclaimer: AI-Assisted Development
 
-This repository is developed and maintained collaboratively by a human and [Claude Code](https://claude.ai/claude-code). This includes writing code, reviewing and commenting on issues, triaging bugs, and merging pull requests. The human reads everything and acts as the final guard, but Claude does the heavy lifting — from diagnosis to implementation to CI.
+This repository is developed and maintained collaboratively by a human and [Claude Code](https://claude.ai/claude-code). This includes writing code, reviewing and commenting on issues, triaging bugs, and merging pull requests. The human reads everything and acts as the final guard, but Claude does the heavy lifting - from diagnosis to implementation to CI.
 
 In the future, this repo may be fully autonomously operated, whether we humans like that or not.
 

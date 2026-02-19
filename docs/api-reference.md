@@ -199,6 +199,27 @@ When enabled, the sidecar:
 - Mounts a memory-backed emptyDir at `/dev/shm` (256Mi) for shared memory.
 - Mounts an emptyDir at `/tmp` for scratch space.
 
+When Chromium is enabled, the operator also auto-configures browser profiles in the OpenClaw config. Both `"default"` and `"chrome"` profiles are set to point at the sidecar's CDP endpoint (`http://localhost:3000`). This ensures browser tool calls work regardless of which profile name the LLM passes.
+
+### spec.tailscale
+
+Optional Tailscale integration for secure tailnet access without Ingress or LoadBalancer.
+
+| Field                | Type                     | Default          | Description                                                                |
+|----------------------|--------------------------|------------------|----------------------------------------------------------------------------|
+| `enabled`            | `bool`                   | `false`          | Enable Tailscale integration.                                              |
+| `mode`               | `string`                 | `serve`          | Tailscale mode. `serve` exposes to tailnet members only. `funnel` exposes to the public internet via Tailscale Funnel. |
+| `authKeySecretRef`   | `*LocalObjectReference`  | --               | Reference to a Secret containing the Tailscale auth key. Use ephemeral+reusable keys from the Tailscale admin console. |
+| `authKeySecretKey`   | `string`                 | `authkey`        | Key in the referenced Secret containing the auth key.                      |
+| `hostname`           | `string`                 | (instance name)  | Tailscale device name. Defaults to the OpenClawInstance name.              |
+| `authSSO`            | `bool`                   | `false`          | Enable passwordless login for tailnet members. Sets `gateway.auth.allowTailscale=true` in the OpenClaw config. |
+
+When enabled, the operator:
+
+- Merges `gateway.tailscale` settings (mode, hostname) into the OpenClaw config.
+- Injects the auth key from the referenced Secret.
+- When `authSSO` is true, sets `gateway.auth.allowTailscale=true` so tailnet members can authenticate without a gateway token.
+
 ### spec.networking
 
 Network-related configuration for the instance.
