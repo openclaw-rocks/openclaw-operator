@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -71,6 +72,15 @@ var _ = BeforeSuite(func() {
 var _ = AfterSuite(func() {
 	cancel()
 })
+
+// kubectlExec runs a command inside a container via kubectl exec.
+func kubectlExec(namespace, podName, container string, command ...string) (string, error) {
+	args := []string{"exec", podName, "-n", namespace, "-c", container, "--"}
+	args = append(args, command...)
+	cmd := exec.Command("kubectl", args...)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
 
 var _ = Describe("OpenClawInstance Controller", func() {
 	const (
@@ -853,6 +863,158 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			}
 
 			// Clean up
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+	})
+
+	Context("When validating postStart config restoration (issue #125)", func() {
+		var namespace string
+
+		BeforeEach(func() {
+			namespace = "test-poststart-" + time.Now().Format("20060102150405")
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+			Expect(k8sClient.Create(ctx, ns)).Should(Succeed())
+		})
+
+		AfterEach(func() {
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+			_ = k8sClient.Delete(ctx, ns)
+		})
+
+		It("Should restore config via postStart hook after container restart", func() {
+			instanceName := "poststart-e2e"
+			podName := instanceName + "-0"
+
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping postStart validation in minimal mode")
+			}
+
+			// Disable all probes so the pod stays Running regardless of
+			// whether OpenClaw can fully start without API keys.
+			falseVal := false
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					Probes: openclawv1alpha1.ProbesSpec{
+						Liveness:  &openclawv1alpha1.ProbeSpec{Enabled: &falseVal},
+						Readiness: &openclawv1alpha1.ProbeSpec{Enabled: &falseVal},
+						Startup:   &openclawv1alpha1.ProbeSpec{Enabled: &falseVal},
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			// Wait for the openclaw container to be Running.
+			// K8s does not set Running until the postStart hook completes,
+			// so the config file is guaranteed to exist by this point.
+			Eventually(func() bool {
+				pod := &corev1.Pod{}
+				if err := k8sClient.Get(ctx, types.NamespacedName{
+					Name: podName, Namespace: namespace,
+				}, pod); err != nil {
+					return false
+				}
+				for _, cs := range pod.Status.ContainerStatuses {
+					if cs.Name == "openclaw" && cs.State.Running != nil {
+						return true
+					}
+				}
+				return false
+			}, 5*time.Minute, 5*time.Second).Should(BeTrue(),
+				"openclaw container should be Running")
+
+			// Verify config was written by the postStart hook
+			out, err := kubectlExec(namespace, podName, "openclaw",
+				"cat", "/home/openclaw/.openclaw/openclaw.json")
+			Expect(err).NotTo(HaveOccurred(), "should read config file: %s", out)
+			Expect(out).To(ContainSubstring(`"lan"`),
+				"config should contain gateway.bind=lan from operator enrichment")
+
+			// Corrupt the config file on the PVC
+			_, err = kubectlExec(namespace, podName, "openclaw",
+				"sh", "-c", `echo '{"corrupted":true}' > /home/openclaw/.openclaw/openclaw.json`)
+			Expect(err).NotTo(HaveOccurred(), "should be able to write to PVC")
+
+			// Verify config is corrupted
+			out, err = kubectlExec(namespace, podName, "openclaw",
+				"cat", "/home/openclaw/.openclaw/openclaw.json")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(out).To(ContainSubstring("corrupted"),
+				"config should contain corrupted content")
+
+			// Record current restart count
+			pod := &corev1.Pod{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: podName, Namespace: namespace,
+			}, pod)).To(Succeed())
+			var prevRestarts int32
+			for _, cs := range pod.Status.ContainerStatuses {
+				if cs.Name == "openclaw" {
+					prevRestarts = cs.RestartCount
+					break
+				}
+			}
+
+			// Kill PID 1 to trigger a container restart (not pod recreation).
+			// Init containers do NOT re-run on container restarts - only the
+			// postStart lifecycle hook runs again.
+			_, _ = kubectlExec(namespace, podName, "openclaw", "kill", "-9", "1")
+
+			// Wait for restart count to increase
+			Eventually(func() int32 {
+				pod := &corev1.Pod{}
+				if err := k8sClient.Get(ctx, types.NamespacedName{
+					Name: podName, Namespace: namespace,
+				}, pod); err != nil {
+					return -1
+				}
+				for _, cs := range pod.Status.ContainerStatuses {
+					if cs.Name == "openclaw" {
+						return cs.RestartCount
+					}
+				}
+				return -1
+			}, 2*time.Minute, 2*time.Second).Should(BeNumerically(">", prevRestarts),
+				"restart count should increase after kill -9 1")
+
+			// Wait for container to be Running again (postStart must complete first)
+			Eventually(func() bool {
+				pod := &corev1.Pod{}
+				if err := k8sClient.Get(ctx, types.NamespacedName{
+					Name: podName, Namespace: namespace,
+				}, pod); err != nil {
+					return false
+				}
+				for _, cs := range pod.Status.ContainerStatuses {
+					if cs.Name == "openclaw" && cs.State.Running != nil {
+						return true
+					}
+				}
+				return false
+			}, 2*time.Minute, 2*time.Second).Should(BeTrue(),
+				"openclaw container should be Running after restart")
+
+			// Verify the postStart hook restored the config
+			out, err = kubectlExec(namespace, podName, "openclaw",
+				"cat", "/home/openclaw/.openclaw/openclaw.json")
+			Expect(err).NotTo(HaveOccurred(),
+				"should read config after restart: %s", out)
+			Expect(out).To(ContainSubstring(`"lan"`),
+				"gateway.bind=lan should be restored by postStart hook")
+			Expect(out).NotTo(ContainSubstring("corrupted"),
+				"corrupted content should be overwritten by postStart hook")
+
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})
 	})

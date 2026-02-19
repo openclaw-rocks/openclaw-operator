@@ -678,10 +678,12 @@ func TestBuildStatefulSet_ConfigVolume_RawConfig(t *testing.T) {
 	sts := BuildStatefulSet(instance)
 	main := sts.Spec.Template.Spec.Containers[0]
 
-	// Main container should NOT have a config subPath mount (causes EBUSY on rename)
+	// Main container should have config volume mounted read-only at /operator-config
+	// for the postStart lifecycle hook to restore config on container restarts.
+	assertVolumeMount(t, main.VolumeMounts, "config", "/operator-config")
 	for _, vm := range main.VolumeMounts {
-		if vm.Name == "config" {
-			t.Error("main container should not have config volume mount; init container handles config seeding")
+		if vm.Name == "config" && !vm.ReadOnly {
+			t.Error("config volume mount in main container should be read-only")
 		}
 	}
 
@@ -790,6 +792,116 @@ func TestBuildStatefulSet_VanillaDeployment_HasInitContainer(t *testing.T) {
 	}
 	if configVol.ConfigMap.Name != "no-config-config" {
 		t.Errorf("config volume ConfigMap name = %q, want %q", configVol.ConfigMap.Name, "no-config-config")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// PostStart lifecycle hook tests (config restore on container restart)
+// ---------------------------------------------------------------------------
+
+func TestBuildStatefulSet_PostStart_OverwriteMode(t *testing.T) {
+	instance := newTestInstance("poststart-overwrite")
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
+	}
+
+	sts := BuildStatefulSet(instance)
+	main := sts.Spec.Template.Spec.Containers[0]
+
+	if main.Lifecycle == nil || main.Lifecycle.PostStart == nil {
+		t.Fatal("expected postStart lifecycle hook on main container")
+	}
+
+	cmd := main.Lifecycle.PostStart.Exec.Command
+	if len(cmd) != 3 || cmd[0] != "sh" || cmd[1] != "-c" {
+		t.Fatalf("expected sh -c command, got %v", cmd)
+	}
+	expected := "cp /operator-config/openclaw.json /home/openclaw/.openclaw/openclaw.json"
+	if cmd[2] != expected {
+		t.Errorf("postStart command = %q, want %q", cmd[2], expected)
+	}
+}
+
+func TestBuildStatefulSet_PostStart_MergeMode(t *testing.T) {
+	instance := newTestInstance("poststart-merge")
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
+	}
+	instance.Spec.Config.MergeMode = ConfigMergeModeMerge
+
+	sts := BuildStatefulSet(instance)
+	main := sts.Spec.Template.Spec.Containers[0]
+
+	if main.Lifecycle == nil || main.Lifecycle.PostStart == nil {
+		t.Fatal("expected postStart lifecycle hook for merge mode")
+	}
+
+	cmd := main.Lifecycle.PostStart.Exec.Command
+	if len(cmd) != 3 || cmd[0] != "sh" || cmd[1] != "-c" {
+		t.Fatalf("expected sh -c command, got %v", cmd)
+	}
+
+	// Merge mode should use a Node.js deep-merge script
+	if !strings.Contains(cmd[2], "node -e") {
+		t.Errorf("merge mode postStart should use node, got %q", cmd[2])
+	}
+	if !strings.Contains(cmd[2], "/operator-config/openclaw.json") {
+		t.Errorf("merge mode postStart should reference operator-config path, got %q", cmd[2])
+	}
+}
+
+func TestBuildStatefulSet_PostStart_JSON5Mode_NoHook(t *testing.T) {
+	instance := newTestInstance("poststart-json5")
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
+	}
+	instance.Spec.Config.Format = ConfigFormatJSON5
+
+	sts := BuildStatefulSet(instance)
+	main := sts.Spec.Template.Spec.Containers[0]
+
+	// JSON5 mode can't use postStart (needs npx, too slow)
+	if main.Lifecycle != nil && main.Lifecycle.PostStart != nil {
+		t.Error("JSON5 mode should not have a postStart hook (npx too slow)")
+	}
+}
+
+func TestBuildStatefulSet_PostStart_ConfigMapRef(t *testing.T) {
+	instance := newTestInstance("poststart-ref")
+	instance.Spec.Config.ConfigMapRef = &openclawv1alpha1.ConfigMapKeySelector{
+		Name: "external-config",
+		Key:  "my-config.json",
+	}
+
+	sts := BuildStatefulSet(instance)
+	main := sts.Spec.Template.Spec.Containers[0]
+
+	if main.Lifecycle == nil || main.Lifecycle.PostStart == nil {
+		t.Fatal("expected postStart lifecycle hook with configMapRef")
+	}
+
+	cmd := main.Lifecycle.PostStart.Exec.Command[2]
+	expected := "cp /operator-config/my-config.json /home/openclaw/.openclaw/openclaw.json"
+	if cmd != expected {
+		t.Errorf("postStart command = %q, want %q", cmd, expected)
+	}
+}
+
+func TestBuildStatefulSet_PostStart_VanillaDeployment(t *testing.T) {
+	instance := newTestInstance("poststart-vanilla")
+	// No config set at all - vanilla deployment still gets postStart
+	// because operator always creates a ConfigMap with gateway.bind=lan
+
+	sts := BuildStatefulSet(instance)
+	main := sts.Spec.Template.Spec.Containers[0]
+
+	if main.Lifecycle == nil || main.Lifecycle.PostStart == nil {
+		t.Fatal("vanilla deployment should still have postStart hook")
+	}
+
+	cmd := main.Lifecycle.PostStart.Exec.Command[2]
+	if !strings.Contains(cmd, "cp /operator-config/openclaw.json") {
+		t.Errorf("vanilla postStart should copy config, got %q", cmd)
 	}
 }
 
@@ -1532,191 +1644,6 @@ func TestBuildConfigMap_InvalidJSON_RawPreserved(t *testing.T) {
 	}
 	if gw["bind"] != "lan" {
 		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "lan")
-	}
-}
-
-func TestEnrichConfigWithModules_AddsModulesForEnabledChannels(t *testing.T) {
-	input := []byte(`{"channels":{"telegram":{"enabled":true,"botToken":"tok"}}}`)
-	out, err := enrichConfigWithModules(input)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var cfg map[string]interface{}
-	if err := json.Unmarshal(out, &cfg); err != nil {
-		t.Fatal(err)
-	}
-
-	modules, ok := cfg["modules"].([]interface{})
-	if !ok || len(modules) != 1 {
-		t.Fatalf("expected 1 module entry, got %v", cfg["modules"])
-	}
-	mod := modules[0].(map[string]interface{})
-	if mod["location"] != "MODULES_ROOT/channel-telegram" {
-		t.Errorf("module location = %q, want %q", mod["location"], "MODULES_ROOT/channel-telegram")
-	}
-	if mod["enabled"] != true {
-		t.Errorf("module enabled = %v, want true", mod["enabled"])
-	}
-}
-
-func TestEnrichConfigWithModules_SkipsDisabledChannels(t *testing.T) {
-	input := []byte(`{"channels":{"telegram":{"enabled":false,"botToken":"tok"}}}`)
-	out, err := enrichConfigWithModules(input)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var cfg map[string]interface{}
-	if err := json.Unmarshal(out, &cfg); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, ok := cfg["modules"]; ok {
-		t.Error("modules should not be added for disabled channels")
-	}
-}
-
-func TestEnrichConfigWithModules_EnablesExistingDisabledModule(t *testing.T) {
-	input := []byte(`{
-		"channels":{"telegram":{"enabled":true}},
-		"modules":[{"location":"MODULES_ROOT/channel-telegram","enabled":false}]
-	}`)
-	out, err := enrichConfigWithModules(input)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var cfg map[string]interface{}
-	if err := json.Unmarshal(out, &cfg); err != nil {
-		t.Fatal(err)
-	}
-
-	modules := cfg["modules"].([]interface{})
-	if len(modules) != 1 {
-		t.Fatalf("expected 1 module, got %d", len(modules))
-	}
-	mod := modules[0].(map[string]interface{})
-	if mod["enabled"] != true {
-		t.Errorf("existing disabled module should be enabled, got %v", mod["enabled"])
-	}
-}
-
-func TestEnrichConfigWithModules_PreservesAlreadyEnabledModule(t *testing.T) {
-	input := []byte(`{
-		"channels":{"telegram":{"enabled":true}},
-		"modules":[{"location":"MODULES_ROOT/channel-telegram","enabled":true}]
-	}`)
-	out, err := enrichConfigWithModules(input)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Should return unchanged (no modification needed)
-	if !bytes.Equal(out, input) {
-		t.Errorf("config should not be modified when module already enabled")
-	}
-}
-
-func TestEnrichConfigWithModules_NoChannels(t *testing.T) {
-	input := []byte(`{"mcpServers":{"test":{"url":"http://localhost"}}}`)
-	out, err := enrichConfigWithModules(input)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !bytes.Equal(out, input) {
-		t.Errorf("config without channels should not be modified")
-	}
-}
-
-func TestEnrichConfigWithModules_MultipleChannels(t *testing.T) {
-	input := []byte(`{"channels":{"telegram":{"enabled":true},"slack":{"enabled":true},"discord":{"enabled":false}}}`)
-	out, err := enrichConfigWithModules(input)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var cfg map[string]interface{}
-	if err := json.Unmarshal(out, &cfg); err != nil {
-		t.Fatal(err)
-	}
-
-	modules := cfg["modules"].([]interface{})
-	if len(modules) != 2 {
-		t.Fatalf("expected 2 modules (telegram+slack, not discord), got %d", len(modules))
-	}
-
-	locations := map[string]bool{}
-	for _, mod := range modules {
-		m := mod.(map[string]interface{})
-		locations[m["location"].(string)] = true
-	}
-	if !locations["MODULES_ROOT/channel-telegram"] {
-		t.Error("missing telegram module")
-	}
-	if !locations["MODULES_ROOT/channel-slack"] {
-		t.Error("missing slack module")
-	}
-}
-
-func TestEnrichConfigWithModules_PreservesExistingModules(t *testing.T) {
-	input := []byte(`{
-		"channels":{"telegram":{"enabled":true}},
-		"modules":[{"location":"MODULES_ROOT/nlu","enabled":true}]
-	}`)
-	out, err := enrichConfigWithModules(input)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var cfg map[string]interface{}
-	if err := json.Unmarshal(out, &cfg); err != nil {
-		t.Fatal(err)
-	}
-
-	modules := cfg["modules"].([]interface{})
-	if len(modules) != 2 {
-		t.Fatalf("expected 2 modules (existing nlu + new telegram), got %d", len(modules))
-	}
-}
-
-func TestEnrichConfigWithModules_InvalidJSON(t *testing.T) {
-	input := []byte(`not valid json`)
-	out, err := enrichConfigWithModules(input)
-	if err != nil {
-		t.Fatal("should not error on invalid JSON")
-	}
-
-	if !bytes.Equal(out, input) {
-		t.Errorf("invalid JSON should be returned unchanged")
-	}
-}
-
-func TestBuildConfigMap_EnrichesChannelModules(t *testing.T) {
-	instance := newTestInstance("cm-enrich")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
-		RawExtension: runtime.RawExtension{
-			Raw: []byte(`{"channels":{"telegram":{"enabled":true,"botToken":"tok"}}}`),
-		},
-	}
-
-	cm := BuildConfigMap(instance, "")
-	content := cm.Data["openclaw.json"]
-
-	// The enriched config should contain the module entry
-	var cfg map[string]interface{}
-	if err := json.Unmarshal([]byte(content), &cfg); err != nil {
-		t.Fatalf("config content is not valid JSON: %v", err)
-	}
-
-	modules, ok := cfg["modules"].([]interface{})
-	if !ok || len(modules) != 1 {
-		t.Fatalf("expected 1 module entry in enriched config, got %v", cfg["modules"])
-	}
-	mod := modules[0].(map[string]interface{})
-	if mod["location"] != "MODULES_ROOT/channel-telegram" {
-		t.Errorf("module location = %q, want %q", mod["location"], "MODULES_ROOT/channel-telegram")
 	}
 }
 

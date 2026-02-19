@@ -51,30 +51,28 @@ jobs:
           fi
 
       # Flip "autorelease: pending" to "autorelease: tagged" on any
-      # merged release PR that still has the stale label. This runs on
-      # every push to main (not just release commits) so that the label
-      # gets fixed even if the tag step above was skipped or failed.
-      # Without this, release-please aborts with "untagged, merged
-      # release PRs outstanding".
+      # release PR that still has the stale label. Covers both merged
+      # and closed PRs -- closed-but-not-merged release PRs (e.g. a
+      # superseded v0.10.0 PR) also block release-please if the label
+      # isn't cleaned up. This runs on every push to main so that the
+      # label gets fixed even if the tag step above was skipped or failed.
       - name: Fix stale autorelease labels
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
         run: |
-          STALE_PRS=$(gh pr list \
-            --repo "${{ github.repository }}" \
-            --state merged \
-            --label "autorelease: pending" \
-            --json number,title \
-            --jq '.[].number')
+          for STATE in merged closed; do
+            STALE_PRS=$(gh pr list \
+              --repo "${{ github.repository }}" \
+              --state "$STATE" \
+              --label "autorelease: pending" \
+              --json number,title \
+              --jq '.[].number')
 
-          for PR in $STALE_PRS; do
-            echo "Fixing stale label on PR #${PR}"
-            gh api "repos/${{ github.repository }}/issues/${PR}/labels/autorelease:%20pending" \
-              -X DELETE || true
-            gh api "repos/${{ github.repository }}/issues/${PR}/labels" \
-              -f "labels[]=autorelease: tagged" || true
+            for PR in $STALE_PRS; do
+              echo "Fixing stale label on ${STATE} PR #${PR}"
+              gh api "repos/${{ github.repository }}/issues/${PR}/labels/autorelease:%20pending" \
+                -X DELETE || true
+              gh api "repos/${{ github.repository }}/issues/${PR}/labels" \
+                -f "labels[]=autorelease: tagged" || true
+            done
           done
-
-          if [ -z "$STALE_PRS" ]; then
-            echo "No stale autorelease labels found"
-          fi

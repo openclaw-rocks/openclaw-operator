@@ -253,6 +253,29 @@ func buildMainContainer(instance *openclawv1alpha1.OpenClawInstance, gatewayToke
 	// Add extra volume mounts from spec
 	container.VolumeMounts = append(container.VolumeMounts, instance.Spec.ExtraVolumeMounts...)
 
+	// Mount the config volume read-only so the postStart hook can restore
+	// operator-managed config on every container start (init containers only
+	// run on pod creation, not on container restarts within the same pod).
+	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+		Name:      "config",
+		MountPath: "/operator-config",
+		ReadOnly:  true,
+	})
+
+	// PostStart lifecycle hook: restore the operator-managed config file on
+	// every container start. This prevents crashloops when the agent modifies
+	// its own config and then crashes -- without this, the broken config
+	// persists because init containers don't re-run on container restarts.
+	if cmd := buildConfigRestoreCommand(instance); cmd != "" {
+		container.Lifecycle = &corev1.Lifecycle{
+			PostStart: &corev1.LifecycleHandler{
+				Exec: &corev1.ExecAction{
+					Command: []string{"sh", "-c", cmd},
+				},
+			},
+		}
+	}
+
 	// Add probes
 	container.LivenessProbe = buildLivenessProbe(instance)
 	container.ReadinessProbe = buildReadinessProbe(instance)
@@ -1352,6 +1375,45 @@ func buildStartupProbe(instance *openclawv1alpha1.OpenClawInstance) *corev1.Prob
 	}
 
 	return probe
+}
+
+// buildConfigRestoreCommand returns the shell command for the main container's
+// postStart lifecycle hook. It copies the operator-managed config from the
+// ConfigMap volume to the PVC on every container start, ensuring the config is
+// restored even after a container restart (where init containers don't re-run).
+// Returns "" for JSON5 format (requires npx, too slow for postStart).
+func buildConfigRestoreCommand(instance *openclawv1alpha1.OpenClawInstance) string {
+	key := configMapKey(instance)
+	if key == "" {
+		return ""
+	}
+
+	src := "/operator-config/" + key
+	dst := "/home/openclaw/.openclaw/openclaw.json"
+
+	switch {
+	case instance.Spec.Config.MergeMode == ConfigMergeModeMerge:
+		// Deep-merge operator config into existing PVC config via Node.js.
+		// Same logic as the init container merge, but with main container paths.
+		return fmt.Sprintf(
+			`node -e "`+
+				`const fs=require('fs');`+
+				`function dm(a,b){const r={...a};for(const k in b){r[k]=b[k]&&typeof b[k]==='object'&&!Array.isArray(b[k])&&r[k]&&typeof r[k]==='object'&&!Array.isArray(r[k])?dm(r[k],b[k]):b[k]}return r}`+
+				`const e=%q,c=%q,t='/tmp/merged.json';`+
+				`const base=fs.existsSync(e)?JSON.parse(fs.readFileSync(e,'utf8')):{};`+
+				`const inc=JSON.parse(fs.readFileSync(c,'utf8'));`+
+				`fs.writeFileSync(t,JSON.stringify(dm(base,inc),null,2));`+
+				`fs.copyFileSync(t,e);`+
+				`"`,
+			dst, src)
+	case instance.Spec.Config.Format == ConfigFormatJSON5:
+		// JSON5 conversion requires npx which is too slow for a postStart hook.
+		// Config is only restored on pod recreation (init container).
+		return ""
+	default:
+		// Overwrite (default) - operator-managed config always wins
+		return fmt.Sprintf("cp %s %s", src, dst)
+	}
 }
 
 // getPullPolicy returns the image pull policy with defaults
