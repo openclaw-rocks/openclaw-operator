@@ -966,10 +966,19 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				}
 			}
 
-			// Kill PID 1 to trigger a container restart (not pod recreation).
-			// Init containers do NOT re-run on container restarts - only the
-			// postStart lifecycle hook runs again.
-			_, _ = kubectlExec(namespace, podName, "kill", "-9", "1")
+			// Crash the main process to trigger a container restart (not pod
+			// recreation). Init containers do NOT re-run on container restarts -
+			// only the postStart lifecycle hook runs again.
+			//
+			// Linux protects PID 1 from SIGKILL sent within the same PID
+			// namespace, so "kill -9 1" silently fails. Instead we:
+			// 1. Try to find PID 1's child (works when tini/dumb-init wraps the app)
+			//    and SIGKILL the child (not PID 1, so kernel allows it).
+			// 2. Fall back to SIGTERM to PID 1 (delivered if the app registered a
+			//    handler, which Node.js/libuv does).
+			_, _ = kubectlExec(namespace, podName, "sh", "-c",
+				`cpid=$(cat /proc/1/task/*/children 2>/dev/null | tr ' ' '\n' | head -1); `+
+					`[ -n "$cpid" ] && kill -9 "$cpid" || kill 1`)
 
 			// Wait for restart count to increase
 			Eventually(func() int32 {
@@ -986,7 +995,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				}
 				return -1
 			}, 2*time.Minute, 2*time.Second).Should(BeNumerically(">", prevRestarts),
-				"restart count should increase after kill -9 1")
+				"restart count should increase after killing main process")
 
 			// Wait for container to be Running again (postStart must complete first)
 			Eventually(func() bool {
