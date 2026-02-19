@@ -60,6 +60,10 @@ func BuildStatefulSet(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenS
 			RevisionHistoryLimit: Ptr(int32(10)),
 			ServiceName:          ServiceName(instance),
 			PodManagementPolicy:  appsv1.ParallelPodManagement,
+			PersistentVolumeClaimRetentionPolicy: &appsv1.StatefulSetPersistentVolumeClaimRetentionPolicy{
+				WhenDeleted: appsv1.RetainPersistentVolumeClaimRetentionPolicyType,
+				WhenScaled:  appsv1.RetainPersistentVolumeClaimRetentionPolicyType,
+			},
 			UpdateStrategy: appsv1.StatefulSetUpdateStrategy{
 				Type: appsv1.RollingUpdateStatefulSetStrategyType,
 			},
@@ -410,6 +414,9 @@ func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance) []corev1.C
 				RunAsNonRoot:             Ptr(true),
 				Capabilities: &corev1.Capabilities{
 					Drop: []corev1.Capability{"ALL"},
+				},
+				SeccompProfile: &corev1.SeccompProfile{
+					Type: corev1.SeccompProfileTypeRuntimeDefault,
 				},
 			},
 			VolumeMounts: mounts,

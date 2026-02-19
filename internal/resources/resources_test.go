@@ -258,6 +258,15 @@ func TestBuildStatefulSet_Defaults(t *testing.T) {
 	if sts.Spec.UpdateStrategy.Type != appsv1.RollingUpdateStatefulSetStrategyType {
 		t.Errorf("updateStrategy = %v, want RollingUpdate", sts.Spec.UpdateStrategy.Type)
 	}
+	if sts.Spec.PersistentVolumeClaimRetentionPolicy == nil {
+		t.Fatal("persistentVolumeClaimRetentionPolicy should be set (prevents spec drift)")
+	}
+	if sts.Spec.PersistentVolumeClaimRetentionPolicy.WhenDeleted != appsv1.RetainPersistentVolumeClaimRetentionPolicyType {
+		t.Errorf("pvcRetentionPolicy.whenDeleted = %v, want Retain", sts.Spec.PersistentVolumeClaimRetentionPolicy.WhenDeleted)
+	}
+	if sts.Spec.PersistentVolumeClaimRetentionPolicy.WhenScaled != appsv1.RetainPersistentVolumeClaimRetentionPolicyType {
+		t.Errorf("pvcRetentionPolicy.whenScaled = %v, want Retain", sts.Spec.PersistentVolumeClaimRetentionPolicy.WhenScaled)
+	}
 
 	// Selector labels
 	sel := sts.Spec.Selector.MatchLabels
@@ -696,6 +705,14 @@ func TestBuildStatefulSet_ConfigVolume_RawConfig(t *testing.T) {
 	}
 	assertVolumeMount(t, initC.VolumeMounts, "data", "/data")
 	assertVolumeMount(t, initC.VolumeMounts, "config", "/config")
+
+	// Init container must set SeccompProfile to prevent spec drift
+	if initC.SecurityContext == nil {
+		t.Fatal("init-config security context is nil")
+	}
+	if initC.SecurityContext.SeccompProfile == nil || initC.SecurityContext.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Error("init-config container: seccomp profile should be RuntimeDefault (prevents spec drift)")
+	}
 
 	// Should have config volume pointing to managed configmap
 	volumes := sts.Spec.Template.Spec.Volumes
