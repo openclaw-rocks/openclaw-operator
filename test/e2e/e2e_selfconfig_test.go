@@ -22,6 +22,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -87,26 +88,31 @@ var _ = Describe("OpenClawSelfConfig Controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
 
-			// Verify SA has AutomountServiceAccountToken = true
-			sa := &corev1.ServiceAccount{}
+			// Wait for StatefulSet to exist - proves full reconcile completed
+			statefulSet := &appsv1.StatefulSet{}
 			Eventually(func() error {
 				return k8sClient.Get(ctx, types.NamespacedName{
-					Name:      resources.ServiceAccountName(instance),
+					Name:      instanceName,
 					Namespace: namespace,
-				}, sa)
+				}, statefulSet)
 			}, timeout, interval).Should(Succeed())
+
+			// Verify SA has AutomountServiceAccountToken = true
+			sa := &corev1.ServiceAccount{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name:      resources.ServiceAccountName(instance),
+				Namespace: namespace,
+			}, sa)).To(Succeed())
 			Expect(sa.AutomountServiceAccountToken).NotTo(BeNil())
 			Expect(*sa.AutomountServiceAccountToken).To(BeTrue(),
 				"SA should have automount enabled for self-configure")
 
 			// Verify Role has openclaw.rocks RBAC rules
 			role := &rbacv1.Role{}
-			Eventually(func() error {
-				return k8sClient.Get(ctx, types.NamespacedName{
-					Name:      resources.RoleName(instance),
-					Namespace: namespace,
-				}, role)
-			}, timeout, interval).Should(Succeed())
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name:      resources.RoleName(instance),
+				Namespace: namespace,
+			}, role)).To(Succeed())
 
 			var foundInstances, foundSelfConfigs bool
 			for _, rule := range role.Rules {
@@ -124,12 +130,10 @@ var _ = Describe("OpenClawSelfConfig Controller", func() {
 
 			// Verify workspace ConfigMap has self-configure files
 			wsCM := &corev1.ConfigMap{}
-			Eventually(func() error {
-				return k8sClient.Get(ctx, types.NamespacedName{
-					Name:      resources.WorkspaceConfigMapName(instance),
-					Namespace: namespace,
-				}, wsCM)
-			}, timeout, interval).Should(Succeed())
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name:      resources.WorkspaceConfigMapName(instance),
+				Namespace: namespace,
+			}, wsCM)).To(Succeed())
 			Expect(wsCM.Data).To(HaveKey("SELFCONFIG.md"))
 			Expect(wsCM.Data).To(HaveKey("selfconfig.sh"))
 
@@ -168,12 +172,12 @@ var _ = Describe("OpenClawSelfConfig Controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
 
-			// Wait for initial reconciliation
+			// Wait for initial reconciliation (StatefulSet proves full reconcile completed)
 			Eventually(func() error {
 				return k8sClient.Get(ctx, types.NamespacedName{
-					Name:      resources.ServiceAccountName(instance),
+					Name:      instanceName,
 					Namespace: namespace,
-				}, &corev1.ServiceAccount{})
+				}, &appsv1.StatefulSet{})
 			}, timeout, interval).Should(Succeed())
 
 			// Create a self-config request to add a skill
