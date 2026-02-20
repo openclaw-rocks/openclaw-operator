@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.16](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.15...v0.9.16) (2026-02-20)
+
+
+### Features
+
+* support npm packages in skills field and disable lifecycle scripts ([#137](https://github.com/openclaw-rocks/k8s-operator/issues/137)) ([a9db9d0](https://github.com/openclaw-rocks/k8s-operator/commit/a9db9d091a357bca07b260ed6e7f9560917f9e9d)), closes [#131](https://github.com/openclaw-rocks/k8s-operator/issues/131) [#91](https://github.com/openclaw-rocks/k8s-operator/issues/91)
+
 ## [0.9.15](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.14...v0.9.15) (2026-02-19)
 
 
