@@ -3379,6 +3379,30 @@ func TestBuildInitScript_MergeMode_NoConfig(t *testing.T) {
 // Feature 3: Declarative skill installation tests
 // ---------------------------------------------------------------------------
 
+func TestParseSkillEntry_ClawHub(t *testing.T) {
+	got := parseSkillEntry("@anthropic/mcp-server-fetch")
+	want := "npx -y clawhub install '@anthropic/mcp-server-fetch'"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestParseSkillEntry_Npm(t *testing.T) {
+	got := parseSkillEntry("npm:@openclaw/matrix")
+	want := "cd /home/openclaw/.openclaw && npm install '@openclaw/matrix'"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestParseSkillEntry_NpmUnscoped(t *testing.T) {
+	got := parseSkillEntry("npm:some-package")
+	want := "cd /home/openclaw/.openclaw && npm install 'some-package'"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 func TestBuildSkillsScript_NoSkills(t *testing.T) {
 	instance := newTestInstance("no-skills")
 	script := BuildSkillsScript(instance)
@@ -3403,6 +3427,32 @@ func TestBuildSkillsScript_WithSkills(t *testing.T) {
 	}
 	if lines[1] != "npx -y clawhub install '@github/copilot-skill'" {
 		t.Errorf("line 1: %q", lines[1])
+	}
+}
+
+func TestBuildSkillsScript_MixedPrefixes(t *testing.T) {
+	instance := newTestInstance("mixed-skills")
+	instance.Spec.Skills = []string{
+		"npm:@openclaw/matrix",
+		"@anthropic/mcp-server-fetch",
+		"npm:some-tool",
+	}
+
+	script := BuildSkillsScript(instance)
+
+	lines := strings.Split(script, "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 lines, got %d: %q", len(lines), script)
+	}
+	// Sorted: @anthropic/... < npm:@openclaw/... < npm:some-tool
+	if lines[0] != "npx -y clawhub install '@anthropic/mcp-server-fetch'" {
+		t.Errorf("line 0: %q", lines[0])
+	}
+	if lines[1] != "cd /home/openclaw/.openclaw && npm install '@openclaw/matrix'" {
+		t.Errorf("line 1: %q", lines[1])
+	}
+	if lines[2] != "cd /home/openclaw/.openclaw && npm install 'some-tool'" {
+		t.Errorf("line 2: %q", lines[2])
 	}
 }
 
@@ -3466,6 +3516,38 @@ func TestBuildStatefulSet_WithSkills_InitSkillsContainer(t *testing.T) {
 	}
 	if sc.RunAsNonRoot == nil || !*sc.RunAsNonRoot {
 		t.Error("init-skills: runAsNonRoot should be true")
+	}
+
+	// NPM_CONFIG_IGNORE_SCRIPTS must be set to mitigate supply chain attacks (#91)
+	if envMap["NPM_CONFIG_IGNORE_SCRIPTS"] != "true" {
+		t.Errorf("init-skills NPM_CONFIG_IGNORE_SCRIPTS = %q, want \"true\"", envMap["NPM_CONFIG_IGNORE_SCRIPTS"])
+	}
+}
+
+func TestBuildStatefulSet_WithNpmSkill_InitSkillsScript(t *testing.T) {
+	instance := newTestInstance("npm-skill-sts")
+	instance.Spec.Skills = []string{"npm:@openclaw/matrix"}
+
+	sts := BuildStatefulSet(instance)
+
+	var skillsContainer *corev1.Container
+	for i := range sts.Spec.Template.Spec.InitContainers {
+		if sts.Spec.Template.Spec.InitContainers[i].Name == "init-skills" {
+			skillsContainer = &sts.Spec.Template.Spec.InitContainers[i]
+			break
+		}
+	}
+	if skillsContainer == nil {
+		t.Fatal("init-skills container not found")
+	}
+
+	// Command should use npm install, not clawhub
+	script := skillsContainer.Command[2]
+	if !strings.Contains(script, "npm install") {
+		t.Errorf("expected npm install in script, got: %q", script)
+	}
+	if strings.Contains(script, "clawhub") {
+		t.Errorf("npm: prefixed skill should not use clawhub, got: %q", script)
 	}
 }
 

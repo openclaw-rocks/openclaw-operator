@@ -327,6 +327,8 @@ func validateWorkspaceDirectory(dir string) error {
 }
 
 // validateSkillName checks a single skill identifier.
+// Entries may use the "npm:" prefix to install npm packages instead of ClawHub
+// skills. The prefix is stripped before character-set validation.
 func validateSkillName(name string) error {
 	if name == "" {
 		return fmt.Errorf("skill name must not be empty")
@@ -334,7 +336,15 @@ func validateSkillName(name string) error {
 	if len(name) > 128 {
 		return fmt.Errorf("skill name must be at most 128 characters")
 	}
-	for _, c := range name {
+	// Strip known prefix before character validation
+	check := name
+	if after, ok := strings.CutPrefix(name, "npm:"); ok {
+		if after == "" {
+			return fmt.Errorf("npm: prefix requires a package name")
+		}
+		check = after
+	}
+	for _, c := range check {
 		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
 			c == '-' || c == '_' || c == '/' || c == '.' || c == '@') {
 			return fmt.Errorf("skill name contains invalid character %q", string(c))

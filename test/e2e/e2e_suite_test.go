@@ -867,6 +867,82 @@ var _ = Describe("OpenClawInstance Controller", func() {
 		})
 	})
 
+	Context("When creating an instance with npm-prefixed skills (issue #131)", func() {
+		var namespace string
+
+		BeforeEach(func() {
+			namespace = "test-npm-skills-" + time.Now().Format("20060102150405")
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+			Expect(k8sClient.Create(ctx, ns)).Should(Succeed())
+		})
+
+		AfterEach(func() {
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+			_ = k8sClient.Delete(ctx, ns)
+		})
+
+		It("Should produce an init-skills container with npm install for npm: prefixed skills", func() {
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instanceName := "npm-skills-test"
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					Skills: []string{"npm:@openclaw/matrix", "@anthropic/mcp-server-fetch"},
+				},
+			}
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			statefulSet := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.StatefulSetName(instance),
+					Namespace: namespace,
+				}, statefulSet)
+			}, 60*time.Second, 2*time.Second).Should(Succeed())
+
+			var skillsContainer *corev1.Container
+			for i := range statefulSet.Spec.Template.Spec.InitContainers {
+				if statefulSet.Spec.Template.Spec.InitContainers[i].Name == "init-skills" {
+					skillsContainer = &statefulSet.Spec.Template.Spec.InitContainers[i]
+					break
+				}
+			}
+			Expect(skillsContainer).NotTo(BeNil(), "init-skills container should exist")
+
+			// Script should contain npm install for npm: prefixed skill
+			script := skillsContainer.Command[2]
+			Expect(script).To(ContainSubstring("npm install '@openclaw/matrix'"),
+				"npm: prefixed skill should use npm install")
+			// Script should also contain clawhub for non-prefixed skill
+			Expect(script).To(ContainSubstring("clawhub install '@anthropic/mcp-server-fetch'"),
+				"non-prefixed skill should use clawhub install")
+
+			// NPM_CONFIG_IGNORE_SCRIPTS should be set (#91)
+			envMap := map[string]string{}
+			for _, e := range skillsContainer.Env {
+				envMap[e.Name] = e.Value
+			}
+			Expect(envMap["NPM_CONFIG_IGNORE_SCRIPTS"]).To(Equal("true"),
+				"NPM_CONFIG_IGNORE_SCRIPTS should be true for supply chain security")
+
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+	})
+
 	Context("When validating postStart config restoration (issue #125)", func() {
 		var namespace string
 

@@ -1290,6 +1290,54 @@ func TestValidateCreate_JSON5_WithMerge(t *testing.T) {
 	}
 }
 
+func TestValidateSkillName_NpmPrefix(t *testing.T) {
+	// Valid npm-prefixed skill should pass
+	if err := validateSkillName("npm:@openclaw/matrix"); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestValidateSkillName_NpmPrefixUnscoped(t *testing.T) {
+	if err := validateSkillName("npm:some-package"); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestValidateSkillName_NpmPrefixEmpty(t *testing.T) {
+	err := validateSkillName("npm:")
+	if err == nil {
+		t.Fatal("expected error for bare npm: prefix")
+	}
+	if !strings.Contains(err.Error(), "requires a package name") {
+		t.Fatalf("error should mention package name, got: %v", err)
+	}
+}
+
+func TestValidateCreate_NpmPrefixedSkillAccepted(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.Skills = []string{"npm:@openclaw/matrix", "@anthropic/mcp-server-fetch"}
+
+	_, err := v.ValidateCreate(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestValidateCreate_BareColonSkillRejected(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.Skills = []string{"foo:bar"}
+
+	_, err := v.ValidateCreate(context.Background(), instance)
+	if err == nil {
+		t.Fatal("expected error for colon in skill name without known prefix")
+	}
+	if !strings.Contains(err.Error(), "invalid character") {
+		t.Fatalf("error should mention invalid character, got: %v", err)
+	}
+}
+
 func TestValidateCreate_JSON5_WithConfigMapRef(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()

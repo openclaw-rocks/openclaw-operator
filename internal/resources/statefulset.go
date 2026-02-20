@@ -549,8 +549,19 @@ func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance) string {
 	return strings.Join(lines, "\n")
 }
 
+// parseSkillEntry returns the shell command to install a single skill entry.
+// Entries prefixed with "npm:" are installed via `npm install` into the PVC
+// node_modules. All other entries use `npx -y clawhub install`.
+func parseSkillEntry(entry string) string {
+	if pkg, ok := strings.CutPrefix(entry, "npm:"); ok {
+		return fmt.Sprintf("cd /home/openclaw/.openclaw && npm install %s", shellQuote(pkg))
+	}
+	return fmt.Sprintf("npx -y clawhub install %s", shellQuote(entry))
+}
+
 // BuildSkillsScript generates the shell script for the skills init container.
-// It produces `npx -y clawhub install <skill>` for each skill (sorted for determinism).
+// Each entry produces either a `clawhub install` (default) or `npm install`
+// (when prefixed with "npm:") command. Entries are sorted for determinism.
 // Returns "" if no skills are defined.
 func BuildSkillsScript(instance *openclawv1alpha1.OpenClawInstance) string {
 	if len(instance.Spec.Skills) == 0 {
@@ -563,12 +574,14 @@ func BuildSkillsScript(instance *openclawv1alpha1.OpenClawInstance) string {
 
 	var lines []string
 	for _, skill := range skills {
-		lines = append(lines, fmt.Sprintf("npx -y clawhub install %s", shellQuote(skill)))
+		lines = append(lines, parseSkillEntry(skill))
 	}
 	return strings.Join(lines, "\n")
 }
 
-// buildSkillsInitContainer creates the init container that installs ClawHub skills.
+// buildSkillsInitContainer creates the init container that installs skills.
+// Supports both ClawHub skills (default) and npm packages (npm: prefix).
+// npm lifecycle scripts are disabled globally via NPM_CONFIG_IGNORE_SCRIPTS (#91).
 func buildSkillsInitContainer(instance *openclawv1alpha1.OpenClawInstance) *corev1.Container {
 	script := BuildSkillsScript(instance)
 	if script == "" {
@@ -583,6 +596,11 @@ func buildSkillsInitContainer(instance *openclawv1alpha1.OpenClawInstance) *core
 	env := []corev1.EnvVar{
 		{Name: "HOME", Value: "/tmp"},
 		{Name: "NPM_CONFIG_CACHE", Value: "/tmp/.npm"},
+		// Disable npm lifecycle scripts for all npm operations in this
+		// container tree (clawhub install + npm install). This mitigates
+		// supply chain attacks via malicious preinstall/postinstall scripts.
+		// See #91 and the ClawHavoc incident for context.
+		{Name: "NPM_CONFIG_IGNORE_SCRIPTS", Value: "true"},
 	}
 
 	// CA bundle for skills install (makes network calls)

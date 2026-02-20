@@ -23,8 +23,10 @@ type OpenClawInstanceSpec struct {
 	// +optional
 	Workspace *WorkspaceSpec `json:"workspace,omitempty"`
 
-	// Skills is a list of ClawHub skills to install via init container.
-	// Each entry is a skill identifier (e.g., "@anthropic/mcp-server-fetch").
+	// Skills is a list of skills to install via init container.
+	// Each entry is either a ClawHub skill identifier (e.g., "@anthropic/mcp-server-fetch")
+	// or an npm package prefixed with "npm:" (e.g., "npm:@openclaw/matrix").
+	// npm lifecycle scripts are disabled for security (see #91).
 	// +kubebuilder:validation:MaxItems=20
 	// +optional
 	Skills []string `json:"skills,omitempty"`

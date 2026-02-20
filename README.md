@@ -46,7 +46,7 @@ The operator reconciles this into a fully managed stack of 9+ Kubernetes resourc
 | **Observable** | Built-in metrics | Prometheus metrics, ServiceMonitor integration, structured JSON logging, Kubernetes events |
 | **Flexible** | Provider-agnostic config | Use any AI provider (Anthropic, OpenAI, or others) via environment variables and inline or external config |
 | **Config Modes** | Merge or overwrite | `overwrite` replaces config on restart; `merge` deep-merges with PVC config, preserving runtime changes. Config is restored on every container restart via init container. |
-| **Skills** | Declarative install | Install ClawHub skills via `spec.skills` - the operator runs an init container to fetch them before the agent starts |
+| **Skills** | Declarative install | Install ClawHub skills or npm packages via `spec.skills` - supports `npm:` prefix for npmjs.com packages |
 | **Runtime Deps** | pnpm & Python/uv | Built-in init containers install pnpm (via corepack) or Python 3.12 + uv for MCP servers and skills |
 | **Auto-Update** | OCI registry polling | Opt-in version tracking: checks the registry for new semver releases, backs up first, rolls out, and auto-rolls back if the new version fails health checks |
 | **Resilient** | Self-healing lifecycle | PodDisruptionBudgets, health probes, automatic config rollouts via content hashing, 5-minute drift detection |
@@ -298,14 +298,16 @@ spec:
 
 ### Skill installation
 
-Install ClawHub skills declaratively. The operator runs an init container that fetches each skill before the agent starts:
+Install skills declaratively. The operator runs an init container that fetches each skill before the agent starts. Entries use ClawHub by default, or prefix with `npm:` to install from npmjs.com:
 
 ```yaml
 spec:
   skills:
-    - "@anthropic/mcp-server-fetch"
-    - "@anthropic/mcp-server-filesystem"
+    - "@anthropic/mcp-server-fetch"       # ClawHub (default)
+    - "npm:@openclaw/matrix"              # npm package from npmjs.com
 ```
+
+npm lifecycle scripts are disabled globally on the init container (`NPM_CONFIG_IGNORE_SCRIPTS=true`) to mitigate supply chain attacks.
 
 ### Runtime dependencies
 
@@ -446,7 +448,7 @@ The operator follows a **secure-by-default** philosophy. Every instance ships wi
 |-------|----------|----------|
 | `runAsUser: 0` | Error | Blocked: root execution not allowed |
 | Reserved init container name | Error | `init-config`, `init-pnpm`, `init-python`, `init-skills`, `init-ollama` are reserved |
-| Invalid skill name | Error | Only alphanumeric, `-`, `_`, `/`, `.`, `@` allowed (max 128 chars) |
+| Invalid skill name | Error | Only alphanumeric, `-`, `_`, `/`, `.`, `@` allowed (max 128 chars). `npm:` prefix is allowed for npm packages; bare `npm:` is rejected |
 | Invalid CA bundle config | Error | Exactly one of `configMapName` or `secretName` must be set |
 | JSON5 with inline raw config | Error | JSON5 requires `configMapRef` (inline must be valid JSON) |
 | JSON5 with merge mode | Error | JSON5 is not compatible with `mergeMode: merge` |
