@@ -28,13 +28,13 @@ annotations:
   artifacthub.io/category: ai-machine-learning
   artifacthub.io/license: Apache-2.0
   artifacthub.io/operator: 'true'
-  artifacthub.io/operatorCapabilities: Basic Install
+  artifacthub.io/operatorCapabilities: Full Lifecycle
   artifacthub.io/prerelease: 'false'
   artifacthub.io/links: |
     - name: Website
       url: https://openclaw.rocks
-    - name: Blog Post
-      url: https://openclaw.rocks/blog/openclaw-kubernetes-operator
+    - name: Documentation
+      url: https://openclaw.rocks/blog/deploy-openclaw-kubernetes
     - name: OperatorHub
       url: https://operatorhub.io/operator/openclaw-operator
     - name: Artifact Hub
