@@ -1,2 +1,3 @@
 resources:
   - bases/openclaw.rocks_openclawinstances.yaml
+  - bases/openclaw.rocks_openclawselfconfigs.yaml

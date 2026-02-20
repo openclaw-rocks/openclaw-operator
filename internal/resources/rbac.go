@@ -17,6 +17,8 @@ limitations under the License.
 package resources
 
 import (
+	"sort"
+
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -35,7 +37,7 @@ func BuildServiceAccount(instance *openclawv1alpha1.OpenClawInstance) *corev1.Se
 			Labels:      labels,
 			Annotations: instance.Spec.Security.RBAC.ServiceAccountAnnotations,
 		},
-		AutomountServiceAccountToken: Ptr(false),
+		AutomountServiceAccountToken: Ptr(instance.Spec.SelfConfigure.Enabled),
 	}
 }
 
@@ -55,6 +57,34 @@ func BuildRole(instance *openclawv1alpha1.OpenClawInstance) *rbacv1.Role {
 		},
 	}
 
+	// Self-configure RBAC rules - give the agent access to K8s API
+	if instance.Spec.SelfConfigure.Enabled {
+		// Read own OpenClawInstance (scoped by resourceNames) + create/read self-config requests
+		rules = append(rules,
+			rbacv1.PolicyRule{
+				APIGroups:     []string{"openclaw.rocks"},
+				Resources:     []string{"openclawinstances"},
+				ResourceNames: []string{instance.Name},
+				Verbs:         []string{"get"},
+			},
+			rbacv1.PolicyRule{
+				APIGroups: []string{"openclaw.rocks"},
+				Resources: []string{"openclawselfconfigs"},
+				Verbs:     []string{"create", "get", "list"},
+			},
+		)
+
+		// Read own referenced secrets (scoped by resourceNames)
+		if secretNames := selfConfigSecretNames(instance); len(secretNames) > 0 {
+			rules = append(rules, rbacv1.PolicyRule{
+				APIGroups:     []string{""},
+				Resources:     []string{"secrets"},
+				ResourceNames: secretNames,
+				Verbs:         []string{"get"},
+			})
+		}
+	}
+
 	// Add additional rules from spec
 	for _, rule := range instance.Spec.Security.RBAC.AdditionalRules {
 		rules = append(rules, rbacv1.PolicyRule{
@@ -72,6 +102,37 @@ func BuildRole(instance *openclawv1alpha1.OpenClawInstance) *rbacv1.Role {
 		},
 		Rules: rules,
 	}
+}
+
+// selfConfigSecretNames collects all secret names referenced by the instance (deduplicated).
+func selfConfigSecretNames(instance *openclawv1alpha1.OpenClawInstance) []string {
+	seen := make(map[string]bool)
+
+	// Gateway token secret (auto-generated)
+	if instance.Spec.Gateway.ExistingSecret == "" {
+		seen[GatewayTokenSecretName(instance)] = true
+	} else {
+		seen[instance.Spec.Gateway.ExistingSecret] = true
+	}
+
+	// EnvFrom secret refs
+	for _, ef := range instance.Spec.EnvFrom {
+		if ef.SecretRef != nil && ef.SecretRef.Name != "" {
+			seen[ef.SecretRef.Name] = true
+		}
+	}
+
+	// Tailscale auth key secret
+	if instance.Spec.Tailscale.Enabled && instance.Spec.Tailscale.AuthKeySecretRef != nil {
+		seen[instance.Spec.Tailscale.AuthKeySecretRef.Name] = true
+	}
+
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // BuildRoleBinding creates a RoleBinding for the OpenClawInstance

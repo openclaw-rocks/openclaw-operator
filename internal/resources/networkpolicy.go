@@ -165,6 +165,20 @@ func buildEgressRules(instance *openclawv1alpha1.OpenClawInstance) []networkingv
 		},
 	})
 
+	// Allow K8s API server egress when self-configure is enabled (port 6443
+	// covers clusters with non-standard API server ports; 443 is already allowed above)
+	if instance.Spec.SelfConfigure.Enabled {
+		rules = append(rules, networkingv1.NetworkPolicyEgressRule{
+			To: []networkingv1.NetworkPolicyPeer{},
+			Ports: []networkingv1.NetworkPolicyPort{
+				{
+					Protocol: Ptr(corev1.ProtocolTCP),
+					Port:     Ptr(intstr.FromInt(6443)),
+				},
+			},
+		})
+	}
+
 	// Allow Tailscale STUN and WireGuard egress when enabled
 	if instance.Spec.Tailscale.Enabled {
 		rules = append(rules, networkingv1.NetworkPolicyEgressRule{

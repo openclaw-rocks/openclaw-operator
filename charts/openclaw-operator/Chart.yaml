@@ -47,6 +47,11 @@ annotations:
       name: openclawinstances.openclaw.rocks
       displayName: OpenClaw Instance
       description: Represents a managed OpenClaw AI agent instance
+    - kind: OpenClawSelfConfig
+      version: v1alpha1
+      name: openclawselfconfigs.openclaw.rocks
+      displayName: OpenClaw Self-Config
+      description: A request from an agent to modify its own OpenClawInstance spec
   artifacthub.io/crdsExamples: |
     - apiVersion: openclaw.rocks/v1alpha1
       kind: OpenClawInstance

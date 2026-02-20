@@ -79,7 +79,7 @@ func BuildStatefulSet(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenS
 				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName:            ServiceAccountName(instance),
-					AutomountServiceAccountToken:  Ptr(false),
+					AutomountServiceAccountToken:  Ptr(instance.Spec.SelfConfigure.Enabled),
 					SecurityContext:               buildPodSecurityContext(instance),
 					InitContainers:                buildInitContainers(instance),
 					Containers:                    buildContainers(instance, gwSecretName),
@@ -352,6 +352,14 @@ func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecre
 		})
 	}
 
+	// Self-configure env vars - let the agent know its identity
+	if instance.Spec.SelfConfigure.Enabled {
+		env = append(env,
+			corev1.EnvVar{Name: "OPENCLAW_INSTANCE_NAME", Value: instance.Name},
+			corev1.EnvVar{Name: "OPENCLAW_NAMESPACE", Value: instance.Namespace},
+		)
+	}
+
 	// Prepend runtime deps bin directory to PATH so pnpm/python are discoverable
 	if instance.Spec.RuntimeDeps.Pnpm || instance.Spec.RuntimeDeps.Python {
 		env = append(env, corev1.EnvVar{
@@ -527,16 +535,28 @@ func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance) string {
 	}
 
 	// 3. Seed workspace files (only if not present)
+	// Collect all workspace file names from both user-defined and operator-injected sources
 	if hasWorkspaceFiles(instance) {
+		allFiles := make(map[string]bool)
+		if ws != nil {
+			for name := range ws.InitialFiles {
+				allFiles[name] = true
+			}
+		}
+		if instance.Spec.SelfConfigure.Enabled {
+			allFiles["SELFCONFIG.md"] = true
+			allFiles["selfconfig.sh"] = true
+		}
+
 		// Ensure the workspace directory exists (may not on first run with emptyDir)
 		lines = append(lines, "mkdir -p /data/workspace")
 		// Sort keys for deterministic output
-		files := make([]string, 0, len(ws.InitialFiles))
-		for name := range ws.InitialFiles {
-			files = append(files, name)
+		sorted := make([]string, 0, len(allFiles))
+		for name := range allFiles {
+			sorted = append(sorted, name)
 		}
-		sort.Strings(files)
-		for _, name := range files {
+		sort.Strings(sorted)
+		for _, name := range sorted {
 			q := shellQuote(name)
 			lines = append(lines, fmt.Sprintf("[ -f /data/workspace/%s ] || cp /workspace-init/%s /data/workspace/%s", q, q, q))
 		}
@@ -767,8 +787,12 @@ uv --version`
 	}
 }
 
-// hasWorkspaceFiles returns true if the instance has workspace files to seed.
+// hasWorkspaceFiles returns true if the instance has workspace files to seed,
+// either from user-defined workspace files or operator-injected self-configure files.
 func hasWorkspaceFiles(instance *openclawv1alpha1.OpenClawInstance) bool {
+	if instance.Spec.SelfConfigure.Enabled {
+		return true
+	}
 	return instance.Spec.Workspace != nil && len(instance.Spec.Workspace.InitialFiles) > 0
 }
 

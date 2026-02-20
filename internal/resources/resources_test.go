@@ -5939,3 +5939,359 @@ func TestBuildStatefulSet_OllamaEnabled_InitContainerUsesCustomImage(t *testing.
 		t.Errorf("init-ollama image = %q, want %q", initOllama.Image, "my-registry.io/ollama:v0.3.0")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Self-Configure tests
+// ---------------------------------------------------------------------------
+
+func TestBuildRole_SelfConfigureEnabled(t *testing.T) {
+	instance := newTestInstance("sc-role")
+	instance.Spec.SelfConfigure = openclawv1alpha1.SelfConfigureSpec{
+		Enabled:        true,
+		AllowedActions: []openclawv1alpha1.SelfConfigAction{"skills", "config"},
+	}
+
+	role := BuildRole(instance)
+
+	// 1 base rule (configmap) + 3 self-configure rules (instances, selfconfigs, secrets) + 0 additional
+	if len(role.Rules) < 4 {
+		t.Fatalf("expected at least 4 rules, got %d", len(role.Rules))
+	}
+
+	// Check for openclawinstances get rule
+	foundInstances := false
+	for _, rule := range role.Rules {
+		for _, res := range rule.Resources {
+			if res == "openclawinstances" {
+				foundInstances = true
+				if len(rule.ResourceNames) != 1 || rule.ResourceNames[0] != "sc-role" {
+					t.Errorf("instances rule resourceNames = %v, want [sc-role]", rule.ResourceNames)
+				}
+				if len(rule.Verbs) != 1 || rule.Verbs[0] != "get" {
+					t.Errorf("instances rule verbs = %v, want [get]", rule.Verbs)
+				}
+			}
+		}
+	}
+	if !foundInstances {
+		t.Error("missing openclawinstances rule")
+	}
+
+	// Check for openclawselfconfigs rule
+	foundSelfConfigs := false
+	for _, rule := range role.Rules {
+		for _, res := range rule.Resources {
+			if res != "openclawselfconfigs" {
+				continue
+			}
+			foundSelfConfigs = true
+			if len(rule.ResourceNames) > 0 {
+				t.Error("selfconfigs rule should not have resourceNames (create cannot be scoped)")
+			}
+			verbSet := map[string]bool{}
+			for _, v := range rule.Verbs {
+				verbSet[v] = true
+			}
+			for _, expected := range []string{"create", "get", "list"} {
+				if !verbSet[expected] {
+					t.Errorf("selfconfigs rule missing verb %q", expected)
+				}
+			}
+		}
+	}
+	if !foundSelfConfigs {
+		t.Error("missing openclawselfconfigs rule")
+	}
+
+	// Check for secrets rule (gateway token secret should be included)
+	foundSecrets := false
+	for _, rule := range role.Rules {
+		for _, res := range rule.Resources {
+			if res != "secrets" {
+				continue
+			}
+			foundSecrets = true
+			if len(rule.ResourceNames) == 0 {
+				t.Error("secrets rule should have resourceNames for scoping")
+			}
+			// Should include the gateway token secret
+			found := false
+			for _, name := range rule.ResourceNames {
+				if name == "sc-role-gateway-token" {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("secrets rule resourceNames %v should include sc-role-gateway-token", rule.ResourceNames)
+			}
+		}
+	}
+	if !foundSecrets {
+		t.Error("missing secrets rule")
+	}
+}
+
+func TestBuildRole_SelfConfigureDisabled(t *testing.T) {
+	instance := newTestInstance("sc-disabled")
+
+	role := BuildRole(instance)
+
+	// Only the 1 base rule (configmap)
+	if len(role.Rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(role.Rules))
+	}
+
+	// No openclaw.rocks rules
+	for _, rule := range role.Rules {
+		for _, ag := range rule.APIGroups {
+			if ag == "openclaw.rocks" {
+				t.Error("should not have openclaw.rocks rules when self-configure is disabled")
+			}
+		}
+	}
+}
+
+func TestBuildRole_SelfConfigureWithEnvFromSecrets(t *testing.T) {
+	instance := newTestInstance("sc-envfrom")
+	instance.Spec.SelfConfigure = openclawv1alpha1.SelfConfigureSpec{
+		Enabled:        true,
+		AllowedActions: []openclawv1alpha1.SelfConfigAction{"skills"},
+	}
+	instance.Spec.EnvFrom = []corev1.EnvFromSource{
+		{
+			SecretRef: &corev1.SecretEnvSource{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "api-keys"},
+			},
+		},
+	}
+
+	role := BuildRole(instance)
+
+	// Find secrets rule
+	for _, rule := range role.Rules {
+		for _, res := range rule.Resources {
+			if res == "secrets" {
+				// Should include both gateway token and envfrom secret
+				nameSet := map[string]bool{}
+				for _, name := range rule.ResourceNames {
+					nameSet[name] = true
+				}
+				if !nameSet["api-keys"] {
+					t.Error("secrets rule should include envFrom secret 'api-keys'")
+				}
+				if !nameSet["sc-envfrom-gateway-token"] {
+					t.Error("secrets rule should include gateway token secret")
+				}
+			}
+		}
+	}
+}
+
+func TestBuildServiceAccount_SelfConfigureTokenMount(t *testing.T) {
+	instance := newTestInstance("sc-sa-token")
+	instance.Spec.SelfConfigure = openclawv1alpha1.SelfConfigureSpec{
+		Enabled: true,
+	}
+
+	sa := BuildServiceAccount(instance)
+
+	if sa.AutomountServiceAccountToken == nil || !*sa.AutomountServiceAccountToken {
+		t.Error("AutomountServiceAccountToken should be true when self-configure is enabled")
+	}
+}
+
+func TestBuildServiceAccount_SelfConfigureDisabledTokenMount(t *testing.T) {
+	instance := newTestInstance("sc-sa-notoken")
+
+	sa := BuildServiceAccount(instance)
+
+	if sa.AutomountServiceAccountToken == nil || *sa.AutomountServiceAccountToken {
+		t.Error("AutomountServiceAccountToken should be false when self-configure is disabled")
+	}
+}
+
+func TestBuildStatefulSet_SelfConfigureEnvVars(t *testing.T) {
+	instance := newTestInstance("sc-env")
+	instance.Spec.SelfConfigure = openclawv1alpha1.SelfConfigureSpec{
+		Enabled: true,
+	}
+
+	sts := BuildStatefulSet(instance)
+
+	mainContainer := sts.Spec.Template.Spec.Containers[0]
+	envMap := map[string]string{}
+	for _, ev := range mainContainer.Env {
+		envMap[ev.Name] = ev.Value
+	}
+
+	if envMap["OPENCLAW_INSTANCE_NAME"] != "sc-env" {
+		t.Errorf("OPENCLAW_INSTANCE_NAME = %q, want %q", envMap["OPENCLAW_INSTANCE_NAME"], "sc-env")
+	}
+	if envMap["OPENCLAW_NAMESPACE"] != "test-ns" {
+		t.Errorf("OPENCLAW_NAMESPACE = %q, want %q", envMap["OPENCLAW_NAMESPACE"], "test-ns")
+	}
+}
+
+func TestBuildStatefulSet_SelfConfigureDisabledNoEnvVars(t *testing.T) {
+	instance := newTestInstance("sc-noenv")
+
+	sts := BuildStatefulSet(instance)
+
+	mainContainer := sts.Spec.Template.Spec.Containers[0]
+	for _, ev := range mainContainer.Env {
+		if ev.Name == "OPENCLAW_INSTANCE_NAME" || ev.Name == "OPENCLAW_NAMESPACE" {
+			t.Errorf("should not have %s when self-configure is disabled", ev.Name)
+		}
+	}
+}
+
+func TestBuildStatefulSet_SelfConfigureAutoMount(t *testing.T) {
+	instance := newTestInstance("sc-automount")
+	instance.Spec.SelfConfigure = openclawv1alpha1.SelfConfigureSpec{
+		Enabled: true,
+	}
+
+	sts := BuildStatefulSet(instance)
+
+	if sts.Spec.Template.Spec.AutomountServiceAccountToken == nil ||
+		!*sts.Spec.Template.Spec.AutomountServiceAccountToken {
+		t.Error("pod AutomountServiceAccountToken should be true when self-configure is enabled")
+	}
+}
+
+func TestBuildNetworkPolicy_SelfConfigureEgress(t *testing.T) {
+	instance := newTestInstance("sc-netpol")
+	instance.Spec.SelfConfigure = openclawv1alpha1.SelfConfigureSpec{
+		Enabled: true,
+	}
+
+	np := BuildNetworkPolicy(instance)
+
+	// Check for port 6443 egress rule
+	found6443 := false
+	for _, rule := range np.Spec.Egress {
+		for _, port := range rule.Ports {
+			if port.Port != nil && port.Port.IntValue() == 6443 {
+				found6443 = true
+			}
+		}
+	}
+	if !found6443 {
+		t.Error("NetworkPolicy should have egress rule for K8s API port 6443")
+	}
+}
+
+func TestBuildNetworkPolicy_SelfConfigureDisabledNo6443(t *testing.T) {
+	instance := newTestInstance("sc-netpol-off")
+
+	np := BuildNetworkPolicy(instance)
+
+	for _, rule := range np.Spec.Egress {
+		for _, port := range rule.Ports {
+			if port.Port != nil && port.Port.IntValue() == 6443 {
+				t.Error("NetworkPolicy should NOT have port 6443 when self-configure is disabled")
+			}
+		}
+	}
+}
+
+func TestBuildWorkspaceConfigMap_SelfConfigureSkillInjected(t *testing.T) {
+	instance := newTestInstance("sc-ws")
+	instance.Spec.SelfConfigure = openclawv1alpha1.SelfConfigureSpec{
+		Enabled: true,
+	}
+
+	cm := BuildWorkspaceConfigMap(instance)
+
+	if cm == nil {
+		t.Fatal("BuildWorkspaceConfigMap returned nil when self-configure is enabled")
+	}
+
+	if _, ok := cm.Data["SELFCONFIG.md"]; !ok {
+		t.Error("workspace ConfigMap missing SELFCONFIG.md")
+	}
+	if _, ok := cm.Data["selfconfig.sh"]; !ok {
+		t.Error("workspace ConfigMap missing selfconfig.sh")
+	}
+}
+
+func TestBuildWorkspaceConfigMap_SelfConfigureMergedWithUserFiles(t *testing.T) {
+	instance := newTestInstance("sc-ws-merge")
+	instance.Spec.SelfConfigure = openclawv1alpha1.SelfConfigureSpec{
+		Enabled: true,
+	}
+	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+		InitialFiles: map[string]string{
+			"README.md": "# My Project",
+			"notes.txt": "some notes",
+		},
+	}
+
+	cm := BuildWorkspaceConfigMap(instance)
+
+	if cm == nil {
+		t.Fatal("BuildWorkspaceConfigMap returned nil")
+	}
+
+	// User files preserved
+	if cm.Data["README.md"] != "# My Project" {
+		t.Error("user file README.md not preserved")
+	}
+	if cm.Data["notes.txt"] != "some notes" {
+		t.Error("user file notes.txt not preserved")
+	}
+
+	// Self-configure files injected
+	if _, ok := cm.Data["SELFCONFIG.md"]; !ok {
+		t.Error("missing SELFCONFIG.md")
+	}
+	if _, ok := cm.Data["selfconfig.sh"]; !ok {
+		t.Error("missing selfconfig.sh")
+	}
+}
+
+func TestBuildWorkspaceConfigMap_SelfConfigureDisabledNoFiles(t *testing.T) {
+	instance := newTestInstance("sc-ws-off")
+
+	cm := BuildWorkspaceConfigMap(instance)
+
+	if cm != nil {
+		t.Error("BuildWorkspaceConfigMap should return nil when no workspace files and self-configure disabled")
+	}
+}
+
+func TestHasWorkspaceFiles_SelfConfigureEnabled(t *testing.T) {
+	instance := newTestInstance("sc-hasws")
+	instance.Spec.SelfConfigure = openclawv1alpha1.SelfConfigureSpec{
+		Enabled: true,
+	}
+
+	if !hasWorkspaceFiles(instance) {
+		t.Error("hasWorkspaceFiles should return true when self-configure is enabled")
+	}
+}
+
+func TestBuildStatefulSet_SelfConfigureWorkspaceVolume(t *testing.T) {
+	instance := newTestInstance("sc-ws-vol")
+	instance.Spec.SelfConfigure = openclawv1alpha1.SelfConfigureSpec{
+		Enabled: true,
+	}
+
+	sts := BuildStatefulSet(instance)
+
+	// Should have workspace-init volume
+	foundVol := false
+	for _, vol := range sts.Spec.Template.Spec.Volumes {
+		if vol.Name == "workspace-init" {
+			foundVol = true
+			if vol.ConfigMap == nil {
+				t.Error("workspace-init volume should reference a ConfigMap")
+			} else if vol.ConfigMap.Name != "sc-ws-vol-workspace" {
+				t.Errorf("workspace-init volume ConfigMap name = %q, want %q", vol.ConfigMap.Name, "sc-ws-vol-workspace")
+			}
+		}
+	}
+	if !foundVol {
+		t.Error("missing workspace-init volume when self-configure is enabled")
+	}
+}

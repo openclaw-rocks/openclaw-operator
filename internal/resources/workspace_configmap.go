@@ -24,9 +24,24 @@ import (
 )
 
 // BuildWorkspaceConfigMap creates a ConfigMap containing workspace seed files.
-// Returns nil if the instance has no workspace files configured.
+// Returns nil if the instance has no workspace files (user-defined or operator-injected).
 func BuildWorkspaceConfigMap(instance *openclawv1alpha1.OpenClawInstance) *corev1.ConfigMap {
-	if instance.Spec.Workspace == nil || len(instance.Spec.Workspace.InitialFiles) == 0 {
+	files := make(map[string]string)
+
+	// User-defined workspace files
+	if instance.Spec.Workspace != nil {
+		for k, v := range instance.Spec.Workspace.InitialFiles {
+			files[k] = v
+		}
+	}
+
+	// Operator-injected self-configure files
+	if instance.Spec.SelfConfigure.Enabled {
+		files["SELFCONFIG.md"] = SelfConfigureSkillContent
+		files["selfconfig.sh"] = SelfConfigureHelperScript
+	}
+
+	if len(files) == 0 {
 		return nil
 	}
 
@@ -36,6 +51,6 @@ func BuildWorkspaceConfigMap(instance *openclawv1alpha1.OpenClawInstance) *corev
 			Namespace: instance.Namespace,
 			Labels:    Labels(instance),
 		},
-		Data: instance.Spec.Workspace.InitialFiles,
+		Data: files,
 	}
 }

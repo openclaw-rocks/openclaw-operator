@@ -54,6 +54,7 @@ The operator reconciles this into a fully managed stack of 9+ Kubernetes resourc
 | **Workspace Seeding** | Initial files & dirs | Pre-populate the workspace with files and directories before the agent starts |
 | **Gateway Auth** | Auto-generated tokens | Automatic gateway token Secret per instance, bypassing mDNS pairing (unusable in k8s) |
 | **Tailscale** | Tailnet access | Expose via Tailscale Serve or Funnel with SSO auth - no Ingress needed |
+| **Self-Configure** | Agent self-modification | Agents can modify their own skills, config, env vars, and workspace files via the K8s API - controlled by an allowlist of permitted actions |
 | **Extensible** | Sidecars & init containers | Chromium for browser automation, Ollama for local LLMs, Tailscale for tailnet access, plus custom init containers and sidecars |
 | **Cloud Native** | SA annotations & CA bundles | AWS IRSA / GCP Workload Identity via ServiceAccount annotations; CA bundle injection for corporate proxies |
 
@@ -62,8 +63,8 @@ The operator reconciles this into a fully managed stack of 9+ Kubernetes resourc
 
 ```
 +-----------------------------------------------------------------+
-|  OpenClawInstance CR                                             |
-|  (your declarative config)                                      |
+|  OpenClawInstance CR          OpenClawSelfConfig CR              |
+|  (your declarative config)   (agent self-modification requests) |
 +---------------+-------------------------------------------------+
                 | watch
                 v
@@ -309,6 +310,44 @@ spec:
 
 npm lifecycle scripts are disabled globally on the init container (`NPM_CONFIG_IGNORE_SCRIPTS=true`) to mitigate supply chain attacks.
 
+### Self-configure
+
+Allow agents to modify their own configuration by creating `OpenClawSelfConfig` resources via the K8s API. The operator validates each request against the instance's `allowedActions` policy before applying changes:
+
+```yaml
+spec:
+  selfConfigure:
+    enabled: true
+    allowedActions:
+      - skills        # add/remove skills
+      - config        # patch openclaw.json
+      - workspaceFiles # add/remove workspace files
+      - envVars       # add/remove environment variables
+```
+
+When enabled, the operator:
+- Grants the instance's ServiceAccount RBAC permissions to read its own CRD and create `OpenClawSelfConfig` resources
+- Enables SA token automounting so the agent can authenticate with the K8s API
+- Injects a `SELFCONFIG.md` skill file and `selfconfig.sh` helper script into the workspace
+- Opens port 6443 egress in the NetworkPolicy for K8s API access
+
+The agent creates a request like:
+
+```yaml
+apiVersion: openclaw.rocks/v1alpha1
+kind: OpenClawSelfConfig
+metadata:
+  name: add-fetch-skill
+spec:
+  instanceRef: my-agent
+  addSkills:
+    - "@anthropic/mcp-server-fetch"
+```
+
+The operator validates the request, applies it to the parent `OpenClawInstance`, and sets the request's status to `Applied`, `Denied`, or `Failed`. Terminal requests are auto-deleted after 1 hour.
+
+See the [API reference](docs/api-reference.md) for the full `OpenClawSelfConfig` CRD spec and `spec.selfConfigure` fields.
+
 ### Runtime dependencies
 
 Enable built-in init containers that install pnpm or Python/uv to the data PVC for MCP servers and skills:
@@ -439,7 +478,7 @@ The operator follows a **secure-by-default** philosophy. Every instance ships wi
 - **Seccomp RuntimeDefault**: syscall filtering enabled
 - **Default-deny NetworkPolicy**: only DNS (53) and HTTPS (443) egress allowed; ingress limited to same namespace
 - **Minimal RBAC**: each instance gets its own ServiceAccount with read-only access to its own ConfigMap; operator can create/update Secrets only for operator-managed gateway tokens
-- **No automatic token mounting**: `automountServiceAccountToken: false` on both ServiceAccounts and pod specs
+- **No automatic token mounting**: `automountServiceAccountToken: false` on both ServiceAccounts and pod specs (enabled only when `selfConfigure` is active)
 - **Secret validation**: the operator checks that all referenced Secrets exist and sets a `SecretsReady` condition
 
 ### Validating webhook
