@@ -119,7 +119,7 @@ func enrichConfigWithGatewayAuth(configJSON []byte, token string) ([]byte, error
 		return configJSON, nil
 	}
 
-	auth["mode"] = "token"
+	auth["mode"] = "token" //nolint:goconst // OpenClaw auth mode, not k8s Secret key
 	auth["token"] = token
 	gw["auth"] = auth
 	config["gateway"] = gw
