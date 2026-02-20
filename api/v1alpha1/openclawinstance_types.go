@@ -579,6 +579,37 @@ type ServiceSpec struct {
 	// Annotations to add to the Service
 	// +optional
 	Annotations map[string]string `json:"annotations,omitempty"`
+
+	// Ports defines custom ports exposed on the Service.
+	// When set, these replace the default gateway and canvas ports.
+	// When empty, the operator creates default gateway (18789) and canvas (18793) ports.
+	// +kubebuilder:validation:MaxItems=20
+	// +optional
+	Ports []ServicePortSpec `json:"ports,omitempty"`
+}
+
+// ServicePortSpec defines a port exposed by the Service
+type ServicePortSpec struct {
+	// Name is the name of the port
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// Port is the port number exposed on the Service
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	Port int32 `json:"port"`
+
+	// TargetPort is the port on the container to route to (defaults to Port)
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	// +optional
+	TargetPort *int32 `json:"targetPort,omitempty"`
+
+	// Protocol is the protocol for the port
+	// +kubebuilder:validation:Enum=TCP;UDP;SCTP
+	// +kubebuilder:default="TCP"
+	// +optional
+	Protocol corev1.Protocol `json:"protocol,omitempty"`
 }
 
 // IngressSpec defines the Ingress configuration
@@ -631,6 +662,13 @@ type IngressPath struct {
 	// +kubebuilder:default="Prefix"
 	// +optional
 	PathType string `json:"pathType,omitempty"`
+
+	// Port is the backend service port number to route traffic to.
+	// Defaults to the gateway port (18789) when not set.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	// +optional
+	Port *int32 `json:"port,omitempty"`
 }
 
 // IngressTLS defines TLS configuration for the Ingress

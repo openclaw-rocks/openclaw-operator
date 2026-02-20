@@ -4690,6 +4690,14 @@ spec:
                                     - Exact
                                     - ImplementationSpecific
                                     type: string
+                                  port:
+                                    description: |-
+                                      Port is the backend service port number to route traffic to.
+                                      Defaults to the gateway port (18789) when not set.
+                                    format: int32
+                                    maximum: 65535
+                                    minimum: 1
+                                    type: integer
                                 type: object
                               type: array
                           required:
@@ -4751,6 +4759,47 @@ spec:
                           type: string
                         description: Annotations to add to the Service
                         type: object
+                      ports:
+                        description: |-
+                          Ports defines custom ports exposed on the Service.
+                          When set, these replace the default gateway and canvas ports.
+                          When empty, the operator creates default gateway (18789) and canvas (18793) ports.
+                        items:
+                          description: ServicePortSpec defines a port exposed by the
+                            Service
+                          properties:
+                            name:
+                              description: Name is the name of the port
+                              minLength: 1
+                              type: string
+                            port:
+                              description: Port is the port number exposed on the
+                                Service
+                              format: int32
+                              maximum: 65535
+                              minimum: 1
+                              type: integer
+                            protocol:
+                              default: TCP
+                              description: Protocol is the protocol for the port
+                              enum:
+                              - TCP
+                              - UDP
+                              - SCTP
+                              type: string
+                            targetPort:
+                              description: TargetPort is the port on the container
+                                to route to (defaults to Port)
+                              format: int32
+                              maximum: 65535
+                              minimum: 1
+                              type: integer
+                          required:
+                          - name
+                          - port
+                          type: object
+                        maxItems: 20
+                        type: array
                       type:
                         default: ClusterIP
                         description: Type is the Kubernetes Service type
@@ -8585,8 +8634,10 @@ spec:
                 type: array
               skills:
                 description: |-
-                  Skills is a list of ClawHub skills to install via init container.
-                  Each entry is a skill identifier (e.g., "@anthropic/mcp-server-fetch").
+                  Skills is a list of skills to install via init container.
+                  Each entry is either a ClawHub skill identifier (e.g., "@anthropic/mcp-server-fetch")
+                  or an npm package prefixed with "npm:" (e.g., "npm:@openclaw/matrix").
+                  npm lifecycle scripts are disabled for security (see #91).
                 items:
                   type: string
                 maxItems: 20

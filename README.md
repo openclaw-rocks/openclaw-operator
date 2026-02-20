@@ -93,7 +93,7 @@ The operator reconciles this into a fully managed stack of 9+ Kubernetes resourc
 |  |                     Tailscale (opt) + custom sidecars      | |
 |  +------------------------------------------------------------+ |
 |                                                                 |
-|  Service (ports 18789, 18793) -> Ingress (optional)             |
+|  Service (default: 18789, 18793 or custom) -> Ingress (opt)     |
 +-----------------------------------------------------------------+
 ```
 
@@ -361,6 +361,23 @@ spec:
     - name: shared-data
       mountPath: /shared
 ```
+
+### Custom service ports
+
+By default the operator creates a Service with the gateway (18789) and canvas (18793) ports. To expose custom ports instead (e.g., for a non-default application), set `spec.networking.service.ports`:
+
+```yaml
+spec:
+  networking:
+    service:
+      type: ClusterIP
+      ports:
+        - name: http
+          port: 3978
+          targetPort: 3978
+```
+
+When `ports` is set, it fully replaces the default ports -- including the Chromium port if the sidecar is enabled. To keep the defaults alongside custom ports, include them explicitly. If `targetPort` is omitted it defaults to `port`. See the [API reference](docs/api-reference.md#specnetworkingservice) for all fields.
 
 ### CA bundle injection
 

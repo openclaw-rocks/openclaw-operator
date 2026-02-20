@@ -400,18 +400,42 @@ Network-related configuration for the instance.
 
 #### spec.networking.service
 
-| Field         | Type                | Default      | Description                                               |
-|---------------|---------------------|--------------|-----------------------------------------------------------|
-| `type`        | `string`            | `ClusterIP`  | Service type. One of: `ClusterIP`, `LoadBalancer`, `NodePort`. |
-| `annotations` | `map[string]string` | --           | Annotations to add to the Service.                        |
+| Field         | Type                  | Default      | Description                                               |
+|---------------|-----------------------|--------------|-----------------------------------------------------------|
+| `type`        | `string`              | `ClusterIP`  | Service type. One of: `ClusterIP`, `LoadBalancer`, `NodePort`. |
+| `annotations` | `map[string]string`   | --           | Annotations to add to the Service.                        |
+| `ports`       | `[]ServicePortSpec`   | --           | Custom ports exposed on the Service. When set, replaces the default gateway and canvas ports. |
 
-The Service always exposes:
+**ServicePortSpec:**
+
+| Field        | Type     | Default | Description                                        |
+|--------------|----------|---------|----------------------------------------------------|
+| `name`       | `string` | --      | Name of the port (required).                       |
+| `port`       | `int32`  | --      | Port number exposed on the Service (required, 1-65535). |
+| `targetPort` | `*int32` | `port`  | Port on the container to route to (defaults to `port`). |
+| `protocol`   | `string` | `TCP`   | Protocol for the port. One of: `TCP`, `UDP`, `SCTP`. |
+
+When `ports` is not set, the Service exposes these default ports:
 
 | Port Name   | Port   | Description                     |
 |-------------|--------|---------------------------------|
 | `gateway`   | 18789  | OpenClaw WebSocket gateway.     |
 | `canvas`    | 18793  | OpenClaw Canvas HTTP server.    |
 | `chromium`  | 3000   | Chrome DevTools Protocol (only if Chromium sidecar is enabled). |
+
+**Note:** Custom ports fully replace the defaults, including the Chromium port. If you use custom ports and have the Chromium sidecar enabled, include the Chromium port (9222) explicitly.
+
+**Custom ports example:**
+
+```yaml
+networking:
+  service:
+    type: ClusterIP
+    ports:
+      - name: http
+        port: 3978
+        targetPort: 3978
+```
 
 #### spec.networking.ingress
 
@@ -437,6 +461,26 @@ The Service always exposes:
 |------------|----------|------------|--------------------------------------------------------------------------|
 | `path`     | `string` | `/`        | URL path.                                                                |
 | `pathType` | `string` | `Prefix`   | Path matching. One of: `Prefix`, `Exact`, `ImplementationSpecific`.      |
+| `port`     | `*int32` | `18789`    | Backend service port number. Defaults to the gateway port when not set.  |
+
+**Custom backend port example:**
+
+```yaml
+networking:
+  ingress:
+    enabled: true
+    className: nginx
+    hosts:
+      - host: aibot.example.com
+        paths:
+          - path: /api/messages
+            pathType: Prefix
+            port: 3978
+    tls:
+      - hosts:
+          - aibot.example.com
+        secretName: certificate-aibot-tls
+```
 
 **IngressTLS:**
 
