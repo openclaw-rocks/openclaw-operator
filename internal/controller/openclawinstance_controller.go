@@ -283,7 +283,7 @@ func (r *OpenClawInstanceReconciler) reconcileResources(ctx context.Context, ins
 	}
 	logger.V(1).Info("Gateway token secret reconciled")
 
-	// 3. Reconcile ConfigMap (if using raw config)
+	// 3. Reconcile ConfigMap (always - enrichment pipeline runs on all config sources)
 	if err := r.reconcileConfigMap(ctx, instance, gatewayToken); err != nil {
 		return fmt.Errorf("failed to reconcile ConfigMap: %w", err)
 	}
@@ -533,13 +533,50 @@ func (r *OpenClawInstanceReconciler) reconcileGatewayTokenSecret(ctx context.Con
 	return tokenHex, nil
 }
 
-// reconcileConfigMap reconciles the ConfigMap for openclaw.json
+// reconcileConfigMap reconciles the operator-managed ConfigMap for openclaw.json.
+// It always creates the enriched ConfigMap regardless of config source (raw,
+// configMapRef, or none). When configMapRef is set, the external ConfigMap is
+// read and its content is used as the base for the enrichment pipeline.
 func (r *OpenClawInstanceReconciler) reconcileConfigMap(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance, gatewayToken string) error {
-	// Only create ConfigMap if using raw config (not referencing external ConfigMap)
+	var desired *corev1.ConfigMap
+
 	if instance.Spec.Config.ConfigMapRef != nil {
-		// Using external ConfigMap, nothing to create
-		instance.Status.ManagedResources.ConfigMap = ""
-		return nil
+		// Read the user's external ConfigMap
+		ref := instance.Spec.Config.ConfigMapRef
+		externalCM := &corev1.ConfigMap{}
+		if err := r.Get(ctx, client.ObjectKey{
+			Namespace: instance.Namespace,
+			Name:      ref.Name,
+		}, externalCM); err != nil {
+			meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+				Type:               openclawv1alpha1.ConditionTypeConfigValid,
+				Status:             metav1.ConditionFalse,
+				Reason:             "ConfigMapNotFound",
+				Message:            fmt.Sprintf("External ConfigMap %q not found: %v", ref.Name, err),
+				LastTransitionTime: metav1.Now(),
+			})
+			return fmt.Errorf("external ConfigMap %q not found: %w", ref.Name, err)
+		}
+
+		key := ref.Key
+		if key == "" {
+			key = "openclaw.json"
+		}
+		data, ok := externalCM.Data[key]
+		if !ok {
+			meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+				Type:               openclawv1alpha1.ConditionTypeConfigValid,
+				Status:             metav1.ConditionFalse,
+				Reason:             "ConfigMapKeyNotFound",
+				Message:            fmt.Sprintf("Key %q not found in ConfigMap %q", key, ref.Name),
+				LastTransitionTime: metav1.Now(),
+			})
+			return fmt.Errorf("key %q not found in ConfigMap %q", key, ref.Name)
+		}
+
+		desired = resources.BuildConfigMapFromBytes(instance, []byte(data), gatewayToken)
+	} else {
+		desired = resources.BuildConfigMap(instance, gatewayToken)
 	}
 
 	cm := &corev1.ConfigMap{
@@ -549,7 +586,6 @@ func (r *OpenClawInstanceReconciler) reconcileConfigMap(ctx context.Context, ins
 		},
 	}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
-		desired := resources.BuildConfigMap(instance, gatewayToken)
 		cm.Labels = desired.Labels
 		cm.Data = desired.Data
 		return controllerutil.SetControllerReference(instance, cm, r.Scheme)

@@ -29,16 +29,31 @@ import (
 // BuildConfigMap creates a ConfigMap for the OpenClawInstance configuration.
 // It always injects gateway.bind=lan (so health probes work) and optionally
 // injects gateway.auth credentials when gatewayToken is non-empty.
+// Uses the inline raw config from the instance spec as the base.
 func BuildConfigMap(instance *openclawv1alpha1.OpenClawInstance, gatewayToken string) *corev1.ConfigMap {
-	labels := Labels(instance)
-
 	// Start with empty config, overlay raw config if present
 	configBytes := []byte("{}")
 	if instance.Spec.Config.Raw != nil && len(instance.Spec.Config.Raw.Raw) > 0 {
 		configBytes = instance.Spec.Config.Raw.Raw
 	}
 
-	// Enrichment pipeline: gateway auth → tailscale → browser → gateway bind
+	return BuildConfigMapFromBytes(instance, configBytes, gatewayToken)
+}
+
+// BuildConfigMapFromBytes creates a ConfigMap for the OpenClawInstance using
+// the provided base config bytes. This allows the controller to pass config
+// from any source (inline raw, external ConfigMap, or empty default).
+// The enrichment pipeline (gateway auth, tailscale, browser, gateway bind)
+// always runs on the provided bytes.
+func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseConfig []byte, gatewayToken string) *corev1.ConfigMap {
+	labels := Labels(instance)
+
+	configBytes := baseConfig
+	if len(configBytes) == 0 {
+		configBytes = []byte("{}")
+	}
+
+	// Enrichment pipeline: gateway auth -> tailscale -> browser -> gateway bind
 	if gatewayToken != "" {
 		if enriched, err := enrichConfigWithGatewayAuth(configBytes, gatewayToken); err == nil {
 			configBytes = enriched
