@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.18](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.17...v0.9.18) (2026-02-20)
+
+
+### Features
+
+* improve OperatorHub and ArtifactHub listing quality ([#142](https://github.com/openclaw-rocks/k8s-operator/issues/142)) ([b15937c](https://github.com/openclaw-rocks/k8s-operator/commit/b15937c87da175cf72f1b7981c6bcef1b8330bfe))
+
 ## [0.9.17](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.16...v0.9.17) (2026-02-20)
 
 
