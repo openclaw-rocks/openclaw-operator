@@ -421,7 +421,7 @@ When `ports` is not set, the Service exposes these default ports:
 |-------------|--------|---------------------------------|
 | `gateway`   | 18789  | OpenClaw WebSocket gateway.     |
 | `canvas`    | 18793  | OpenClaw Canvas HTTP server.    |
-| `chromium`  | 3000   | Chrome DevTools Protocol (only if Chromium sidecar is enabled). |
+| `chromium`  | 9222   | Chrome DevTools Protocol (only if Chromium sidecar is enabled). |
 
 **Note:** Custom ports fully replace the defaults, including the Chromium port. If you use custom ports and have the Chromium sidecar enabled, include the Chromium port (9222) explicitly.
 
