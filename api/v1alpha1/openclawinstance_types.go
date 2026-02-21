@@ -125,7 +125,6 @@ type OpenClawInstanceSpec struct {
 	// AutoUpdate configures automatic version updates from the OCI registry
 	// +optional
 	AutoUpdate AutoUpdateSpec `json:"autoUpdate,omitempty"`
-
 }
 
 // ImageSpec defines the container image configuration
