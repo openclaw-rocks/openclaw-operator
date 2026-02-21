@@ -1004,7 +1004,7 @@ func (r *OpenClawInstanceReconciler) reconcilePrometheusRule(ctx context.Context
 		existing.SetGroupVersionKind(resources.PrometheusRuleGVK())
 		existing.SetName(resources.PrometheusRuleName(instance))
 		existing.SetNamespace(instance.Namespace)
-		if err := r.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
+		if err := r.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) {
 			return err
 		}
 		instance.Status.ManagedResources.PrometheusRule = ""
@@ -1034,6 +1034,10 @@ func (r *OpenClawInstanceReconciler) reconcilePrometheusRule(ctx context.Context
 		pr.SetOwnerReferences([]metav1.OwnerReference{ownerRef})
 		return nil
 	})
+	if meta.IsNoMatchError(err) {
+		// PrometheusRule CRD not installed - skip silently
+		return nil
+	}
 	if err != nil {
 		return err
 	}
