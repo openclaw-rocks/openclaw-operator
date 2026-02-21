@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.19](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.18...v0.9.19) (2026-02-21)
+
+
+### Features
+
+* add custom service ports and ingress backend port support ([#144](https://github.com/openclaw-rocks/k8s-operator/issues/144)) ([#145](https://github.com/openclaw-rocks/k8s-operator/issues/145)) ([d0604c1](https://github.com/openclaw-rocks/k8s-operator/commit/d0604c141889c37fb957c002ef7aeca7cecee10c))
+
 ## [0.9.18](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.17...v0.9.18) (2026-02-20)
 
 
