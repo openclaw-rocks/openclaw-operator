@@ -5490,33 +5490,6 @@ spec:
                         type: string
                     type: object
                 type: object
-              selfConfigure:
-                description: |-
-                  SelfConfigure enables agents to modify their own instance via OpenClawSelfConfig resources.
-                  When enabled, the operator injects RBAC, env vars, and a helper skill into the workspace.
-                properties:
-                  allowedActions:
-                    description: |-
-                      AllowedActions restricts which action categories the agent can perform.
-                      If empty and enabled is true, no actions are allowed (fail-safe).
-                    items:
-                      description: SelfConfigAction represents an action category
-                        that can be allowed for self-configuration.
-                      enum:
-                      - skills
-                      - config
-                      - workspaceFiles
-                      - envVars
-                      type: string
-                    maxItems: 4
-                    type: array
-                  enabled:
-                    default: false
-                    description: |-
-                      Enabled enables self-configuration for this instance.
-                      When true, the agent can create OpenClawSelfConfig resources to modify its own spec.
-                    type: boolean
-                type: object
               sidecarVolumes:
                 description: SidecarVolumes is a list of additional volumes to make
                   available to sidecar containers.

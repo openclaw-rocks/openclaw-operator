@@ -116,29 +116,16 @@ rules:
   - openclaw.rocks
   resources:
   - openclawinstances/finalizers
-  - openclawselfconfigs/finalizers
   verbs:
   - update
 - apiGroups:
   - openclaw.rocks
   resources:
   - openclawinstances/status
-  - openclawselfconfigs/status
   verbs:
   - get
   - patch
   - update
-- apiGroups:
-  - openclaw.rocks
-  resources:
-  - openclawselfconfigs
-  verbs:
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
 - apiGroups:
   - policy
   resources:

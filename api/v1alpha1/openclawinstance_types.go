@@ -126,10 +126,6 @@ type OpenClawInstanceSpec struct {
 	// +optional
 	AutoUpdate AutoUpdateSpec `json:"autoUpdate,omitempty"`
 
-	// SelfConfigure enables agents to modify their own instance via OpenClawSelfConfig resources.
-	// When enabled, the operator injects RBAC, env vars, and a helper skill into the workspace.
-	// +optional
-	SelfConfigure SelfConfigureSpec `json:"selfConfigure,omitempty"`
 }
 
 // ImageSpec defines the container image configuration
