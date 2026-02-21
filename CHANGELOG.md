@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.20](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.19...v0.9.20) (2026-02-21)
+
+
+### Features
+
+* add Level 4 Deep Insights - auto-provisioned PrometheusRule and Grafana dashboards ([#149](https://github.com/openclaw-rocks/k8s-operator/issues/149)) ([3c46765](https://github.com/openclaw-rocks/k8s-operator/commit/3c46765f5e86a24ca904b58be1fce863cfdce4ff))
+
 ## [0.9.19](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.18...v0.9.19) (2026-02-21)
 
 

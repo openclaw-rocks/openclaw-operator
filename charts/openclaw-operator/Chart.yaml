@@ -4,8 +4,8 @@ description: >-
   A Kubernetes operator for deploying and managing OpenClaw AI assistant
   instances
 type: application
-version: 0.9.19
-appVersion: 0.9.19
+version: 0.9.20
+appVersion: 0.9.20
 keywords:
   - kubernetes
   - operator
