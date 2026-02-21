@@ -97,6 +97,7 @@ type OpenClawInstanceReconciler struct {
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=list
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=prometheusrules,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop
 func (r *OpenClawInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -344,6 +345,18 @@ func (r *OpenClawInstanceReconciler) reconcileResources(ctx context.Context, ins
 		return fmt.Errorf("failed to reconcile ServiceMonitor: %w", err)
 	}
 	logger.V(1).Info("ServiceMonitor reconciled")
+
+	// 10. Reconcile PrometheusRule (if enabled)
+	if err := r.reconcilePrometheusRule(ctx, instance); err != nil {
+		return fmt.Errorf("failed to reconcile PrometheusRule: %w", err)
+	}
+	logger.V(1).Info("PrometheusRule reconciled")
+
+	// 11. Reconcile Grafana Dashboards (if enabled)
+	if err := r.reconcileGrafanaDashboards(ctx, instance); err != nil {
+		return fmt.Errorf("failed to reconcile Grafana dashboards: %w", err)
+	}
+	logger.V(1).Info("Grafana dashboards reconciled")
 
 	return nil
 }
@@ -853,6 +866,21 @@ func (r *OpenClawInstanceReconciler) reconcileStatefulSet(ctx context.Context, i
 		LastTransitionTime: metav1.Now(),
 	})
 
+	// Update instance readiness metric
+	readyVal := float64(0)
+	if ready {
+		readyVal = 1
+	}
+	instanceReady.WithLabelValues(instance.Name, instance.Namespace).Set(readyVal)
+
+	// Update instance info metric
+	instanceInfo.WithLabelValues(
+		instance.Name,
+		instance.Namespace,
+		resources.GetImageTag(instance),
+		resources.GetImage(instance),
+	).Set(1)
+
 	return nil
 }
 
@@ -962,6 +990,125 @@ func (r *OpenClawInstanceReconciler) reconcileServiceMonitor(ctx context.Context
 		return nil
 	})
 	return err
+}
+
+// reconcilePrometheusRule reconciles the PrometheusRule for alerting
+func (r *OpenClawInstanceReconciler) reconcilePrometheusRule(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) error {
+	prEnabled := instance.Spec.Observability.Metrics.PrometheusRule != nil &&
+		instance.Spec.Observability.Metrics.PrometheusRule.Enabled != nil &&
+		*instance.Spec.Observability.Metrics.PrometheusRule.Enabled
+
+	if !prEnabled {
+		// Cleanup: delete existing PrometheusRule if it exists
+		existing := &unstructured.Unstructured{}
+		existing.SetGroupVersionKind(resources.PrometheusRuleGVK())
+		existing.SetName(resources.PrometheusRuleName(instance))
+		existing.SetNamespace(instance.Namespace)
+		if err := r.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) {
+			return err
+		}
+		instance.Status.ManagedResources.PrometheusRule = ""
+		return nil
+	}
+
+	pr := &unstructured.Unstructured{}
+	pr.SetGroupVersionKind(resources.PrometheusRuleGVK())
+	pr.SetName(resources.PrometheusRuleName(instance))
+	pr.SetNamespace(instance.Namespace)
+
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, pr, func() error {
+		desired := resources.BuildPrometheusRule(instance)
+
+		if spec, ok := desired.Object["spec"]; ok {
+			pr.Object["spec"] = spec
+		}
+		pr.SetLabels(desired.GetLabels())
+
+		ownerRef := metav1.OwnerReference{
+			APIVersion: instance.APIVersion,
+			Kind:       instance.Kind,
+			Name:       instance.Name,
+			UID:        instance.UID,
+			Controller: resources.Ptr(true),
+		}
+		pr.SetOwnerReferences([]metav1.OwnerReference{ownerRef})
+		return nil
+	})
+	if meta.IsNoMatchError(err) {
+		// PrometheusRule CRD not installed - skip silently
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	instance.Status.ManagedResources.PrometheusRule = pr.GetName()
+	r.Recorder.Event(instance, corev1.EventTypeNormal, "PrometheusRuleReconciled", "PrometheusRule reconciled successfully")
+	return nil
+}
+
+// reconcileGrafanaDashboards reconciles Grafana dashboard ConfigMaps
+func (r *OpenClawInstanceReconciler) reconcileGrafanaDashboards(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) error {
+	dashEnabled := instance.Spec.Observability.Metrics.GrafanaDashboard != nil &&
+		instance.Spec.Observability.Metrics.GrafanaDashboard.Enabled != nil &&
+		*instance.Spec.Observability.Metrics.GrafanaDashboard.Enabled
+
+	if !dashEnabled {
+		// Cleanup: delete existing dashboard ConfigMaps
+		for _, name := range []string{
+			resources.GrafanaDashboardOperatorName(instance),
+			resources.GrafanaDashboardInstanceName(instance),
+		} {
+			existing := &corev1.ConfigMap{}
+			existing.Name = name
+			existing.Namespace = instance.Namespace
+			if err := r.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
+				return err
+			}
+		}
+		instance.Status.ManagedResources.GrafanaDashboardOperator = ""
+		instance.Status.ManagedResources.GrafanaDashboardInstance = ""
+		return nil
+	}
+
+	// Operator overview dashboard
+	opCM := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      resources.GrafanaDashboardOperatorName(instance),
+			Namespace: instance.Namespace,
+		},
+	}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, opCM, func() error {
+		desired := resources.BuildGrafanaDashboardOperator(instance)
+		opCM.Labels = desired.Labels
+		opCM.Annotations = desired.Annotations
+		opCM.Data = desired.Data
+		return controllerutil.SetControllerReference(instance, opCM, r.Scheme)
+	}); err != nil {
+		return err
+	}
+	instance.Status.ManagedResources.GrafanaDashboardOperator = opCM.Name
+
+	// Instance detail dashboard
+	instCM := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      resources.GrafanaDashboardInstanceName(instance),
+			Namespace: instance.Namespace,
+		},
+	}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, instCM, func() error {
+		desired := resources.BuildGrafanaDashboardInstance(instance)
+		instCM.Labels = desired.Labels
+		instCM.Annotations = desired.Annotations
+		instCM.Data = desired.Data
+		return controllerutil.SetControllerReference(instance, instCM, r.Scheme)
+	}); err != nil {
+		return err
+	}
+	instance.Status.ManagedResources.GrafanaDashboardInstance = instCM.Name
+
+	r.Recorder.Event(instance, corev1.EventTypeNormal, "GrafanaDashboardsReconciled", "Grafana dashboards reconciled successfully")
+	return nil
 }
 
 // reconcileDelete is superseded by reconcileDeleteWithBackup in backup.go

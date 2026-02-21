@@ -53,9 +53,45 @@ func BuildNetworkPolicy(instance *openclawv1alpha1.OpenClawInstance) *networking
 	return np
 }
 
+// networkPolicyIngressPorts returns the ports to allow in NetworkPolicy ingress rules.
+// When custom service ports are configured, those are used instead of the defaults.
+func networkPolicyIngressPorts(instance *openclawv1alpha1.OpenClawInstance) []networkingv1.NetworkPolicyPort {
+	if len(instance.Spec.Networking.Service.Ports) > 0 {
+		ports := make([]networkingv1.NetworkPolicyPort, 0, len(instance.Spec.Networking.Service.Ports))
+		for _, p := range instance.Spec.Networking.Service.Ports {
+			protocol := p.Protocol
+			if protocol == "" {
+				protocol = corev1.ProtocolTCP
+			}
+			port := p.Port
+			if p.TargetPort != nil {
+				port = *p.TargetPort
+			}
+			ports = append(ports, networkingv1.NetworkPolicyPort{
+				Protocol: Ptr(protocol),
+				Port:     Ptr(intstr.FromInt32(port)),
+			})
+		}
+		return ports
+	}
+
+	ports := []networkingv1.NetworkPolicyPort{
+		{
+			Protocol: Ptr(corev1.ProtocolTCP),
+			Port:     Ptr(intstr.FromInt32(int32(GatewayPort))),
+		},
+		{
+			Protocol: Ptr(corev1.ProtocolTCP),
+			Port:     Ptr(intstr.FromInt32(int32(CanvasPort))),
+		},
+	}
+	return ports
+}
+
 // buildIngressRules creates the ingress rules for the NetworkPolicy
 func buildIngressRules(instance *openclawv1alpha1.OpenClawInstance) []networkingv1.NetworkPolicyIngressRule {
 	rules := []networkingv1.NetworkPolicyIngressRule{}
+	npPorts := networkPolicyIngressPorts(instance)
 
 	// Allow from same namespace by default
 	rules = append(rules, networkingv1.NetworkPolicyIngressRule{
@@ -68,16 +104,7 @@ func buildIngressRules(instance *openclawv1alpha1.OpenClawInstance) []networking
 				},
 			},
 		},
-		Ports: []networkingv1.NetworkPolicyPort{
-			{
-				Protocol: Ptr(corev1.ProtocolTCP),
-				Port:     Ptr(intstr.FromInt(GatewayPort)),
-			},
-			{
-				Protocol: Ptr(corev1.ProtocolTCP),
-				Port:     Ptr(intstr.FromInt(CanvasPort)),
-			},
-		},
+		Ports: npPorts,
 	})
 
 	// Allow from specified namespaces
@@ -92,16 +119,7 @@ func buildIngressRules(instance *openclawv1alpha1.OpenClawInstance) []networking
 					},
 				},
 			},
-			Ports: []networkingv1.NetworkPolicyPort{
-				{
-					Protocol: Ptr(corev1.ProtocolTCP),
-					Port:     Ptr(intstr.FromInt(GatewayPort)),
-				},
-				{
-					Protocol: Ptr(corev1.ProtocolTCP),
-					Port:     Ptr(intstr.FromInt(CanvasPort)),
-				},
-			},
+			Ports: npPorts,
 		})
 	}
 
@@ -115,16 +133,7 @@ func buildIngressRules(instance *openclawv1alpha1.OpenClawInstance) []networking
 					},
 				},
 			},
-			Ports: []networkingv1.NetworkPolicyPort{
-				{
-					Protocol: Ptr(corev1.ProtocolTCP),
-					Port:     Ptr(intstr.FromInt(GatewayPort)),
-				},
-				{
-					Protocol: Ptr(corev1.ProtocolTCP),
-					Port:     Ptr(intstr.FromInt(CanvasPort)),
-				},
-			},
+			Ports: npPorts,
 		})
 	}
 

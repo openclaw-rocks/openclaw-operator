@@ -107,5 +107,5 @@ jobs:
           EOF
           )"
           else
-            echo "PR already exists for ${FORK_OWNER}:${BRANCH} — branch was force-pushed with updated content"
+            echo "PR already exists for ${FORK_OWNER}:${BRANCH} - branch was force-pushed with updated content"
           fi

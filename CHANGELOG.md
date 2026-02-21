@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.20](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.19...v0.9.20) (2026-02-21)
+
+
+### Features
+
+* add Level 4 Deep Insights - auto-provisioned PrometheusRule and Grafana dashboards ([#149](https://github.com/openclaw-rocks/k8s-operator/issues/149)) ([3c46765](https://github.com/openclaw-rocks/k8s-operator/commit/3c46765f5e86a24ca904b58be1fce863cfdce4ff))
+
+## [0.9.19](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.18...v0.9.19) (2026-02-21)
+
+
+### Features
+
+* add custom service ports and ingress backend port support ([#144](https://github.com/openclaw-rocks/k8s-operator/issues/144)) ([#145](https://github.com/openclaw-rocks/k8s-operator/issues/145)) ([d0604c1](https://github.com/openclaw-rocks/k8s-operator/commit/d0604c141889c37fb957c002ef7aeca7cecee10c))
+
+## [0.9.18](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.17...v0.9.18) (2026-02-20)
+
+
+### Features
+
+* improve OperatorHub and ArtifactHub listing quality ([#142](https://github.com/openclaw-rocks/k8s-operator/issues/142)) ([b15937c](https://github.com/openclaw-rocks/k8s-operator/commit/b15937c87da175cf72f1b7981c6bcef1b8330bfe))
+
+## [0.9.17](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.16...v0.9.17) (2026-02-20)
+
+
+### Bug Fixes
+
+* configMapRef bypasses gateway auth enrichment ([#138](https://github.com/openclaw-rocks/k8s-operator/issues/138)) ([1322d5e](https://github.com/openclaw-rocks/k8s-operator/commit/1322d5e8e3141a9c5a4ea7298ddc0149d2a1d11c))
+
 ## [0.9.16](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.15...v0.9.16) (2026-02-20)
 
 

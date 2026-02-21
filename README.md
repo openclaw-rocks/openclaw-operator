@@ -94,7 +94,7 @@ The operator reconciles this into a fully managed stack of 9+ Kubernetes resourc
 |  |                     Tailscale (opt) + custom sidecars      | |
 |  +------------------------------------------------------------+ |
 |                                                                 |
-|  Service (ports 18789, 18793) -> Ingress (optional)             |
+|  Service (default: 18789, 18793 or custom) -> Ingress (opt)     |
 +-----------------------------------------------------------------+
 ```
 
@@ -401,6 +401,23 @@ spec:
       mountPath: /shared
 ```
 
+### Custom service ports
+
+By default the operator creates a Service with the gateway (18789) and canvas (18793) ports. To expose custom ports instead (e.g., for a non-default application), set `spec.networking.service.ports`:
+
+```yaml
+spec:
+  networking:
+    service:
+      type: ClusterIP
+      ports:
+        - name: http
+          port: 3978
+          targetPort: 3978
+```
+
+When `ports` is set, it fully replaces the default ports -- including the Chromium port if the sidecar is enabled. To keep the defaults alongside custom ports, include them explicitly. If `targetPort` is omitted it defaults to `port`. See the [API reference](docs/api-reference.md#specnetworkingservice) for all fields.
+
 ### CA bundle injection
 
 Inject a custom CA certificate bundle for environments with TLS-intercepting proxies or private CAs:
@@ -520,6 +537,10 @@ The operator follows a **secure-by-default** philosophy. Every instance ships wi
 | `openclaw_reconcile_total` | Counter | Reconciliations by result (success/error) |
 | `openclaw_reconcile_duration_seconds` | Histogram | Reconciliation latency |
 | `openclaw_instance_phase` | Gauge | Current phase per instance |
+| `openclaw_instance_info` | Gauge | Instance metadata for PromQL joins (always 1) |
+| `openclaw_instance_ready` | Gauge | Whether instance pod is ready (1/0) |
+| `openclaw_managed_instances` | Gauge | Total number of managed instances |
+| `openclaw_resource_creation_failures_total` | Counter | Resource creation failures |
 | `openclaw_autoupdate_checks_total` | Counter | Auto-update version checks by result |
 | `openclaw_autoupdate_applied_total` | Counter | Successful auto-updates applied |
 | `openclaw_autoupdate_rollbacks_total` | Counter | Auto-update rollbacks triggered |
@@ -537,6 +558,42 @@ spec:
         labels:
           release: prometheus
 ```
+
+### PrometheusRule (alerts)
+
+Auto-provisions a PrometheusRule with 7 alerts including runbook URLs:
+
+```yaml
+spec:
+  observability:
+    metrics:
+      prometheusRule:
+        enabled: true
+        labels:
+          release: kube-prometheus-stack  # must match Prometheus ruleSelector
+        runbookBaseURL: https://openclaw.rocks/docs/runbooks  # default
+```
+
+Alerts: `OpenClawReconcileErrors`, `OpenClawInstanceDegraded`, `OpenClawSlowReconciliation`, `OpenClawPodCrashLooping`, `OpenClawPodOOMKilled`, `OpenClawPVCNearlyFull`, `OpenClawAutoUpdateRollback`
+
+### Grafana dashboards
+
+Auto-provisions two Grafana dashboard ConfigMaps (discovered via the `grafana_dashboard: "1"` label):
+
+```yaml
+spec:
+  observability:
+    metrics:
+      grafanaDashboard:
+        enabled: true
+        folder: OpenClaw  # Grafana folder (default)
+        labels:
+          grafana_dashboard_instance: my-grafana  # optional extra labels
+```
+
+Dashboards:
+- **OpenClaw Operator** - fleet overview with reconciliation metrics, instance table, workqueue, and auto-update panels
+- **OpenClaw Instance** - per-instance detail with CPU, memory, storage, network, and pod health panels
 
 Phases: `Pending` -> `Restoring` -> `Provisioning` -> `Running` | `Updating` | `BackingUp` | `Degraded` | `Failed` | `Terminating`
 

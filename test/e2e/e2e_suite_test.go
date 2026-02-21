@@ -624,6 +624,190 @@ var _ = Describe("OpenClawInstance Controller", func() {
 		})
 	})
 
+	Context("When creating an OpenClawInstance with custom service ports (#144)", func() {
+		var namespace string
+
+		BeforeEach(func() {
+			namespace = "test-svcports-" + time.Now().Format("20060102150405")
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: namespace,
+				},
+			}
+			Expect(k8sClient.Create(ctx, ns)).Should(Succeed())
+		})
+
+		AfterEach(func() {
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: namespace,
+				},
+			}
+			_ = k8sClient.Delete(ctx, ns)
+		})
+
+		It("Should create a Service with custom ports replacing defaults", func() {
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instanceName := "custom-ports"
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					Networking: openclawv1alpha1.NetworkingSpec{
+						Service: openclawv1alpha1.ServiceSpec{
+							Ports: []openclawv1alpha1.ServicePortSpec{
+								{Name: "http", Port: 3978},
+								{Name: "grpc", Port: 50051, TargetPort: resources.Ptr(int32(50051))},
+							},
+						},
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			// Verify Service has custom ports
+			service := &corev1.Service{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName,
+					Namespace: namespace,
+				}, service)
+			}, timeout, interval).Should(Succeed())
+
+			Expect(service.Spec.Ports).To(HaveLen(2))
+
+			var foundHTTP, foundGRPC bool
+			for _, p := range service.Spec.Ports {
+				if p.Name == "http" && p.Port == 3978 {
+					foundHTTP = true
+					Expect(p.TargetPort.IntValue()).To(Equal(3978))
+				}
+				if p.Name == "grpc" && p.Port == 50051 {
+					foundGRPC = true
+					Expect(p.TargetPort.IntValue()).To(Equal(50051))
+				}
+			}
+			Expect(foundHTTP).To(BeTrue(), "Service should have http port 3978")
+			Expect(foundGRPC).To(BeTrue(), "Service should have grpc port 50051")
+
+			// Default gateway/canvas ports should NOT be present
+			for _, p := range service.Spec.Ports {
+				Expect(p.Port).NotTo(Equal(int32(resources.GatewayPort)),
+					"custom ports should replace default gateway port")
+				Expect(p.Port).NotTo(Equal(int32(resources.CanvasPort)),
+					"custom ports should replace default canvas port")
+			}
+
+			// Verify NetworkPolicy allows custom ports
+			np := &networkingv1.NetworkPolicy{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.NetworkPolicyName(instance),
+					Namespace: namespace,
+				}, np)
+			}, timeout, interval).Should(Succeed())
+
+			var foundNP3978, foundNP50051 bool
+			for _, rule := range np.Spec.Ingress {
+				for _, p := range rule.Ports {
+					if p.Port != nil {
+						switch p.Port.IntValue() {
+						case 3978:
+							foundNP3978 = true
+						case 50051:
+							foundNP50051 = true
+						}
+					}
+				}
+			}
+			Expect(foundNP3978).To(BeTrue(), "NetworkPolicy should allow port 3978")
+			Expect(foundNP50051).To(BeTrue(), "NetworkPolicy should allow port 50051")
+
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+
+		It("Should set custom backend port on Ingress paths", func() {
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instanceName := "custom-ingress-port"
+			className := "nginx"
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					Networking: openclawv1alpha1.NetworkingSpec{
+						Service: openclawv1alpha1.ServiceSpec{
+							Ports: []openclawv1alpha1.ServicePortSpec{
+								{Name: "http", Port: 3978},
+							},
+						},
+						Ingress: openclawv1alpha1.IngressSpec{
+							Enabled:   true,
+							ClassName: &className,
+							Hosts: []openclawv1alpha1.IngressHost{
+								{
+									Host: "aibot.example.com",
+									Paths: []openclawv1alpha1.IngressPath{
+										{
+											Path:     "/api/messages",
+											PathType: "Prefix",
+											Port:     resources.Ptr(int32(3978)),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			ingress := &networkingv1.Ingress{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.IngressName(instance),
+					Namespace: namespace,
+				}, ingress)
+			}, timeout, interval).Should(Succeed())
+
+			Expect(ingress.Spec.Rules).To(HaveLen(1))
+			paths := ingress.Spec.Rules[0].HTTP.Paths
+			Expect(paths).To(HaveLen(1))
+			Expect(paths[0].Path).To(Equal("/api/messages"))
+			Expect(paths[0].Backend.Service.Port.Number).To(Equal(int32(3978)),
+				"Ingress backend should route to custom port 3978")
+
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+	})
+
 	Context("When creating an instance with Tailscale enabled", func() {
 		var namespace string
 

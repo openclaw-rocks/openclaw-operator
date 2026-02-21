@@ -4,13 +4,13 @@ metadata:
   name: openclaw-operator.v0.9.0
   namespace: placeholder
   annotations:
-    capabilities: "Basic Install"
-    categories: "AI/Machine Learning"
+    capabilities: "Full Lifecycle"
+    categories: "AI/Machine Learning, Developer Tools, Application Runtime"
     containerImage: ghcr.io/openclaw-rocks/openclaw-operator:v0.9.0
     createdAt: "2026-02-11T00:00:00Z"
     support: OpenClaw.rocks
     repository: https://github.com/OpenClaw-rocks/k8s-operator
-    description: "A production-grade Kubernetes operator for deploying and managing OpenClaw AI agent instances."
+    description: "A production-grade Kubernetes operator for deploying and managing OpenClaw AI agent instances with auto-updates, backup/restore, and security hardening."
     alm-examples: |-
       [
         {
@@ -100,10 +100,27 @@ metadata:
               "networkPolicy": {
                 "enabled": true
               }
+            },
+            "autoUpdate": {
+              "enabled": true,
+              "backupBeforeUpdate": true,
+              "rollbackOnFailure": true
+            },
+            "observability": {
+              "serviceMonitor": {
+                "enabled": true
+              }
             }
           }
         }
       ]
+    features.operators.openshift.io/disconnected: "false"
+    features.operators.openshift.io/fips-compliant: "false"
+    features.operators.openshift.io/proxy-aware: "false"
+    features.operators.openshift.io/tls-profiles: "false"
+    features.operators.openshift.io/token-auth-aws: "false"
+    features.operators.openshift.io/token-auth-azure: "false"
+    features.operators.openshift.io/token-auth-gcp: "false"
 spec:
   displayName: OpenClaw Operator
   description: |
@@ -112,14 +129,24 @@ spec:
     A production-grade Kubernetes operator for deploying and managing
     [OpenClaw](https://openclaw.ai) AI agent instances.
 
-    ### Features
+    ### What is OpenClaw?
+
+    OpenClaw is an open-source platform for running AI agents that can interact
+    with tools, browse the web, execute code, and automate complex workflows.
+    The operator manages the full lifecycle of OpenClaw instances on Kubernetes --
+    from initial deployment through upgrades, backups, and scaling.
+
+    ### Key Capabilities
 
     - **Declarative Deployment**: Deploy OpenClaw instances using Kubernetes Custom Resources
+    - **Automatic Updates**: OCI registry-based auto-updates with health checks and automatic rollback
+    - **Backup and Restore**: Built-in backup/restore for stateful agent data
     - **Security-First**: Built-in NetworkPolicies, RBAC, Pod Security Standards, and a validating webhook
-    - **Provider-Agnostic**: Support any AI provider via environment variables
-    - **High Availability**: PodDisruptionBudgets, health probes, and graceful upgrades
+    - **Provider-Agnostic**: Support any AI provider (OpenAI, Anthropic, Google, etc.) via environment variables
+    - **High Availability**: PodDisruptionBudgets, health probes, and graceful rolling upgrades
     - **Observability**: Prometheus ServiceMonitor, structured logging, and Kubernetes events
     - **Browser Automation**: Optional Chromium sidecar for web automation capabilities
+    - **Skill Installation**: Install npm-based skills/plugins at startup via init containers
 
     ### Default Security Posture
 
@@ -127,18 +154,30 @@ spec:
     RuntimeDefault seccomp profiles, default-deny NetworkPolicies, and minimal RBAC
     permissions per instance.
 
+    ### Managed Resources
+
+    For each OpenClawInstance CR, the operator creates and manages:
+    StatefulSet, Service, ServiceAccount, ConfigMap, PVC, Role, RoleBinding,
+    NetworkPolicy, PodDisruptionBudget, and optionally Ingress and ServiceMonitor.
+    All resources are owned by the CR and garbage-collected on deletion.
+
+    ### Getting Started
+
+    1. Install the operator via OLM or Helm
+    2. Create a Secret with your AI provider API keys:
+       ```
+       kubectl create secret generic openclaw-api-keys \
+         --from-literal=ANTHROPIC_API_KEY=sk-...
+       ```
+    3. Create an OpenClawInstance custom resource referencing the secret
+    4. The operator handles the rest -- deployment, networking, security, and lifecycle management
+
     ### Prerequisites
 
     - Kubernetes 1.28+
 
-    ### Getting Started
-
-    1. Create a Secret with your AI provider API keys
-    2. Create an OpenClawInstance custom resource
-    3. The operator handles the rest: Deployment, Service, ServiceAccount, RBAC,
-       NetworkPolicy, PodDisruptionBudget, ConfigMap, PVC, and optional Ingress
-
-    For full documentation, visit [openclaw.rocks/blog/openclaw-kubernetes-operator](https://openclaw.rocks/blog/openclaw-kubernetes-operator).
+    For full documentation, visit the
+    [OpenClaw Operator docs](https://openclaw.rocks/blog/deploy-openclaw-kubernetes).
   maturity: alpha
   version: 0.9.0
   minKubeVersion: 1.28.0
@@ -149,6 +188,11 @@ spec:
     - automation
     - llm
     - kubernetes
+    - ai-agent
+    - chatbot
+    - browser-automation
+    - chromium
+    - machine-learning
   maintainers:
     - name: Jannes Stubbemann
       email: jannes@openclaw.rocks
@@ -158,10 +202,14 @@ spec:
   links:
     - name: Website
       url: https://openclaw.rocks
-    - name: Documentation
+    - name: Operator Documentation
+      url: https://openclaw.rocks/blog/deploy-openclaw-kubernetes
+    - name: API Reference
+      url: https://github.com/OpenClaw-rocks/k8s-operator/blob/main/docs/api-reference.md
+    - name: GitHub Repository
       url: https://github.com/OpenClaw-rocks/k8s-operator
-    - name: Blog Post
-      url: https://openclaw.rocks/blog/openclaw-kubernetes-operator
+    - name: Changelog
+      url: https://github.com/OpenClaw-rocks/k8s-operator/blob/main/CHANGELOG.md
   icon:
     - base64data: PHN2ZyB2aWV3Qm94PSIwIDAgMTIwIDEyMCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8cGF0aCBkPSJNNjAgMTAgQzMwIDEwIDE1IDM1IDE1IDU1IEMxNSA3NSAzMCA5NSA0NSAxMDAgTDQ1IDExMCBMNTUgMTEwIEw1NSAxMDAgQzU1IDEwMCA2MCAxMDIgNjUgMTAwIEw2NSAxMTAgTDc1IDExMCBMNzUgMTAwIEM5MCA5NSAxMDUgNzUgMTA1IDU1IEMxMDUgMzUgOTAgMTAgNjAgMTBaIiBmaWxsPSJ1cmwoI2xvYnN0ZXItZ3JhZGllbnQpIi8+CiAgPHBhdGggZD0iTTIwIDQ1IEM1IDQwIDAgNTAgNSA2MCBDMTAgNzAgMjAgNjUgMjUgNTUgQzI4IDQ4IDI1IDQ1IDIwIDQ1WiIgZmlsbD0idXJsKCNsb2JzdGVyLWdyYWRpZW50KSIvPgogIDxwYXRoIGQ9Ik0xMDAgNDUgQzExNSA0MCAxMjAgNTAgMTE1IDYwIEMxMTAgNzAgMTAwIDY1IDk1IDU1IEM5MiA0OCA5NSA0NSAxMDAgNDVaIiBmaWxsPSJ1cmwoI2xvYnN0ZXItZ3JhZGllbnQpIi8+CiAgPHBhdGggZD0iTTQ1IDE1IFEzNSA1IDMwIDgiIHN0cm9rZT0iI2Y4NzE3MSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiLz4KICA8cGF0aCBkPSJNNzUgMTUgUTg1IDUgOTAgOCIgc3Ryb2tlPSIjZjg3MTcxIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPgogIDxwYXRoIGQ9Ik0zMCAzMiBMNTIgMzIgTDUyIDQyIFE1MiA0NiA0OCA0NiBMMzQgNDYgUTMwIDQ2IDMwIDQyIFoiIGZpbGw9IiMwYTBhMGIiLz4KICA8cGF0aCBkPSJNNjggMzIgTDkwIDMyIEw5MCA0MiBROTAgNDYgODYgNDYgTDcyIDQ2IFE2OCA0NiA2OCA0MiBaIiBmaWxsPSIjMGEwYTBiIi8+CiAgPHBhdGggZD0iTTUyIDM2IEw2OCAzNiIgc3Ryb2tlPSIjMGEwYTBiIiBzdHJva2Utd2lkdGg9IjMiLz4KICA8cmVjdCB4PSIzMiIgeT0iMzQiIHdpZHRoPSI2IiBoZWlnaHQ9IjIiIGZpbGw9IiNmYWZhZmEiIG9wYWNpdHk9IjAuMyIgcng9IjEiLz4KICA8cmVjdCB4PSI3MCIgeT0iMzQiIHdpZHRoPSI2IiBoZWlnaHQ9IjIiIGZpbGw9IiNmYWZhZmEiIG9wYWNpdHk9IjAuMyIgcng9IjEiLz4KICA8ZGVmcz4KICAgIDxsaW5lYXJHcmFkaWVudCBpZD0ibG9ic3Rlci1ncmFkaWVudCIgeDE9IjAlIiB5MT0iMCUiIHgyPSIxMDAlIiB5Mj0iMTAwJSI+CiAgICAgIDxzdG9wIG9mZnNldD0iMCUiIHN0b3AtY29sb3I9IiNmODcxNzEiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIxMDAlIiBzdG9wLWNvbG9yPSIjZGMyNjI2Ii8+CiAgICA8L2xpbmVhckdyYWRpZW50PgogIDwvZGVmcz4KPC9zdmc+Cg==
       mediatype: image/svg+xml
@@ -174,6 +222,13 @@ spec:
       supported: false
     - type: AllNamespaces
       supported: true
+  relatedImages:
+    - name: openclaw-operator
+      image: ghcr.io/openclaw-rocks/openclaw-operator:v0.9.0
+    - name: openclaw
+      image: ghcr.io/openclaw/openclaw:latest
+    - name: chromium-sidecar
+      image: ghcr.io/browserless/chromium:latest
   customresourcedefinitions:
     owned:
       - name: openclawinstances.openclaw.rocks
@@ -214,15 +269,74 @@ spec:
               - "urn:alm:descriptor:com.tectonic.ui:text"
           - path: resources
             displayName: Resource Requirements
-            description: CPU and memory requests/limits
+            description: CPU and memory requests/limits for the main container
             x-descriptors:
               - "urn:alm:descriptor:com.tectonic.ui:resourceRequirements"
+          - path: networking.ingress.enabled
+            displayName: Ingress
+            description: Enable Ingress for external access
+            x-descriptors:
+              - "urn:alm:descriptor:com.tectonic.ui:booleanSwitch"
+          - path: networking.ingress.className
+            displayName: Ingress Class
+            description: Name of the IngressClass to use
+            x-descriptors:
+              - "urn:alm:descriptor:com.tectonic.ui:text"
+              - "urn:alm:descriptor:com.tectonic.ui:fieldDependency:networking.ingress.enabled:true"
+          - path: networking.ingress.hosts
+            displayName: Ingress Hosts
+            description: Hosts to route traffic for
+            x-descriptors:
+              - "urn:alm:descriptor:com.tectonic.ui:fieldDependency:networking.ingress.enabled:true"
+          - path: observability.serviceMonitor.enabled
+            displayName: Prometheus ServiceMonitor
+            description: Enable Prometheus ServiceMonitor for metrics scraping
+            x-descriptors:
+              - "urn:alm:descriptor:com.tectonic.ui:booleanSwitch"
+          - path: autoUpdate.enabled
+            displayName: Auto Update
+            description: Enable automatic version updates from the OCI registry
+            x-descriptors:
+              - "urn:alm:descriptor:com.tectonic.ui:booleanSwitch"
+          - path: autoUpdate.backupBeforeUpdate
+            displayName: Backup Before Update
+            description: Create a backup before applying updates
+            x-descriptors:
+              - "urn:alm:descriptor:com.tectonic.ui:booleanSwitch"
+              - "urn:alm:descriptor:com.tectonic.ui:fieldDependency:autoUpdate.enabled:true"
+          - path: autoUpdate.rollbackOnFailure
+            displayName: Rollback on Failure
+            description: Automatically rollback if the update fails health checks
+            x-descriptors:
+              - "urn:alm:descriptor:com.tectonic.ui:booleanSwitch"
+              - "urn:alm:descriptor:com.tectonic.ui:fieldDependency:autoUpdate.enabled:true"
+          - path: envFrom
+            displayName: Environment From
+            description: List of sources to populate environment variables (secrets, configmaps)
+            x-descriptors:
+              - "urn:alm:descriptor:com.tectonic.ui:fieldGroup:Environment"
+          - path: availability.affinity
+            displayName: Pod Affinity
+            description: Pod scheduling affinity rules
+            x-descriptors:
+              - "urn:alm:descriptor:com.tectonic.ui:podAffinity"
+          - path: chromium.resources
+            displayName: Chromium Resources
+            description: CPU and memory requests/limits for the Chromium sidecar
+            x-descriptors:
+              - "urn:alm:descriptor:com.tectonic.ui:resourceRequirements"
+              - "urn:alm:descriptor:com.tectonic.ui:fieldDependency:chromium.enabled:true"
         statusDescriptors:
           - path: phase
             displayName: Phase
-            description: Current phase of the OpenClaw instance
+            description: Current lifecycle phase of the OpenClaw instance
             x-descriptors:
               - "urn:alm:descriptor:io.kubernetes.phase"
+          - path: conditions
+            displayName: Conditions
+            description: Standard Kubernetes conditions for the instance
+            x-descriptors:
+              - "urn:alm:descriptor:io.kubernetes.conditions"
           - path: gatewayEndpoint
             displayName: Gateway Endpoint
             description: Internal service endpoint for the OpenClaw gateway
@@ -231,6 +345,26 @@ spec:
           - path: canvasEndpoint
             displayName: Canvas Endpoint
             description: Internal service endpoint for the OpenClaw canvas UI
+            x-descriptors:
+              - "urn:alm:descriptor:text"
+          - path: observedGeneration
+            displayName: Observed Generation
+            description: Most recent generation observed by the controller
+            x-descriptors:
+              - "urn:alm:descriptor:text"
+          - path: lastBackupTime
+            displayName: Last Backup
+            description: Timestamp of last successful backup
+            x-descriptors:
+              - "urn:alm:descriptor:text"
+          - path: lastBackupPath
+            displayName: Last Backup Path
+            description: Storage path of the last successful backup
+            x-descriptors:
+              - "urn:alm:descriptor:text"
+          - path: autoUpdate.latestVersion
+            displayName: Latest Available Version
+            description: Latest version available in the OCI registry
             x-descriptors:
               - "urn:alm:descriptor:text"
         resources:
@@ -253,6 +387,10 @@ spec:
           - kind: Role
             version: v1
           - kind: RoleBinding
+            version: v1
+          - kind: ServiceMonitor
+            version: v1
+          - kind: Job
             version: v1
   install:
     strategy: deployment

@@ -1160,6 +1160,120 @@ func TestBuildService_CustomAnnotations(t *testing.T) {
 	}
 }
 
+func TestBuildService_CustomPorts(t *testing.T) {
+	instance := newTestInstance("svc-custom-ports")
+	instance.Spec.Networking.Service.Ports = []openclawv1alpha1.ServicePortSpec{
+		{
+			Name: "http",
+			Port: 3978,
+		},
+	}
+
+	svc := BuildService(instance)
+
+	if len(svc.Spec.Ports) != 1 {
+		t.Fatalf("expected 1 port, got %d", len(svc.Spec.Ports))
+	}
+	assertServicePort(t, svc.Spec.Ports, "http", 3978)
+}
+
+func TestBuildService_CustomPortsWithTargetPort(t *testing.T) {
+	instance := newTestInstance("svc-custom-tp")
+	instance.Spec.Networking.Service.Ports = []openclawv1alpha1.ServicePortSpec{
+		{
+			Name:       "http",
+			Port:       80,
+			TargetPort: Ptr(int32(3978)),
+		},
+	}
+
+	svc := BuildService(instance)
+
+	if len(svc.Spec.Ports) != 1 {
+		t.Fatalf("expected 1 port, got %d", len(svc.Spec.Ports))
+	}
+	if svc.Spec.Ports[0].Port != 80 {
+		t.Errorf("port = %d, want 80", svc.Spec.Ports[0].Port)
+	}
+	if svc.Spec.Ports[0].TargetPort.IntValue() != 3978 {
+		t.Errorf("targetPort = %d, want 3978", svc.Spec.Ports[0].TargetPort.IntValue())
+	}
+}
+
+func TestBuildService_CustomPortsMultiple(t *testing.T) {
+	instance := newTestInstance("svc-multi-ports")
+	instance.Spec.Networking.Service.Ports = []openclawv1alpha1.ServicePortSpec{
+		{
+			Name: "http",
+			Port: 3978,
+		},
+		{
+			Name:       "grpc",
+			Port:       50051,
+			TargetPort: Ptr(int32(50051)),
+			Protocol:   corev1.ProtocolTCP,
+		},
+	}
+
+	svc := BuildService(instance)
+
+	if len(svc.Spec.Ports) != 2 {
+		t.Fatalf("expected 2 ports, got %d", len(svc.Spec.Ports))
+	}
+	assertServicePort(t, svc.Spec.Ports, "http", 3978)
+	assertServicePort(t, svc.Spec.Ports, "grpc", 50051)
+}
+
+func TestBuildService_CustomPortsOverrideDefaults(t *testing.T) {
+	instance := newTestInstance("svc-override")
+	instance.Spec.Networking.Service.Ports = []openclawv1alpha1.ServicePortSpec{
+		{
+			Name: "http",
+			Port: 8080,
+		},
+	}
+	instance.Spec.Chromium.Enabled = true
+
+	svc := BuildService(instance)
+
+	if len(svc.Spec.Ports) != 1 {
+		t.Fatalf("custom ports should replace defaults including chromium; got %d ports", len(svc.Spec.Ports))
+	}
+	assertServicePort(t, svc.Spec.Ports, "http", 8080)
+}
+
+func TestBuildService_CustomPortsDefaultProtocol(t *testing.T) {
+	instance := newTestInstance("svc-proto")
+	instance.Spec.Networking.Service.Ports = []openclawv1alpha1.ServicePortSpec{
+		{
+			Name: "http",
+			Port: 8080,
+		},
+	}
+
+	svc := BuildService(instance)
+
+	if svc.Spec.Ports[0].Protocol != corev1.ProtocolTCP {
+		t.Errorf("protocol = %v, want TCP", svc.Spec.Ports[0].Protocol)
+	}
+}
+
+func TestBuildService_CustomPortsTargetPortDefaultsToPort(t *testing.T) {
+	instance := newTestInstance("svc-tp-default")
+	instance.Spec.Networking.Service.Ports = []openclawv1alpha1.ServicePortSpec{
+		{
+			Name: "http",
+			Port: 3978,
+		},
+	}
+
+	svc := BuildService(instance)
+
+	if svc.Spec.Ports[0].TargetPort.IntValue() != 3978 {
+		t.Errorf("targetPort = %d, want 3978 (same as port)", svc.Spec.Ports[0].TargetPort.IntValue())
+	}
+}
+
 // ---------------------------------------------------------------------------
 // networkpolicy.go tests
 // ---------------------------------------------------------------------------
@@ -1250,6 +1364,62 @@ func TestBuildNetworkPolicy_Default(t *testing.T) {
 	}
 	if httpsRule.Ports[0].Port == nil || httpsRule.Ports[0].Port.IntValue() != 443 {
 		t.Error("HTTPS egress rule should allow port 443")
+	}
+}
+
+func TestBuildNetworkPolicy_CustomServicePorts(t *testing.T) {
+	instance := newTestInstance("np-custom-ports")
+	instance.Spec.Networking.Service.Ports = []openclawv1alpha1.ServicePortSpec{
+		{Name: "http", Port: 3978},
+		{Name: "grpc", Port: 50051, Protocol: corev1.ProtocolTCP},
+	}
+
+	np := BuildNetworkPolicy(instance)
+
+	// Same-namespace ingress rule should use custom ports
+	firstIngress := np.Spec.Ingress[0]
+	if len(firstIngress.Ports) != 2 {
+		t.Fatalf("expected 2 ingress ports for custom service ports, got %d", len(firstIngress.Ports))
+	}
+	assertNPPort(t, firstIngress.Ports, 3978)
+	assertNPPort(t, firstIngress.Ports, 50051)
+}
+
+func TestBuildNetworkPolicy_CustomServicePortsWithTargetPort(t *testing.T) {
+	instance := newTestInstance("np-custom-tp")
+	instance.Spec.Networking.Service.Ports = []openclawv1alpha1.ServicePortSpec{
+		{Name: "http", Port: 80, TargetPort: Ptr(int32(3978))},
+	}
+
+	np := BuildNetworkPolicy(instance)
+
+	firstIngress := np.Spec.Ingress[0]
+	if len(firstIngress.Ports) != 1 {
+		t.Fatalf("expected 1 ingress port, got %d", len(firstIngress.Ports))
+	}
+	// NetworkPolicy should use targetPort (container port), not service port
+	assertNPPort(t, firstIngress.Ports, 3978)
+}
+
+func TestBuildNetworkPolicy_CustomPortsApplyToAllRules(t *testing.T) {
+	instance := newTestInstance("np-custom-all")
+	instance.Spec.Networking.Service.Ports = []openclawv1alpha1.ServicePortSpec{
+		{Name: "http", Port: 8080},
+	}
+	instance.Spec.Security.NetworkPolicy.AllowedIngressNamespaces = []string{"monitoring"}
+	instance.Spec.Security.NetworkPolicy.AllowedIngressCIDRs = []string{"10.0.0.0/8"}
+
+	np := BuildNetworkPolicy(instance)
+
+	// 3 rules: same-ns, monitoring ns, CIDR
+	if len(np.Spec.Ingress) != 3 {
+		t.Fatalf("expected 3 ingress rules, got %d", len(np.Spec.Ingress))
+	}
+	for i, rule := range np.Spec.Ingress {
+		if len(rule.Ports) != 1 {
+			t.Fatalf("rule %d: expected 1 port, got %d", i, len(rule.Ports))
+		}
+		assertNPPort(t, rule.Ports, 8080)
 	}
 }
 
@@ -2380,6 +2550,83 @@ func TestBuildIngress_NoHosts(t *testing.T) {
 
 	if len(ing.Spec.Rules) != 0 {
 		t.Errorf("expected 0 rules with no hosts, got %d", len(ing.Spec.Rules))
+	}
+}
+
+func TestBuildIngress_CustomBackendPort(t *testing.T) {
+	instance := newTestInstance("ing-port")
+	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+		Enabled: true,
+		Hosts: []openclawv1alpha1.IngressHost{
+			{
+				Host: "aibot.example.com",
+				Paths: []openclawv1alpha1.IngressPath{
+					{Path: "/api/messages", PathType: "Prefix", Port: Ptr(int32(3978))},
+				},
+			},
+		},
+	}
+
+	ing := BuildIngress(instance)
+
+	rule := ing.Spec.Rules[0]
+	if len(rule.HTTP.Paths) != 1 {
+		t.Fatalf("expected 1 path, got %d", len(rule.HTTP.Paths))
+	}
+	backend := rule.HTTP.Paths[0].Backend.Service
+	if backend.Port.Number != 3978 {
+		t.Errorf("backend port = %d, want 3978", backend.Port.Number)
+	}
+}
+
+func TestBuildIngress_DefaultBackendPort(t *testing.T) {
+	instance := newTestInstance("ing-default-port")
+	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+		Enabled: true,
+		Hosts: []openclawv1alpha1.IngressHost{
+			{
+				Host: "test.example.com",
+				Paths: []openclawv1alpha1.IngressPath{
+					{Path: "/", PathType: "Prefix"},
+				},
+			},
+		},
+	}
+
+	ing := BuildIngress(instance)
+
+	backend := ing.Spec.Rules[0].HTTP.Paths[0].Backend.Service
+	if backend.Port.Number != int32(GatewayPort) {
+		t.Errorf("backend port = %d, want %d (GatewayPort)", backend.Port.Number, GatewayPort)
+	}
+}
+
+func TestBuildIngress_MixedPorts(t *testing.T) {
+	instance := newTestInstance("ing-mixed-ports")
+	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+		Enabled: true,
+		Hosts: []openclawv1alpha1.IngressHost{
+			{
+				Host: "app.example.com",
+				Paths: []openclawv1alpha1.IngressPath{
+					{Path: "/api", PathType: "Prefix", Port: Ptr(int32(3978))},
+					{Path: "/ws", PathType: "Prefix"},
+				},
+			},
+		},
+	}
+
+	ing := BuildIngress(instance)
+
+	paths := ing.Spec.Rules[0].HTTP.Paths
+	if len(paths) != 2 {
+		t.Fatalf("expected 2 paths, got %d", len(paths))
+	}
+	if paths[0].Backend.Service.Port.Number != 3978 {
+		t.Errorf("first path backend port = %d, want 3978", paths[0].Backend.Service.Port.Number)
+	}
+	if paths[1].Backend.Service.Port.Number != int32(GatewayPort) {
+		t.Errorf("second path backend port = %d, want %d (GatewayPort)", paths[1].Backend.Service.Port.Number, GatewayPort)
 	}
 }
 
@@ -5941,6 +6188,89 @@ func TestBuildStatefulSet_OllamaEnabled_InitContainerUsesCustomImage(t *testing.
 }
 
 // ---------------------------------------------------------------------------
+// PrometheusRule tests
+// ---------------------------------------------------------------------------
+
+func TestPrometheusRuleName(t *testing.T) {
+	instance := newTestInstance("my-instance")
+	name := PrometheusRuleName(instance)
+	if name != "my-instance-alerts" {
+		t.Errorf("PrometheusRuleName = %q, want %q", name, "my-instance-alerts")
+	}
+}
+
+func TestBuildPrometheusRule(t *testing.T) {
+	instance := newTestInstance("my-instance")
+	instance.Spec.Observability.Metrics.PrometheusRule = &openclawv1alpha1.PrometheusRuleSpec{
+		Enabled: Ptr(true),
+	}
+
+	pr := BuildPrometheusRule(instance)
+
+	// Check GVK
+	gvk := pr.GetObjectKind().GroupVersionKind()
+	if gvk != PrometheusRuleGVK() {
+		t.Errorf("GVK = %v, want %v", gvk, PrometheusRuleGVK())
+	}
+
+	// Check name
+	if pr.GetName() != "my-instance-alerts" {
+		t.Errorf("name = %q, want %q", pr.GetName(), "my-instance-alerts")
+	}
+
+	// Check namespace
+	if pr.GetNamespace() != "test-ns" {
+		t.Errorf("namespace = %q, want %q", pr.GetNamespace(), "test-ns")
+	}
+
+	// Check labels
+	labels := pr.GetLabels()
+	if labels["app.kubernetes.io/name"] != "openclaw" {
+		t.Error("missing app.kubernetes.io/name label")
+	}
+
+	// Check spec.groups[0].rules has 7 alerts
+	spec, ok := pr.Object["spec"].(map[string]interface{})
+	if !ok {
+		t.Fatal("missing spec")
+	}
+	groups, ok := spec["groups"].([]interface{})
+	if !ok || len(groups) != 1 {
+		t.Fatal("expected exactly 1 rule group")
+	}
+	group, ok := groups[0].(map[string]interface{})
+	if !ok {
+		t.Fatal("invalid group")
+	}
+	rules, ok := group["rules"].([]interface{})
+	if !ok {
+		t.Fatal("missing rules")
+	}
+	if len(rules) != 7 {
+		t.Errorf("expected 7 alerts, got %d", len(rules))
+	}
+
+	// Check all alerts have runbook_url
+	for i, r := range rules {
+		rule, ok := r.(map[string]interface{})
+		if !ok {
+			t.Fatalf("rule %d is not a map", i)
+		}
+		annotations, ok := rule["annotations"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("rule %d missing annotations", i)
+		}
+		runbook, ok := annotations["runbook_url"].(string)
+		if !ok || runbook == "" {
+			t.Errorf("rule %d missing runbook_url", i)
+		}
+		if !strings.HasPrefix(runbook, "https://openclaw.rocks/docs/runbooks/") {
+			t.Errorf("rule %d runbook_url = %q, expected default base URL", i, runbook)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Self-Configure tests
 // ---------------------------------------------------------------------------
 
@@ -6293,5 +6623,225 @@ func TestBuildStatefulSet_SelfConfigureWorkspaceVolume(t *testing.T) {
 	}
 	if !foundVol {
 		t.Error("missing workspace-init volume when self-configure is enabled")
+	}
+}
+
+func TestBuildPrometheusRule_CustomRunbookURL(t *testing.T) {
+	instance := newTestInstance("my-instance")
+	instance.Spec.Observability.Metrics.PrometheusRule = &openclawv1alpha1.PrometheusRuleSpec{
+		Enabled:        Ptr(true),
+		RunbookBaseURL: "https://wiki.example.com/runbooks",
+	}
+
+	pr := BuildPrometheusRule(instance)
+
+	spec := pr.Object["spec"].(map[string]interface{})
+	groups := spec["groups"].([]interface{})
+	group := groups[0].(map[string]interface{})
+	rules := group["rules"].([]interface{})
+
+	firstRule := rules[0].(map[string]interface{})
+	annotations := firstRule["annotations"].(map[string]interface{})
+	runbook := annotations["runbook_url"].(string)
+	if !strings.HasPrefix(runbook, "https://wiki.example.com/runbooks/") {
+		t.Errorf("runbook_url = %q, expected custom base URL", runbook)
+	}
+}
+
+func TestBuildPrometheusRule_CustomLabels(t *testing.T) {
+	instance := newTestInstance("my-instance")
+	instance.Spec.Observability.Metrics.PrometheusRule = &openclawv1alpha1.PrometheusRuleSpec{
+		Enabled: Ptr(true),
+		Labels: map[string]string{
+			"release": "kube-prometheus-stack",
+		},
+	}
+
+	pr := BuildPrometheusRule(instance)
+	labels := pr.GetLabels()
+
+	if labels["release"] != "kube-prometheus-stack" {
+		t.Errorf("custom label release = %q, want %q", labels["release"], "kube-prometheus-stack")
+	}
+	// Standard labels should still be present
+	if labels["app.kubernetes.io/name"] != "openclaw" {
+		t.Error("missing standard label")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Grafana dashboard tests
+// ---------------------------------------------------------------------------
+
+func TestGrafanaDashboardOperatorName(t *testing.T) {
+	instance := newTestInstance("my-instance")
+	name := GrafanaDashboardOperatorName(instance)
+	if name != "my-instance-dashboard-operator" {
+		t.Errorf("GrafanaDashboardOperatorName = %q, want %q", name, "my-instance-dashboard-operator")
+	}
+}
+
+func TestGrafanaDashboardInstanceName(t *testing.T) {
+	instance := newTestInstance("my-instance")
+	name := GrafanaDashboardInstanceName(instance)
+	if name != "my-instance-dashboard-instance" {
+		t.Errorf("GrafanaDashboardInstanceName = %q, want %q", name, "my-instance-dashboard-instance")
+	}
+}
+
+func TestBuildGrafanaDashboardOperator(t *testing.T) {
+	instance := newTestInstance("my-instance")
+	instance.Spec.Observability.Metrics.GrafanaDashboard = &openclawv1alpha1.GrafanaDashboardSpec{
+		Enabled: Ptr(true),
+	}
+
+	cm := BuildGrafanaDashboardOperator(instance)
+
+	// Check name
+	if cm.Name != "my-instance-dashboard-operator" {
+		t.Errorf("name = %q, want %q", cm.Name, "my-instance-dashboard-operator")
+	}
+
+	// Check grafana_dashboard label
+	if cm.Labels["grafana_dashboard"] != "1" {
+		t.Errorf("grafana_dashboard label = %q, want %q", cm.Labels["grafana_dashboard"], "1")
+	}
+
+	// Check grafana_folder annotation
+	if cm.Annotations["grafana_folder"] != "OpenClaw" {
+		t.Errorf("grafana_folder annotation = %q, want %q", cm.Annotations["grafana_folder"], "OpenClaw")
+	}
+
+	// Check data key exists and contains valid JSON
+	dashJSON, ok := cm.Data["openclaw-operator.json"]
+	if !ok {
+		t.Fatal("missing openclaw-operator.json data key")
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(dashJSON), &parsed); err != nil {
+		t.Fatalf("invalid JSON in dashboard: %v", err)
+	}
+
+	// Check title
+	if parsed["title"] != "OpenClaw Operator" {
+		t.Errorf("dashboard title = %q, want %q", parsed["title"], "OpenClaw Operator")
+	}
+
+	// Check UID
+	if parsed["uid"] != "openclaw-operator-overview" {
+		t.Errorf("dashboard UID = %q, want %q", parsed["uid"], "openclaw-operator-overview")
+	}
+
+	// Check template variables exist
+	templating, ok := parsed["templating"].(map[string]interface{})
+	if !ok {
+		t.Fatal("missing templating")
+	}
+	vars, ok := templating["list"].([]interface{})
+	if !ok || len(vars) < 3 {
+		t.Fatalf("expected at least 3 template variables, got %d", len(vars))
+	}
+
+	// Check panels exist (should be >10)
+	panels, ok := parsed["panels"].([]interface{})
+	if !ok {
+		t.Fatal("missing panels")
+	}
+	if len(panels) < 10 {
+		t.Errorf("expected at least 10 panels, got %d", len(panels))
+	}
+}
+
+func TestBuildGrafanaDashboardInstance(t *testing.T) {
+	instance := newTestInstance("my-instance")
+	instance.Spec.Observability.Metrics.GrafanaDashboard = &openclawv1alpha1.GrafanaDashboardSpec{
+		Enabled: Ptr(true),
+	}
+
+	cm := BuildGrafanaDashboardInstance(instance)
+
+	// Check name
+	if cm.Name != "my-instance-dashboard-instance" {
+		t.Errorf("name = %q, want %q", cm.Name, "my-instance-dashboard-instance")
+	}
+
+	// Check grafana_dashboard label
+	if cm.Labels["grafana_dashboard"] != "1" {
+		t.Errorf("grafana_dashboard label = %q, want %q", cm.Labels["grafana_dashboard"], "1")
+	}
+
+	// Check data key exists and contains valid JSON
+	dashJSON, ok := cm.Data["openclaw-instance.json"]
+	if !ok {
+		t.Fatal("missing openclaw-instance.json data key")
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(dashJSON), &parsed); err != nil {
+		t.Fatalf("invalid JSON in dashboard: %v", err)
+	}
+
+	// Check title
+	if parsed["title"] != "OpenClaw Instance" {
+		t.Errorf("dashboard title = %q, want %q", parsed["title"], "OpenClaw Instance")
+	}
+
+	// Check UID
+	if parsed["uid"] != "openclaw-instance-detail" {
+		t.Errorf("dashboard UID = %q, want %q", parsed["uid"], "openclaw-instance-detail")
+	}
+
+	// Check panels exist (should be >10)
+	panels, ok := parsed["panels"].([]interface{})
+	if !ok {
+		t.Fatal("missing panels")
+	}
+	if len(panels) < 10 {
+		t.Errorf("expected at least 10 panels, got %d", len(panels))
+	}
+}
+
+func TestBuildGrafanaDashboard_CustomLabelsAndFolder(t *testing.T) {
+	instance := newTestInstance("my-instance")
+	instance.Spec.Observability.Metrics.GrafanaDashboard = &openclawv1alpha1.GrafanaDashboardSpec{
+		Enabled: Ptr(true),
+		Labels: map[string]string{
+			"custom-label": "custom-value",
+		},
+		Folder: "Infrastructure",
+	}
+
+	cm := BuildGrafanaDashboardOperator(instance)
+
+	// Check custom label
+	if cm.Labels["custom-label"] != "custom-value" {
+		t.Errorf("custom label = %q, want %q", cm.Labels["custom-label"], "custom-value")
+	}
+
+	// Check custom folder
+	if cm.Annotations["grafana_folder"] != "Infrastructure" {
+		t.Errorf("grafana_folder = %q, want %q", cm.Annotations["grafana_folder"], "Infrastructure")
+	}
+
+	// Standard labels should still be present
+	if cm.Labels["grafana_dashboard"] != "1" {
+		t.Error("missing grafana_dashboard label")
+	}
+	if cm.Labels["app.kubernetes.io/name"] != "openclaw" {
+		t.Error("missing standard label")
+	}
+}
+
+func TestPrometheusRuleGVK(t *testing.T) {
+	gvk := PrometheusRuleGVK()
+	if gvk.Group != "monitoring.coreos.com" {
+		t.Errorf("group = %q, want %q", gvk.Group, "monitoring.coreos.com")
+	}
+	if gvk.Version != "v1" {
+		t.Errorf("version = %q, want %q", gvk.Version, "v1")
+	}
+	if gvk.Kind != "PrometheusRule" {
+		t.Errorf("kind = %q, want %q", gvk.Kind, "PrometheusRule")
 	}
 }

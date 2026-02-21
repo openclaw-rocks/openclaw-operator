@@ -584,6 +584,37 @@ type ServiceSpec struct {
 	// Annotations to add to the Service
 	// +optional
 	Annotations map[string]string `json:"annotations,omitempty"`
+
+	// Ports defines custom ports exposed on the Service.
+	// When set, these replace the default gateway and canvas ports.
+	// When empty, the operator creates default gateway (18789) and canvas (18793) ports.
+	// +kubebuilder:validation:MaxItems=20
+	// +optional
+	Ports []ServicePortSpec `json:"ports,omitempty"`
+}
+
+// ServicePortSpec defines a port exposed by the Service
+type ServicePortSpec struct {
+	// Name is the name of the port
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// Port is the port number exposed on the Service
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	Port int32 `json:"port"`
+
+	// TargetPort is the port on the container to route to (defaults to Port)
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	// +optional
+	TargetPort *int32 `json:"targetPort,omitempty"`
+
+	// Protocol is the protocol for the port
+	// +kubebuilder:validation:Enum=TCP;UDP;SCTP
+	// +kubebuilder:default="TCP"
+	// +optional
+	Protocol corev1.Protocol `json:"protocol,omitempty"`
 }
 
 // IngressSpec defines the Ingress configuration
@@ -636,6 +667,13 @@ type IngressPath struct {
 	// +kubebuilder:default="Prefix"
 	// +optional
 	PathType string `json:"pathType,omitempty"`
+
+	// Port is the backend service port number to route traffic to.
+	// Defaults to the gateway port (18789) when not set.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	// +optional
+	Port *int32 `json:"port,omitempty"`
 }
 
 // IngressTLS defines TLS configuration for the Ingress
@@ -742,6 +780,14 @@ type MetricsSpec struct {
 	// ServiceMonitor configures the Prometheus ServiceMonitor
 	// +optional
 	ServiceMonitor *ServiceMonitorSpec `json:"serviceMonitor,omitempty"`
+
+	// PrometheusRule configures auto-provisioned PrometheusRule alerts
+	// +optional
+	PrometheusRule *PrometheusRuleSpec `json:"prometheusRule,omitempty"`
+
+	// GrafanaDashboard configures auto-provisioned Grafana dashboard ConfigMaps
+	// +optional
+	GrafanaDashboard *GrafanaDashboardSpec `json:"grafanaDashboard,omitempty"`
 }
 
 // ServiceMonitorSpec defines the ServiceMonitor configuration
@@ -759,6 +805,40 @@ type ServiceMonitorSpec struct {
 	// Labels to add to the ServiceMonitor
 	// +optional
 	Labels map[string]string `json:"labels,omitempty"`
+}
+
+// PrometheusRuleSpec configures auto-provisioned PrometheusRule alerts
+type PrometheusRuleSpec struct {
+	// Enabled enables PrometheusRule creation with operator alerts
+	// +kubebuilder:default=false
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// Labels to add to the PrometheusRule (e.g., for Prometheus rule selector matching)
+	// +optional
+	Labels map[string]string `json:"labels,omitempty"`
+
+	// RunbookBaseURL is the base URL for alert runbook links
+	// +kubebuilder:default="https://openclaw.rocks/docs/runbooks"
+	// +optional
+	RunbookBaseURL string `json:"runbookBaseURL,omitempty"`
+}
+
+// GrafanaDashboardSpec configures auto-provisioned Grafana dashboard ConfigMaps
+type GrafanaDashboardSpec struct {
+	// Enabled enables Grafana dashboard ConfigMap creation
+	// +kubebuilder:default=false
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// Labels to add to the dashboard ConfigMaps (in addition to grafana_dashboard: "1")
+	// +optional
+	Labels map[string]string `json:"labels,omitempty"`
+
+	// Folder is the Grafana folder to place the dashboards in
+	// +kubebuilder:default="OpenClaw"
+	// +optional
+	Folder string `json:"folder,omitempty"`
 }
 
 // LoggingSpec defines logging configuration
@@ -1012,6 +1092,18 @@ type ManagedResourcesStatus struct {
 	// GatewayTokenSecret is the name of the auto-generated gateway token Secret
 	// +optional
 	GatewayTokenSecret string `json:"gatewayTokenSecret,omitempty"`
+
+	// PrometheusRule is the name of the managed PrometheusRule
+	// +optional
+	PrometheusRule string `json:"prometheusRule,omitempty"`
+
+	// GrafanaDashboardOperator is the name of the operator overview dashboard ConfigMap
+	// +optional
+	GrafanaDashboardOperator string `json:"grafanaDashboardOperator,omitempty"`
+
+	// GrafanaDashboardInstance is the name of the instance detail dashboard ConfigMap
+	// +optional
+	GrafanaDashboardInstance string `json:"grafanaDashboardInstance,omitempty"`
 }
 
 // +kubebuilder:object:root=true

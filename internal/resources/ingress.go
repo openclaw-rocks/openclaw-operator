@@ -169,6 +169,11 @@ func buildIngressRulesFromSpec(instance *openclawv1alpha1.OpenClawInstance) []ne
 				pt = networkingv1.PathTypeImplementationSpecific
 			}
 
+			backendPort := int32(GatewayPort)
+			if p.Port != nil {
+				backendPort = *p.Port
+			}
+
 			rule.HTTP.Paths = append(rule.HTTP.Paths, networkingv1.HTTPIngressPath{
 				Path:     path,
 				PathType: &pt,
@@ -176,7 +181,7 @@ func buildIngressRulesFromSpec(instance *openclawv1alpha1.OpenClawInstance) []ne
 					Service: &networkingv1.IngressServiceBackend{
 						Name: ServiceName(instance),
 						Port: networkingv1.ServiceBackendPort{
-							Number: int32(GatewayPort),
+							Number: backendPort,
 						},
 					},
 				},

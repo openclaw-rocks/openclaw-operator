@@ -45,32 +45,59 @@ func BuildService(instance *openclawv1alpha1.OpenClawInstance) *corev1.Service {
 			Type:            serviceType,
 			Selector:        selectorLabels,
 			SessionAffinity: corev1.ServiceAffinityNone,
-			Ports: []corev1.ServicePort{
-				{
-					Name:       "gateway",
-					Port:       int32(GatewayPort),
-					TargetPort: intstr.FromInt(GatewayPort),
-					Protocol:   corev1.ProtocolTCP,
-				},
-				{
-					Name:       "canvas",
-					Port:       int32(CanvasPort),
-					TargetPort: intstr.FromInt(CanvasPort),
-					Protocol:   corev1.ProtocolTCP,
-				},
-			},
+			Ports:           buildServicePorts(instance),
 		},
 	}
 
-	// Add Chromium port if enabled
+	return service
+}
+
+// buildServicePorts returns custom ports if specified, otherwise default ports.
+func buildServicePorts(instance *openclawv1alpha1.OpenClawInstance) []corev1.ServicePort {
+	if len(instance.Spec.Networking.Service.Ports) > 0 {
+		ports := make([]corev1.ServicePort, 0, len(instance.Spec.Networking.Service.Ports))
+		for _, p := range instance.Spec.Networking.Service.Ports {
+			protocol := p.Protocol
+			if protocol == "" {
+				protocol = corev1.ProtocolTCP
+			}
+			tp := intstr.FromInt32(p.Port)
+			if p.TargetPort != nil {
+				tp = intstr.FromInt32(*p.TargetPort)
+			}
+			ports = append(ports, corev1.ServicePort{
+				Name:       p.Name,
+				Port:       p.Port,
+				TargetPort: tp,
+				Protocol:   protocol,
+			})
+		}
+		return ports
+	}
+
+	ports := []corev1.ServicePort{
+		{
+			Name:       "gateway",
+			Port:       int32(GatewayPort),
+			TargetPort: intstr.FromInt32(int32(GatewayPort)),
+			Protocol:   corev1.ProtocolTCP,
+		},
+		{
+			Name:       "canvas",
+			Port:       int32(CanvasPort),
+			TargetPort: intstr.FromInt32(int32(CanvasPort)),
+			Protocol:   corev1.ProtocolTCP,
+		},
+	}
+
 	if instance.Spec.Chromium.Enabled {
-		service.Spec.Ports = append(service.Spec.Ports, corev1.ServicePort{
+		ports = append(ports, corev1.ServicePort{
 			Name:       "chromium",
 			Port:       int32(ChromiumPort),
-			TargetPort: intstr.FromInt(ChromiumPort),
+			TargetPort: intstr.FromInt32(int32(ChromiumPort)),
 			Protocol:   corev1.ProtocolTCP,
 		})
 	}
 
-	return service
+	return ports
 }

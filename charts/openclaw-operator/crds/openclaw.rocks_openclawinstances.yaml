@@ -4690,6 +4690,14 @@ spec:
                                     - Exact
                                     - ImplementationSpecific
                                     type: string
+                                  port:
+                                    description: |-
+                                      Port is the backend service port number to route traffic to.
+                                      Defaults to the gateway port (18789) when not set.
+                                    format: int32
+                                    maximum: 65535
+                                    minimum: 1
+                                    type: integer
                                 type: object
                               type: array
                           required:
@@ -4751,6 +4759,47 @@ spec:
                           type: string
                         description: Annotations to add to the Service
                         type: object
+                      ports:
+                        description: |-
+                          Ports defines custom ports exposed on the Service.
+                          When set, these replace the default gateway and canvas ports.
+                          When empty, the operator creates default gateway (18789) and canvas (18793) ports.
+                        items:
+                          description: ServicePortSpec defines a port exposed by the
+                            Service
+                          properties:
+                            name:
+                              description: Name is the name of the port
+                              minLength: 1
+                              type: string
+                            port:
+                              description: Port is the port number exposed on the
+                                Service
+                              format: int32
+                              maximum: 65535
+                              minimum: 1
+                              type: integer
+                            protocol:
+                              default: TCP
+                              description: Protocol is the protocol for the port
+                              enum:
+                              - TCP
+                              - UDP
+                              - SCTP
+                              type: string
+                            targetPort:
+                              description: TargetPort is the port on the container
+                                to route to (defaults to Port)
+                              format: int32
+                              maximum: 65535
+                              minimum: 1
+                              type: integer
+                          required:
+                          - name
+                          - port
+                          type: object
+                        maxItems: 20
+                        type: array
                       type:
                         default: ClusterIP
                         description: Type is the Kubernetes Service type
@@ -4791,11 +4840,53 @@ spec:
                         default: true
                         description: Enabled enables metrics endpoint
                         type: boolean
+                      grafanaDashboard:
+                        description: GrafanaDashboard configures auto-provisioned
+                          Grafana dashboard ConfigMaps
+                        properties:
+                          enabled:
+                            default: false
+                            description: Enabled enables Grafana dashboard ConfigMap
+                              creation
+                            type: boolean
+                          folder:
+                            default: OpenClaw
+                            description: Folder is the Grafana folder to place the
+                              dashboards in
+                            type: string
+                          labels:
+                            additionalProperties:
+                              type: string
+                            description: 'Labels to add to the dashboard ConfigMaps
+                              (in addition to grafana_dashboard: "1")'
+                            type: object
+                        type: object
                       port:
                         default: 9090
                         description: Port is the port to expose metrics on
                         format: int32
                         type: integer
+                      prometheusRule:
+                        description: PrometheusRule configures auto-provisioned PrometheusRule
+                          alerts
+                        properties:
+                          enabled:
+                            default: false
+                            description: Enabled enables PrometheusRule creation with
+                              operator alerts
+                            type: boolean
+                          labels:
+                            additionalProperties:
+                              type: string
+                            description: Labels to add to the PrometheusRule (e.g.,
+                              for Prometheus rule selector matching)
+                            type: object
+                          runbookBaseURL:
+                            default: https://openclaw.rocks/docs/runbooks
+                            description: RunbookBaseURL is the base URL for alert
+                              runbook links
+                            type: string
+                        type: object
                       serviceMonitor:
                         description: ServiceMonitor configures the Prometheus ServiceMonitor
                         properties:
@@ -8880,11 +8971,22 @@ spec:
                     description: GatewayTokenSecret is the name of the auto-generated
                       gateway token Secret
                     type: string
+                  grafanaDashboardInstance:
+                    description: GrafanaDashboardInstance is the name of the instance
+                      detail dashboard ConfigMap
+                    type: string
+                  grafanaDashboardOperator:
+                    description: GrafanaDashboardOperator is the name of the operator
+                      overview dashboard ConfigMap
+                    type: string
                   networkPolicy:
                     description: NetworkPolicy is the name of the managed NetworkPolicy
                     type: string
                   podDisruptionBudget:
                     description: PodDisruptionBudget is the name of the managed PDB
+                    type: string
+                  prometheusRule:
+                    description: PrometheusRule is the name of the managed PrometheusRule
                     type: string
                   pvc:
                     description: PVC is the name of the managed PersistentVolumeClaim
