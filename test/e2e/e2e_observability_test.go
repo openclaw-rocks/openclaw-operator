@@ -24,6 +24,7 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -32,6 +33,18 @@ import (
 	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
 	"github.com/openclawrocks/k8s-operator/internal/resources"
 )
+
+// prometheusRuleCRDAvailable checks if the PrometheusRule CRD is installed in the cluster.
+func prometheusRuleCRDAvailable() bool {
+	pr := &unstructured.Unstructured{}
+	pr.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "monitoring.coreos.com",
+		Version: "v1",
+		Kind:    "PrometheusRule",
+	})
+	err := k8sClient.List(ctx, &unstructured.UnstructuredList{Object: pr.Object})
+	return !meta.IsNoMatchError(err)
+}
 
 var _ = Describe("Observability - Deep Insights", func() {
 	const (
@@ -56,6 +69,9 @@ var _ = Describe("Observability - Deep Insights", func() {
 		It("Should create and cleanup PrometheusRule", func() {
 			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
 				Skip("Skipping resource validation in minimal mode")
+			}
+			if !prometheusRuleCRDAvailable() {
+				Skip("PrometheusRule CRD not installed (prometheus-operator required)")
 			}
 
 			instanceName := "prom-rule-test"
@@ -232,6 +248,9 @@ var _ = Describe("Observability - Deep Insights", func() {
 		It("Should delete PrometheusRule when disabled", func() {
 			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
 				Skip("Skipping resource validation in minimal mode")
+			}
+			if !prometheusRuleCRDAvailable() {
+				Skip("PrometheusRule CRD not installed (prometheus-operator required)")
 			}
 
 			instanceName := "prom-cleanup-test"
