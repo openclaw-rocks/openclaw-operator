@@ -4840,11 +4840,53 @@ spec:
                         default: true
                         description: Enabled enables metrics endpoint
                         type: boolean
+                      grafanaDashboard:
+                        description: GrafanaDashboard configures auto-provisioned
+                          Grafana dashboard ConfigMaps
+                        properties:
+                          enabled:
+                            default: false
+                            description: Enabled enables Grafana dashboard ConfigMap
+                              creation
+                            type: boolean
+                          folder:
+                            default: OpenClaw
+                            description: Folder is the Grafana folder to place the
+                              dashboards in
+                            type: string
+                          labels:
+                            additionalProperties:
+                              type: string
+                            description: 'Labels to add to the dashboard ConfigMaps
+                              (in addition to grafana_dashboard: "1")'
+                            type: object
+                        type: object
                       port:
                         default: 9090
                         description: Port is the port to expose metrics on
                         format: int32
                         type: integer
+                      prometheusRule:
+                        description: PrometheusRule configures auto-provisioned PrometheusRule
+                          alerts
+                        properties:
+                          enabled:
+                            default: false
+                            description: Enabled enables PrometheusRule creation with
+                              operator alerts
+                            type: boolean
+                          labels:
+                            additionalProperties:
+                              type: string
+                            description: Labels to add to the PrometheusRule (e.g.,
+                              for Prometheus rule selector matching)
+                            type: object
+                          runbookBaseURL:
+                            default: https://openclaw.rocks/docs/runbooks
+                            description: RunbookBaseURL is the base URL for alert
+                              runbook links
+                            type: string
+                        type: object
                       serviceMonitor:
                         description: ServiceMonitor configures the Prometheus ServiceMonitor
                         properties:
@@ -5447,6 +5489,33 @@ spec:
                           Only used if CreateServiceAccount is false
                         type: string
                     type: object
+                type: object
+              selfConfigure:
+                description: |-
+                  SelfConfigure enables agents to modify their own instance via OpenClawSelfConfig resources.
+                  When enabled, the operator injects RBAC, env vars, and a helper skill into the workspace.
+                properties:
+                  allowedActions:
+                    description: |-
+                      AllowedActions restricts which action categories the agent can perform.
+                      If empty and enabled is true, no actions are allowed (fail-safe).
+                    items:
+                      description: SelfConfigAction represents an action category
+                        that can be allowed for self-configuration.
+                      enum:
+                      - skills
+                      - config
+                      - workspaceFiles
+                      - envVars
+                      type: string
+                    maxItems: 4
+                    type: array
+                  enabled:
+                    default: false
+                    description: |-
+                      Enabled enables self-configuration for this instance.
+                      When true, the agent can create OpenClawSelfConfig resources to modify its own spec.
+                    type: boolean
                 type: object
               sidecarVolumes:
                 description: SidecarVolumes is a list of additional volumes to make
@@ -8902,11 +8971,22 @@ spec:
                     description: GatewayTokenSecret is the name of the auto-generated
                       gateway token Secret
                     type: string
+                  grafanaDashboardInstance:
+                    description: GrafanaDashboardInstance is the name of the instance
+                      detail dashboard ConfigMap
+                    type: string
+                  grafanaDashboardOperator:
+                    description: GrafanaDashboardOperator is the name of the operator
+                      overview dashboard ConfigMap
+                    type: string
                   networkPolicy:
                     description: NetworkPolicy is the name of the managed NetworkPolicy
                     type: string
                   podDisruptionBudget:
                     description: PodDisruptionBudget is the name of the managed PDB
+                    type: string
+                  prometheusRule:
+                    description: PrometheusRule is the name of the managed PrometheusRule
                     type: string
                   pvc:
                     description: PVC is the name of the managed PersistentVolumeClaim

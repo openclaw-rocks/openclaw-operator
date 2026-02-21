@@ -1,3 +1,6 @@
+# Reference PrometheusRule for OpenClaw operator alerts.
+# The operator can auto-provision these via spec.observability.metrics.prometheusRule.enabled: true
+# This file is a static reference for manual installation.
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -16,10 +19,8 @@ spec:
           labels:
             severity: warning
           annotations:
-            summary: "OpenClaw reconciliation errors detected"
-            description: >-
-              OpenClaw instance {{ $labels.instance }} in namespace {{ $labels.namespace }}
-              has been experiencing reconciliation errors for more than 5 minutes.
+            summary: "OpenClaw instance {{ $labels.instance }} in {{ $labels.namespace }} has reconciliation errors."
+            runbook_url: "https://openclaw.rocks/docs/runbooks/OpenClawReconcileErrors"
 
         - alert: OpenClawInstanceDegraded
           expr: |
@@ -28,10 +29,8 @@ spec:
           labels:
             severity: critical
           annotations:
-            summary: "OpenClaw instance is in {{ $labels.phase }} phase"
-            description: >-
-              OpenClaw instance {{ $labels.instance }} in namespace {{ $labels.namespace }}
-              has been in {{ $labels.phase }} phase for more than 5 minutes.
+            summary: "OpenClaw instance {{ $labels.instance }} in {{ $labels.namespace }} is in {{ $labels.phase }} phase."
+            runbook_url: "https://openclaw.rocks/docs/runbooks/OpenClawInstanceDegraded"
 
         - alert: OpenClawSlowReconciliation
           expr: |
@@ -40,7 +39,45 @@ spec:
           labels:
             severity: warning
           annotations:
-            summary: "OpenClaw reconciliation is slow"
-            description: >-
-              The p99 reconciliation duration for OpenClaw instance {{ $labels.instance }}
-              in namespace {{ $labels.namespace }} has exceeded 30 seconds for more than 5 minutes.
+            summary: "OpenClaw instance {{ $labels.instance }} p99 reconciliation duration exceeds 30s."
+            runbook_url: "https://openclaw.rocks/docs/runbooks/OpenClawSlowReconciliation"
+
+        - alert: OpenClawPodCrashLooping
+          expr: |
+            increase(kube_pod_container_status_restarts_total{container="openclaw"}[10m]) > 2
+          for: 0m
+          labels:
+            severity: critical
+          annotations:
+            summary: "OpenClaw pod {{ $labels.pod }} is crash-looping (>2 restarts in 10m)."
+            runbook_url: "https://openclaw.rocks/docs/runbooks/OpenClawPodCrashLooping"
+
+        - alert: OpenClawPodOOMKilled
+          expr: |
+            kube_pod_container_status_last_terminated_reason{reason="OOMKilled",container="openclaw"} == 1
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "OpenClaw pod {{ $labels.pod }} was OOM killed. Consider increasing memory limits."
+            runbook_url: "https://openclaw.rocks/docs/runbooks/OpenClawPodOOMKilled"
+
+        - alert: OpenClawPVCNearlyFull
+          expr: |
+            (kubelet_volume_stats_used_bytes{persistentvolumeclaim=~"data-.*"} / kubelet_volume_stats_capacity_bytes{persistentvolumeclaim=~"data-.*"}) > 0.80
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "PVC {{ $labels.persistentvolumeclaim }} is over 80% full."
+            runbook_url: "https://openclaw.rocks/docs/runbooks/OpenClawPVCNearlyFull"
+
+        - alert: OpenClawAutoUpdateRollback
+          expr: |
+            increase(openclaw_autoupdate_rollbacks_total[1h]) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "OpenClaw instance {{ $labels.instance }} auto-update rolled back in the last hour."
+            runbook_url: "https://openclaw.rocks/docs/runbooks/OpenClawAutoUpdateRollback"

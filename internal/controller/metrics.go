@@ -85,6 +85,22 @@ var (
 		},
 		[]string{"instance", "namespace"},
 	)
+
+	instanceInfo = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "openclaw_instance_info",
+			Help: "Information about an OpenClaw instance (always 1, use for PromQL joins)",
+		},
+		[]string{"instance", "namespace", "version", "image"},
+	)
+
+	instanceReady = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "openclaw_instance_ready",
+			Help: "Whether the OpenClaw instance pod is ready (1=ready, 0=not ready)",
+		},
+		[]string{"instance", "namespace"},
+	)
 )
 
 func init() {
@@ -97,5 +113,7 @@ func init() {
 		autoUpdateChecksTotal,
 		autoUpdateAppliedTotal,
 		autoUpdateRollbacksTotal,
+		instanceInfo,
+		instanceReady,
 	)
 }

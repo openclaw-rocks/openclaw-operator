@@ -547,6 +547,12 @@ Metrics and logging configuration.
 | `serviceMonitor.enabled`    | `*bool`             | `false` | Create a Prometheus `ServiceMonitor`.         |
 | `serviceMonitor.interval`   | `string`            | `30s`   | Prometheus scrape interval.                   |
 | `serviceMonitor.labels`     | `map[string]string` | --      | Labels to add to the ServiceMonitor (for Prometheus selector matching). |
+| `prometheusRule.enabled`    | `*bool`             | `false` | Create a `PrometheusRule` with operator alerts. |
+| `prometheusRule.labels`     | `map[string]string` | --      | Labels to add to the PrometheusRule (for Prometheus rule selector matching). |
+| `prometheusRule.runbookBaseURL` | `string`         | `https://openclaw.rocks/docs/runbooks` | Base URL for alert runbook links. |
+| `grafanaDashboard.enabled`  | `*bool`             | `false` | Create Grafana dashboard ConfigMaps (operator overview + instance detail). |
+| `grafanaDashboard.labels`   | `map[string]string` | --      | Extra labels to add to dashboard ConfigMaps. |
+| `grafanaDashboard.folder`   | `string`            | `OpenClaw` | Grafana folder for the dashboards. |
 
 #### spec.observability.logging
 
@@ -554,6 +560,32 @@ Metrics and logging configuration.
 |----------|----------|---------|----------------------------------------------------------|
 | `level`  | `string` | `info`  | Log level. One of: `debug`, `info`, `warn`, `error`.     |
 | `format` | `string` | `json`  | Log format. One of: `json`, `text`.                      |
+
+### spec.selfConfigure
+
+Agent self-modification configuration. When enabled, the agent can create `OpenClawSelfConfig` resources to modify its own instance spec via the K8s API.
+
+| Field            | Type                 | Default | Description                                                                     |
+|------------------|----------------------|---------|---------------------------------------------------------------------------------|
+| `enabled`        | `bool`               | `false` | Enable self-configuration for this instance.                                    |
+| `allowedActions` | `[]SelfConfigAction` | --      | Action categories the agent is allowed to perform. If empty, no actions pass validation (fail-safe). Max 4 items. |
+
+**SelfConfigAction values:**
+
+| Value            | Description                                                       |
+|------------------|-------------------------------------------------------------------|
+| `skills`         | Add or remove skills (`spec.skills`).                             |
+| `config`         | Deep-merge patches into the OpenClaw config (`spec.config.raw`).  |
+| `workspaceFiles` | Add or remove initial workspace files (`spec.workspace.initialFiles`). |
+| `envVars`        | Add or remove plain environment variables (`spec.env`).           |
+
+When enabled, the operator:
+- Grants the SA read access to its own `OpenClawInstance` and referenced Secrets (scoped by `resourceNames`)
+- Grants `create`, `get`, `list` on `openclawselfconfigs`
+- Sets `automountServiceAccountToken: true` on the SA and pod spec
+- Injects `OPENCLAW_INSTANCE_NAME` and `OPENCLAW_NAMESPACE` environment variables
+- Adds port 6443 egress to the NetworkPolicy for K8s API access
+- Injects `SELFCONFIG.md` (skill documentation) and `selfconfig.sh` (helper script) into the workspace
 
 ### spec.availability
 
@@ -694,6 +726,9 @@ Standard `metav1.Condition` array. Condition types:
 | `role`               | `string` | Name of the managed Role.            |
 | `roleBinding`        | `string` | Name of the managed RoleBinding.      |
 | `gatewayTokenSecret` | `string` | Name of the auto-generated gateway token Secret. |
+| `prometheusRule`     | `string` | Name of the managed PrometheusRule. |
+| `grafanaDashboardOperator` | `string` | Name of the operator overview dashboard ConfigMap. |
+| `grafanaDashboardInstance` | `string` | Name of the instance detail dashboard ConfigMap. |
 
 ### status.backup and restore
 
@@ -730,6 +765,89 @@ Tracks the state of automatic version updates.
 - [Model Fallback Chains](model-fallback.md) - configure multi-provider fallback with `llmConfig`
 - [Custom AI Providers](custom-providers.md) - Ollama sidecar, vLLM, and other self-hosted models
 - [External Secrets Operator Integration](external-secrets.md) - sync API keys from AWS, Vault, GCP, etc.
+
+---
+
+## OpenClawSelfConfig (v1alpha1)
+
+**Group**: `openclaw.rocks`
+**Version**: `v1alpha1`
+**Kind**: `OpenClawSelfConfig`
+**Scope**: Namespaced
+**Short name**: `ocsc`
+
+An `OpenClawSelfConfig` represents a request from an agent to modify its own `OpenClawInstance` spec. The operator validates the request against the parent instance's `selfConfigure.allowedActions` policy and applies approved changes.
+
+### Print Columns
+
+| Column    | JSON Path                          |
+|-----------|------------------------------------|
+| Instance  | `.spec.instanceRef`                |
+| Phase     | `.status.phase`                    |
+| Age       | `.metadata.creationTimestamp`      |
+
+### Spec Fields
+
+| Field                | Type                      | Default | Description                                                                   |
+|----------------------|---------------------------|---------|-------------------------------------------------------------------------------|
+| `instanceRef`        | `string`                  | (required) | Name of the parent `OpenClawInstance` in the same namespace.               |
+| `addSkills`          | `[]string`                | --      | Skills to add. Max 10 items.                                                  |
+| `removeSkills`       | `[]string`                | --      | Skills to remove. Max 10 items.                                               |
+| `configPatch`        | `RawConfig`               | --      | Partial JSON to deep-merge into `spec.config.raw`. Protected keys under `gateway` are rejected. |
+| `addWorkspaceFiles`  | `map[string]string`       | --      | Filenames to content to add to workspace. Max 10 entries.                     |
+| `removeWorkspaceFiles` | `[]string`              | --      | Workspace filenames to remove. Max 10 items.                                  |
+| `addEnvVars`         | `[]SelfConfigEnvVar`      | --      | Environment variables to add (plain values only, no secret refs). Max 10 items. |
+| `removeEnvVars`      | `[]string`                | --      | Environment variable names to remove. Max 10 items.                           |
+
+**SelfConfigEnvVar:**
+
+| Field   | Type     | Description                   |
+|---------|----------|-------------------------------|
+| `name`  | `string` | Environment variable name.    |
+| `value` | `string` | Environment variable value.   |
+
+### Status Fields
+
+| Field            | Type          | Description                                                  |
+|------------------|---------------|--------------------------------------------------------------|
+| `phase`          | `string`      | Processing state: `Pending`, `Applied`, `Failed`, `Denied`.  |
+| `message`        | `string`      | Human-readable details about the current phase.              |
+| `completionTime` | `*metav1.Time`| Timestamp when the request reached a terminal phase.         |
+
+### Lifecycle
+
+1. Agent creates an `OpenClawSelfConfig` resource -- status starts as `Pending`
+2. Operator fetches the parent `OpenClawInstance` and validates:
+   - `selfConfigure.enabled` must be `true` (otherwise: `Denied`)
+   - All requested action categories must be in `allowedActions` (otherwise: `Denied`)
+   - Protected config keys (`gateway.*`) and env var names are rejected (otherwise: `Failed`)
+3. Operator applies changes to the parent instance spec
+4. Status transitions to `Applied` (success) or `Failed` (error)
+5. An owner reference is set to the parent instance for garbage collection
+6. Terminal requests are auto-deleted after 1 hour
+
+### Protected Resources
+
+The following are protected and cannot be modified via self-configure:
+
+- **Config keys**: `gateway` (entire subtree) -- prevents breaking gateway auth
+- **Environment variables**: `HOME`, `PATH`, `OPENCLAW_GATEWAY_TOKEN`, `OPENCLAW_INSTANCE_NAME`, `OPENCLAW_NAMESPACE`, `OPENCLAW_DISABLE_BONJOUR`, `CHROMIUM_URL`, `OLLAMA_HOST`, `TS_AUTHKEY`, `TS_HOSTNAME`, `NODE_EXTRA_CA_CERTS`, `NPM_CONFIG_CACHE`, `NPM_CONFIG_IGNORE_SCRIPTS`
+
+### Example
+
+```yaml
+apiVersion: openclaw.rocks/v1alpha1
+kind: OpenClawSelfConfig
+metadata:
+  name: add-fetch-skill
+spec:
+  instanceRef: my-agent
+  addSkills:
+    - "@anthropic/mcp-server-fetch"
+  addEnvVars:
+    - name: MY_CUSTOM_VAR
+      value: "hello"
+```
 
 ---
 
@@ -772,6 +890,12 @@ spec:
   envFrom:
     - secretRef:
         name: openclaw-api-keys
+
+  selfConfigure:
+    enabled: true
+    allowedActions:
+      - skills
+      - config
 
   resources:
     requests:

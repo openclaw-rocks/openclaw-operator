@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -231,6 +232,14 @@ func (r *OpenClawInstanceReconciler) removeFinalizer(ctx context.Context, instan
 	if err := r.Update(ctx, instance); err != nil {
 		return ctrl.Result{}, err
 	}
+
+	// Clean up per-instance metrics to avoid stale entries
+	instanceReady.DeleteLabelValues(instance.Name, instance.Namespace)
+	instanceInfo.DeletePartialMatch(prometheus.Labels{
+		"instance":  instance.Name,
+		"namespace": instance.Namespace,
+	})
+
 	logger.Info("Finalizer removed, cleanup complete")
 	return ctrl.Result{}, nil
 }

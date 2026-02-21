@@ -125,6 +125,11 @@ type OpenClawInstanceSpec struct {
 	// AutoUpdate configures automatic version updates from the OCI registry
 	// +optional
 	AutoUpdate AutoUpdateSpec `json:"autoUpdate,omitempty"`
+
+	// SelfConfigure enables agents to modify their own instance via OpenClawSelfConfig resources.
+	// When enabled, the operator injects RBAC, env vars, and a helper skill into the workspace.
+	// +optional
+	SelfConfigure SelfConfigureSpec `json:"selfConfigure,omitempty"`
 }
 
 // ImageSpec defines the container image configuration
@@ -775,6 +780,14 @@ type MetricsSpec struct {
 	// ServiceMonitor configures the Prometheus ServiceMonitor
 	// +optional
 	ServiceMonitor *ServiceMonitorSpec `json:"serviceMonitor,omitempty"`
+
+	// PrometheusRule configures auto-provisioned PrometheusRule alerts
+	// +optional
+	PrometheusRule *PrometheusRuleSpec `json:"prometheusRule,omitempty"`
+
+	// GrafanaDashboard configures auto-provisioned Grafana dashboard ConfigMaps
+	// +optional
+	GrafanaDashboard *GrafanaDashboardSpec `json:"grafanaDashboard,omitempty"`
 }
 
 // ServiceMonitorSpec defines the ServiceMonitor configuration
@@ -792,6 +805,40 @@ type ServiceMonitorSpec struct {
 	// Labels to add to the ServiceMonitor
 	// +optional
 	Labels map[string]string `json:"labels,omitempty"`
+}
+
+// PrometheusRuleSpec configures auto-provisioned PrometheusRule alerts
+type PrometheusRuleSpec struct {
+	// Enabled enables PrometheusRule creation with operator alerts
+	// +kubebuilder:default=false
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// Labels to add to the PrometheusRule (e.g., for Prometheus rule selector matching)
+	// +optional
+	Labels map[string]string `json:"labels,omitempty"`
+
+	// RunbookBaseURL is the base URL for alert runbook links
+	// +kubebuilder:default="https://openclaw.rocks/docs/runbooks"
+	// +optional
+	RunbookBaseURL string `json:"runbookBaseURL,omitempty"`
+}
+
+// GrafanaDashboardSpec configures auto-provisioned Grafana dashboard ConfigMaps
+type GrafanaDashboardSpec struct {
+	// Enabled enables Grafana dashboard ConfigMap creation
+	// +kubebuilder:default=false
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// Labels to add to the dashboard ConfigMaps (in addition to grafana_dashboard: "1")
+	// +optional
+	Labels map[string]string `json:"labels,omitempty"`
+
+	// Folder is the Grafana folder to place the dashboards in
+	// +kubebuilder:default="OpenClaw"
+	// +optional
+	Folder string `json:"folder,omitempty"`
 }
 
 // LoggingSpec defines logging configuration
@@ -1045,6 +1092,18 @@ type ManagedResourcesStatus struct {
 	// GatewayTokenSecret is the name of the auto-generated gateway token Secret
 	// +optional
 	GatewayTokenSecret string `json:"gatewayTokenSecret,omitempty"`
+
+	// PrometheusRule is the name of the managed PrometheusRule
+	// +optional
+	PrometheusRule string `json:"prometheusRule,omitempty"`
+
+	// GrafanaDashboardOperator is the name of the operator overview dashboard ConfigMap
+	// +optional
+	GrafanaDashboardOperator string `json:"grafanaDashboardOperator,omitempty"`
+
+	// GrafanaDashboardInstance is the name of the instance detail dashboard ConfigMap
+	// +optional
+	GrafanaDashboardInstance string `json:"grafanaDashboardInstance,omitempty"`
 }
 
 // +kubebuilder:object:root=true
