@@ -35,8 +35,8 @@ import (
 
 var _ = Describe("OpenClawSelfConfig Controller", func() {
 	const (
-		timeout  = time.Second * 60
-		interval = time.Second * 1
+		timeout  = time.Second * 120
+		interval = time.Second * 2
 	)
 
 	Context("When creating an instance with selfConfigure enabled", func() {
@@ -90,12 +90,25 @@ var _ = Describe("OpenClawSelfConfig Controller", func() {
 
 			// Wait for StatefulSet to exist - proves full reconcile completed
 			statefulSet := &appsv1.StatefulSet{}
-			Eventually(func() error {
-				return k8sClient.Get(ctx, types.NamespacedName{
+			Eventually(func() string {
+				err := k8sClient.Get(ctx, types.NamespacedName{
 					Name:      instanceName,
 					Namespace: namespace,
 				}, statefulSet)
-			}, timeout, interval).Should(Succeed())
+				if err == nil {
+					return "found"
+				}
+				// Include instance phase in error for diagnostics
+				inst := &openclawv1alpha1.OpenClawInstance{}
+				phase := "unknown"
+				if getErr := k8sClient.Get(ctx, types.NamespacedName{
+					Name: instanceName, Namespace: namespace,
+				}, inst); getErr == nil {
+					phase = inst.Status.Phase
+				}
+				return "not found (instance phase: " + phase + ")"
+			}, timeout, interval).Should(Equal("found"),
+				"StatefulSet should be created by reconcile")
 
 			// Verify SA has AutomountServiceAccountToken = true
 			sa := &corev1.ServiceAccount{}
@@ -173,12 +186,24 @@ var _ = Describe("OpenClawSelfConfig Controller", func() {
 			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
 
 			// Wait for initial reconciliation (StatefulSet proves full reconcile completed)
-			Eventually(func() error {
-				return k8sClient.Get(ctx, types.NamespacedName{
+			Eventually(func() string {
+				err := k8sClient.Get(ctx, types.NamespacedName{
 					Name:      instanceName,
 					Namespace: namespace,
 				}, &appsv1.StatefulSet{})
-			}, timeout, interval).Should(Succeed())
+				if err == nil {
+					return "found"
+				}
+				inst := &openclawv1alpha1.OpenClawInstance{}
+				phase := "unknown"
+				if getErr := k8sClient.Get(ctx, types.NamespacedName{
+					Name: instanceName, Namespace: namespace,
+				}, inst); getErr == nil {
+					phase = inst.Status.Phase
+				}
+				return "not found (instance phase: " + phase + ")"
+			}, timeout, interval).Should(Equal("found"),
+				"StatefulSet should be created by reconcile")
 
 			// Create a self-config request to add a skill
 			sc := &openclawv1alpha1.OpenClawSelfConfig{

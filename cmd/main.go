@@ -17,9 +17,13 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
+	"fmt"
+	"net/http"
 	"os"
+	"sync/atomic"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -153,7 +157,27 @@ func main() {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
 	}
-	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+
+	// Readiness check waits for informer caches to sync before reporting ready.
+	// This prevents the Deployment from becoming Available before the controllers
+	// are actually processing events (which caused flaky E2E tests).
+	var cacheSynced atomic.Bool
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		if mgr.GetCache().WaitForCacheSync(ctx) {
+			cacheSynced.Store(true)
+			setupLog.Info("informer caches synced, readiness check will pass")
+		} else {
+			setupLog.Error(fmt.Errorf("cache sync timed out"), "informer caches failed to sync")
+		}
+	}()
+	if err := mgr.AddReadyzCheck("readyz", func(_ *http.Request) error {
+		if !cacheSynced.Load() {
+			return fmt.Errorf("informer caches not yet synced")
+		}
+		return nil
+	}); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
 	}

@@ -209,5 +209,9 @@ jobs:
         run: |
           echo "=== Operator pod status ==="
           kubectl get pods -n openclaw-operator-system
-          echo "=== Operator logs (last 200 lines) ==="
-          kubectl logs -n openclaw-operator-system -l control-plane=controller-manager --tail=200 || true
+          echo "=== OpenClawInstance resources ==="
+          kubectl get openclawinstances -A -o wide || true
+          echo "=== OpenClawSelfConfig resources ==="
+          kubectl get openclawselfconfigs -A -o wide || true
+          echo "=== Operator logs (all) ==="
+          kubectl logs -n openclaw-operator-system -l control-plane=controller-manager --tail=-1 || true
