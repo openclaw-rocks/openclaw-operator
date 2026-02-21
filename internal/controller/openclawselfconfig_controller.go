@@ -47,7 +47,7 @@ type OpenClawSelfConfigReconciler struct {
 	Recorder record.EventRecorder
 }
 
-//+kubebuilder:rbac:groups=openclaw.rocks,resources=openclawselfconfigs,verbs=get;list;watch;update;patch;delete
+//+kubebuilder:rbac:groups=openclaw.rocks,resources=openclawselfconfigs,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=openclaw.rocks,resources=openclawselfconfigs/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=openclaw.rocks,resources=openclawselfconfigs/finalizers,verbs=update
 

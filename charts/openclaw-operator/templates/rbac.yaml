@@ -67,7 +67,7 @@ rules:
   # OpenClawSelfConfig CRD
   - apiGroups: ["openclaw.rocks"]
     resources: ["openclawselfconfigs"]
-    verbs: ["get", "list", "watch", "update", "patch", "delete"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["openclaw.rocks"]
     resources: ["openclawselfconfigs/status"]
     verbs: ["get", "update", "patch"]

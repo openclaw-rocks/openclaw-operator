@@ -103,6 +103,7 @@ rules:
   - openclaw.rocks
   resources:
   - openclawinstances
+  - openclawselfconfigs
   verbs:
   - create
   - delete
@@ -127,17 +128,6 @@ rules:
   - get
   - patch
   - update
-- apiGroups:
-  - openclaw.rocks
-  resources:
-  - openclawselfconfigs
-  verbs:
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
 - apiGroups:
   - policy
   resources:
