@@ -37,9 +37,9 @@ var _ = Describe("Backup on Delete", func() {
 		interval = time.Millisecond * 250
 	)
 
-	Context("When deleting an instance without B2 credentials Secret", func() {
+	Context("When deleting an instance without S3 credentials Secret", func() {
 		It("Should remove the finalizer and delete cleanly", func() {
-			// Ensure B2 secret doesn't exist (may have been created by another test)
+			// Ensure S3 secret doesn't exist (may have been created by another test)
 			_ = k8sClient.Delete(ctx, &corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      BackupSecretName,
@@ -49,14 +49,14 @@ var _ = Describe("Backup on Delete", func() {
 
 			instance := &openclawv1alpha1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "backup-no-b2-test",
+					Name:      "backup-no-s3-test",
 					Namespace: "default",
 				},
 				Spec: openclawv1alpha1.OpenClawInstanceSpec{},
 			}
 			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
 
-			instanceKey := types.NamespacedName{Name: "backup-no-b2-test", Namespace: "default"}
+			instanceKey := types.NamespacedName{Name: "backup-no-s3-test", Namespace: "default"}
 
 			// Wait for instance to be provisioned (finalizer added)
 			Eventually(func() bool {
@@ -81,20 +81,20 @@ var _ = Describe("Backup on Delete", func() {
 
 	Context("When deleting an instance with skip-backup annotation", func() {
 		It("Should remove the finalizer immediately", func() {
-			// Create a B2 credentials secret (needed by controller)
-			b2Secret := &corev1.Secret{
+			// Create an S3 credentials secret (needed by controller)
+			s3Secret := &corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      BackupSecretName,
 					Namespace: "default",
 				},
 				Data: map[string][]byte{
-					"B2_BUCKET":   []byte("test-bucket"),
-					"B2_KEY_ID":   []byte("key123"),
-					"B2_APP_KEY":  []byte("secret456"),
-					"B2_ENDPOINT": []byte("https://s3.example.com"),
+					"S3_BUCKET":            []byte("test-bucket"),
+					"S3_ACCESS_KEY_ID":     []byte("key123"),
+					"S3_SECRET_ACCESS_KEY": []byte("secret456"),
+					"S3_ENDPOINT":          []byte("https://s3.example.com"),
 				},
 			}
-			_ = k8sClient.Create(ctx, b2Secret)
+			_ = k8sClient.Create(ctx, s3Secret)
 
 			instance := &openclawv1alpha1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{

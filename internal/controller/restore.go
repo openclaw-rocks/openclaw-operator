@@ -34,7 +34,7 @@ import (
 	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
 )
 
-// reconcileRestore handles restoring PVC data from a B2 backup before StatefulSet creation.
+// reconcileRestore handles restoring PVC data from an S3 backup before StatefulSet creation.
 // Returns (result, done, error):
 //   - done=true: restore is complete (or not needed), continue to create StatefulSet
 //   - done=false: restore is in progress, requeue with result
@@ -61,10 +61,10 @@ func (r *OpenClawInstanceReconciler) reconcileRestore(ctx context.Context, insta
 		}
 	}
 
-	// Get B2 credentials
-	creds, err := r.getB2Credentials(ctx)
+	// Get S3 credentials
+	creds, err := r.getS3Credentials(ctx)
 	if err != nil {
-		logger.Error(err, "Failed to get B2 credentials for restore")
+		logger.Error(err, "Failed to get S3 credentials for restore")
 		r.Recorder.Event(instance, corev1.EventTypeWarning, "RestoreCredentialsFailed", err.Error())
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, false, nil
 	}

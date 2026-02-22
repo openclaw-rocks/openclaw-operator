@@ -608,7 +608,7 @@ High availability and scheduling configuration.
 
 | Field         | Type     | Default | Description                                                                                       |
 |---------------|----------|---------|---------------------------------------------------------------------------------------------------|
-| `restoreFrom` | `string` | --      | B2 backup path to restore data from (e.g., `backups/{tenantId}/{instanceId}/{timestamp}`). When set, the operator restores PVC data from this path before creating the StatefulSet. Cleared automatically after successful restore. |
+| `restoreFrom` | `string` | --      | Remote backup path to restore data from (e.g., `backups/{tenantId}/{instanceId}/{timestamp}`). When set, the operator restores PVC data from this S3 path before creating the StatefulSet. Cleared automatically after successful restore. |
 
 ### spec.runtimeDeps
 
@@ -742,9 +742,9 @@ Standard `metav1.Condition` array. Condition types:
 |------------------|----------------|----------------------------------------------------------|
 | `backupJobName`  | `string`       | Name of the active backup Job.                           |
 | `restoreJobName` | `string`       | Name of the active restore Job.                          |
-| `lastBackupPath` | `string`       | B2 path of the last successful backup.                   |
+| `lastBackupPath` | `string`       | S3 path of the last successful backup.                   |
 | `lastBackupTime` | `*metav1.Time` | Timestamp of the last successful backup.                 |
-| `restoredFrom`   | `string`       | B2 path this instance was restored from.                 |
+| `restoredFrom`   | `string`       | S3 path this instance was restored from.                 |
 
 ### status.autoUpdate
 
@@ -760,7 +760,7 @@ Tracks the state of automatic version updates.
 | `lastUpdateTime`     | `*metav1.Time` | When the last successful update was applied.                                             |
 | `lastUpdateError`    | `string`       | Error message from the last failed update attempt.                                       |
 | `previousVersion`    | `string`       | Version before the last update (used for rollback).                                      |
-| `preUpdateBackupPath`| `string`       | B2 path of the pre-update backup (used for rollback restore).                            |
+| `preUpdateBackupPath`| `string`       | S3 path of the pre-update backup (used for rollback restore).                            |
 | `failedVersion`      | `string`       | Version that failed health checks and will be skipped in future checks. Cleared when a newer version becomes available. |
 | `rollbackCount`      | `int32`        | Consecutive rollback count. Auto-update pauses after 3. Reset to 0 on any successful update. |
 

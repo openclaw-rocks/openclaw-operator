@@ -78,7 +78,7 @@ Every request is validated against the instance's allowlist policy. Protected co
 | **Auto-Update** | OCI registry polling | Opt-in version tracking: checks the registry for new semver releases, backs up first, rolls out, and auto-rolls back if the new version fails health checks |
 | **Scalable** | Auto-scaling | HPA integration with CPU and memory metrics, min/max replica bounds, automatic StatefulSet replica management |
 | **Resilient** | Self-healing lifecycle | PodDisruptionBudgets, health probes, automatic config rollouts via content hashing, 5-minute drift detection |
-| **Backup/Restore** | B2-backed snapshots | Automatic backup to Backblaze B2 on instance deletion; restore into a new instance from any snapshot |
+| **Backup/Restore** | S3-backed snapshots | Automatic backup to S3-compatible storage on instance deletion; restore into a new instance from any snapshot |
 | **Workspace Seeding** | Initial files & dirs | Pre-populate the workspace with files and directories before the agent starts |
 | **Gateway Auth** | Auto-generated tokens | Automatic gateway token Secret per instance, bypassing mDNS pairing (unusable in k8s) |
 | **Tailscale** | Tailnet access | Expose via Tailscale Serve or Funnel with SSO auth - no Ingress needed |
@@ -488,7 +488,7 @@ spec:
     healthCheckTimeout: "10m"    # how long to wait for the pod to become ready (2m-30m)
 ```
 
-When enabled, the operator resolves `latest` to the highest stable semver tag on creation, then polls for newer versions on each `checkInterval`. Before updating, it optionally runs a B2 backup, then patches the image tag and monitors the rollout. If the pod fails to become ready within `healthCheckTimeout`, it reverts the image tag and (optionally) restores the PVC from the pre-update snapshot.
+When enabled, the operator resolves `latest` to the highest stable semver tag on creation, then polls for newer versions on each `checkInterval`. Before updating, it optionally runs an S3 backup, then patches the image tag and monitors the rollout. If the pod fails to become ready within `healthCheckTimeout`, it reverts the image tag and (optionally) restores the PVC from the pre-update snapshot.
 
 Safety mechanisms include failed-version tracking (skips versions that failed health checks), a circuit breaker (pauses after 3 consecutive rollbacks), and full data restore when `backupBeforeUpdate` is enabled. Auto-update is a no-op for digest-pinned images (`spec.image.digest`).
 

@@ -378,11 +378,11 @@ var _ = Describe("OpenClawInstance Controller", func() {
 		})
 	})
 
-	Context("When deleting an OpenClawInstance without B2 backup credentials", func() {
+	Context("When deleting an OpenClawInstance without S3 backup credentials", func() {
 		var namespace string
 
 		BeforeEach(func() {
-			namespace = "test-no-b2-" + time.Now().Format("20060102150405")
+			namespace = "test-no-s3-" + time.Now().Format("20060102150405")
 			ns := &corev1.Namespace{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: namespace,
@@ -400,14 +400,14 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			_ = k8sClient.Delete(ctx, ns)
 		})
 
-		It("Should delete cleanly when B2 backup credentials are not configured", func() {
+		It("Should delete cleanly when S3 backup credentials are not configured", func() {
 			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
 				Skip("Skipping resource validation in minimal mode")
 			}
 
-			instanceName := "no-b2-delete"
+			instanceName := "no-s3-delete"
 
-			// No B2 secret exists in the namespace or operator namespace
+			// No S3 secret exists in the namespace or operator namespace
 			instance := &openclawv1alpha1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
@@ -434,7 +434,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				}, statefulSet)
 			}, timeout, interval).Should(Succeed())
 
-			// Delete the instance - should succeed without B2 credentials
+			// Delete the instance - should succeed without S3 credentials
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 
 			// Instance should be fully garbage collected (finalizer removed)

@@ -32,8 +32,8 @@ import (
 )
 
 const (
-	// BackupSecretName is the name of the Secret containing B2 credentials
-	BackupSecretName = "b2-backup-credentials" // #nosec G101 -- not a credential, just a Secret resource name
+	// BackupSecretName is the name of the Secret containing S3 credentials
+	BackupSecretName = "s3-backup-credentials" // #nosec G101 -- not a credential, just a Secret resource name
 
 	// RcloneImage is the pinned rclone container image
 	RcloneImage = "rclone/rclone:1.68"
@@ -51,8 +51,8 @@ const (
 	LabelManagedBy = "app.kubernetes.io/managed-by"
 )
 
-// b2Credentials holds the B2 credential values read from a Secret
-type b2Credentials struct {
+// s3Credentials holds the S3 credential values read from a Secret
+type s3Credentials struct {
 	Bucket   string
 	KeyID    string
 	AppKey   string
@@ -64,7 +64,7 @@ func getTenantID(instance *openclawv1alpha1.OpenClawInstance) string {
 	if tenant, ok := instance.Labels[LabelTenant]; ok && tenant != "" {
 		return tenant
 	}
-	// Fallback: extract from namespace (oc-tenant-{id} → {id})
+	// Fallback: extract from namespace (oc-tenant-{id} -> {id})
 	ns := instance.Namespace
 	if strings.HasPrefix(ns, "oc-tenant-") {
 		return strings.TrimPrefix(ns, "oc-tenant-")
@@ -72,42 +72,42 @@ func getTenantID(instance *openclawv1alpha1.OpenClawInstance) string {
 	return ns
 }
 
-// getB2Credentials reads the B2 backup credentials Secret from the operator namespace
-func (r *OpenClawInstanceReconciler) getB2Credentials(ctx context.Context) (*b2Credentials, error) {
+// getS3Credentials reads the S3 backup credentials Secret from the operator namespace
+func (r *OpenClawInstanceReconciler) getS3Credentials(ctx context.Context) (*s3Credentials, error) {
 	secret := &corev1.Secret{}
 	if err := r.Get(ctx, types.NamespacedName{
 		Name:      BackupSecretName,
 		Namespace: r.OperatorNamespace,
 	}, secret); err != nil {
-		return nil, fmt.Errorf("failed to get B2 credentials secret %s/%s: %w", r.OperatorNamespace, BackupSecretName, err)
+		return nil, fmt.Errorf("failed to get S3 credentials secret %s/%s: %w", r.OperatorNamespace, BackupSecretName, err)
 	}
 
 	get := func(key string) (string, error) {
 		v, ok := secret.Data[key]
 		if !ok || len(v) == 0 {
-			return "", fmt.Errorf("B2 credentials secret missing key %q", key)
+			return "", fmt.Errorf("S3 credentials secret missing key %q", key)
 		}
 		return string(v), nil
 	}
 
-	bucket, err := get("B2_BUCKET")
+	bucket, err := get("S3_BUCKET")
 	if err != nil {
 		return nil, err
 	}
-	keyID, err := get("B2_KEY_ID")
+	keyID, err := get("S3_ACCESS_KEY_ID")
 	if err != nil {
 		return nil, err
 	}
-	appKey, err := get("B2_APP_KEY")
+	appKey, err := get("S3_SECRET_ACCESS_KEY")
 	if err != nil {
 		return nil, err
 	}
-	endpoint, err := get("B2_ENDPOINT")
+	endpoint, err := get("S3_ENDPOINT")
 	if err != nil {
 		return nil, err
 	}
 
-	return &b2Credentials{
+	return &s3Credentials{
 		Bucket:   bucket,
 		KeyID:    keyID,
 		AppKey:   appKey,
@@ -115,30 +115,30 @@ func (r *OpenClawInstanceReconciler) getB2Credentials(ctx context.Context) (*b2C
 	}, nil
 }
 
-// buildRcloneJob creates a batch/v1 Job that runs rclone to sync data between a PVC and B2.
-// For backup: src=PVC mount, dst=B2 remote path
-// For restore: src=B2 remote path, dst=PVC mount
+// buildRcloneJob creates a batch/v1 Job that runs rclone to sync data between a PVC and S3.
+// For backup: src=PVC mount, dst=S3 remote path
+// For restore: src=S3 remote path, dst=PVC mount
 func buildRcloneJob(
 	name, namespace, pvcName string,
-	b2Path string,
+	remotePath string,
 	labels map[string]string,
-	creds *b2Credentials,
+	creds *s3Credentials,
 	isBackup bool,
 ) *batchv1.Job {
 	backoffLimit := int32(3)
 	ttl := int32(86400) // 24h
 
 	// rclone remote config via env vars
-	// :s3: is used because B2 S3-compatible API works with rclone's S3 backend
-	remotePath := fmt.Sprintf(":s3:%s/%s", creds.Bucket, b2Path)
+	// :s3: is used because S3-compatible API works with rclone's S3 backend
+	rcloneRemotePath := fmt.Sprintf(":s3:%s/%s", creds.Bucket, remotePath)
 
 	var args []string
 	if isBackup {
-		// PVC → B2
-		args = []string{"sync", "/data/", remotePath, "--s3-provider=Other", "--s3-endpoint=$(B2_ENDPOINT)", "--s3-access-key-id=$(B2_KEY_ID)", "--s3-secret-access-key=$(B2_APP_KEY)", "--transfers=8", "--checkers=16", "-v"}
+		// PVC -> S3
+		args = []string{"sync", "/data/", rcloneRemotePath, "--s3-provider=Other", "--s3-endpoint=$(S3_ENDPOINT)", "--s3-access-key-id=$(S3_ACCESS_KEY_ID)", "--s3-secret-access-key=$(S3_SECRET_ACCESS_KEY)", "--transfers=8", "--checkers=16", "-v"}
 	} else {
-		// B2 → PVC
-		args = []string{"sync", remotePath, "/data/", "--s3-provider=Other", "--s3-endpoint=$(B2_ENDPOINT)", "--s3-access-key-id=$(B2_KEY_ID)", "--s3-secret-access-key=$(B2_APP_KEY)", "--transfers=8", "--checkers=16", "-v"}
+		// S3 -> PVC
+		args = []string{"sync", rcloneRemotePath, "/data/", "--s3-provider=Other", "--s3-endpoint=$(S3_ENDPOINT)", "--s3-access-key-id=$(S3_ACCESS_KEY_ID)", "--s3-secret-access-key=$(S3_SECRET_ACCESS_KEY)", "--transfers=8", "--checkers=16", "-v"}
 	}
 
 	return &batchv1.Job{
@@ -170,9 +170,9 @@ func buildRcloneJob(
 							Command: []string{"rclone"},
 							Args:    args,
 							Env: []corev1.EnvVar{
-								{Name: "B2_ENDPOINT", Value: creds.Endpoint},
-								{Name: "B2_KEY_ID", Value: creds.KeyID},
-								{Name: "B2_APP_KEY", Value: creds.AppKey},
+								{Name: "S3_ENDPOINT", Value: creds.Endpoint},
+								{Name: "S3_ACCESS_KEY_ID", Value: creds.KeyID},
+								{Name: "S3_SECRET_ACCESS_KEY", Value: creds.AppKey},
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{

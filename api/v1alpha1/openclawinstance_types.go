@@ -107,7 +107,7 @@ type OpenClawInstanceSpec struct {
 	// +optional
 	Availability AvailabilitySpec `json:"availability,omitempty"`
 
-	// RestoreFrom is the B2 backup path to restore data from (e.g. "backups/{tenantId}/{instanceId}/{timestamp}").
+	// RestoreFrom is the remote backup path to restore data from (e.g. "backups/{tenantId}/{instanceId}/{timestamp}").
 	// When set, the operator restores PVC data from this path before creating the StatefulSet.
 	// Cleared automatically after successful restore.
 	// +optional
@@ -1014,7 +1014,7 @@ type AutoUpdateStatus struct {
 	// +optional
 	PreviousVersion string `json:"previousVersion,omitempty"`
 
-	// PreUpdateBackupPath is the B2 path of the pre-update backup (used for rollback restore)
+	// PreUpdateBackupPath is the S3 path of the pre-update backup (used for rollback restore)
 	// +optional
 	PreUpdateBackupPath string `json:"preUpdateBackupPath,omitempty"`
 
@@ -1068,7 +1068,7 @@ type OpenClawInstanceStatus struct {
 	// +optional
 	RestoreJobName string `json:"restoreJobName,omitempty"`
 
-	// LastBackupPath is the B2 path of the last successful backup
+	// LastBackupPath is the S3 path of the last successful backup
 	// +optional
 	LastBackupPath string `json:"lastBackupPath,omitempty"`
 
@@ -1076,7 +1076,7 @@ type OpenClawInstanceStatus struct {
 	// +optional
 	LastBackupTime *metav1.Time `json:"lastBackupTime,omitempty"`
 
-	// RestoredFrom is the B2 path this instance was restored from
+	// RestoredFrom is the S3 path this instance was restored from
 	// +optional
 	RestoredFrom string `json:"restoredFrom,omitempty"`
 

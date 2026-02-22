@@ -530,10 +530,10 @@ func (r *OpenClawInstanceReconciler) driveRollbackRestore(ctx context.Context, i
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, false, nil
 	}
 
-	// Get B2 credentials
-	creds, err := r.getB2Credentials(ctx)
+	// Get S3 credentials
+	creds, err := r.getS3Credentials(ctx)
 	if err != nil {
-		return ctrl.Result{}, false, fmt.Errorf("failed to get B2 credentials for rollback: %w", err)
+		return ctrl.Result{}, false, fmt.Errorf("failed to get S3 credentials for rollback: %w", err)
 	}
 
 	// Create or check restore job
@@ -552,7 +552,7 @@ func (r *OpenClawInstanceReconciler) driveRollbackRestore(ctx context.Context, i
 			return ctrl.Result{}, false, err
 		}
 
-		logger.Info("Creating rollback restore job", "job", jobName, "b2Path", backupPath)
+		logger.Info("Creating rollback restore job", "job", jobName, "remotePath", backupPath)
 		if err := r.Create(ctx, job); err != nil {
 			if apierrors.IsAlreadyExists(err) {
 				return ctrl.Result{RequeueAfter: 10 * time.Second}, false, nil
@@ -587,7 +587,7 @@ func rollbackRestoreJobName(instance *openclawv1alpha1.OpenClawInstance) string 
 	return instance.Name + "-rollback-restore"
 }
 
-// lastPreUpdateBackupPath extracts the B2 path from the pre-update backup Job.
+// lastPreUpdateBackupPath extracts the S3 path from the pre-update backup Job.
 // This is called right after the backup completes so the job should exist.
 func (r *OpenClawInstanceReconciler) lastPreUpdateBackupPath(instance *openclawv1alpha1.OpenClawInstance) string {
 	jobName := preUpdateBackupJobName(instance)
@@ -595,14 +595,14 @@ func (r *OpenClawInstanceReconciler) lastPreUpdateBackupPath(instance *openclawv
 	if err != nil || job == nil {
 		return ""
 	}
-	// Extract the B2 path from the rclone args (the second arg after "sync")
+	// Extract the S3 path from the rclone args (the second arg after "sync")
 	for i := range job.Spec.Template.Spec.Containers {
 		c := &job.Spec.Template.Spec.Containers[i]
 		if c.Name == "rclone" && len(c.Args) >= 2 {
 			// Args[1] is the remote path for backup (":s3:bucket/path")
 			remotePath := c.Args[1]
-			// Strip the ":s3:bucket/" prefix to get the B2 path
-			creds, credErr := r.getB2Credentials(context.TODO())
+			// Strip the ":s3:bucket/" prefix to get the S3 path
+			creds, credErr := r.getS3Credentials(context.TODO())
 			if credErr == nil {
 				prefix := fmt.Sprintf(":s3:%s/", creds.Bucket)
 				if len(remotePath) > len(prefix) {
@@ -672,10 +672,10 @@ func (r *OpenClawInstanceReconciler) drivePreUpdateBackup(ctx context.Context, i
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, false, nil
 	}
 
-	// Get B2 credentials
-	creds, err := r.getB2Credentials(ctx)
+	// Get S3 credentials
+	creds, err := r.getS3Credentials(ctx)
 	if err != nil {
-		return ctrl.Result{}, false, fmt.Errorf("failed to get B2 credentials: %w", err)
+		return ctrl.Result{}, false, fmt.Errorf("failed to get S3 credentials: %w", err)
 	}
 
 	// Create or check backup job
@@ -698,7 +698,7 @@ func (r *OpenClawInstanceReconciler) drivePreUpdateBackup(ctx context.Context, i
 			return ctrl.Result{}, false, err
 		}
 
-		logger.Info("Creating pre-update backup job", "job", jobName, "b2Path", b2Path)
+		logger.Info("Creating pre-update backup job", "job", jobName, "remotePath", b2Path)
 		if err := r.Create(ctx, job); err != nil {
 			if apierrors.IsAlreadyExists(err) {
 				return ctrl.Result{RequeueAfter: 10 * time.Second}, false, nil

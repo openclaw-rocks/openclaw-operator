@@ -70,4 +70,4 @@ annotations:
       image: ghcr.io/openclaw-rocks/openclaw-operator:v0.9.0
   artifacthub.io/changes: |
     - kind: added
-      description: PVC backup-on-delete and restore-from-backup via rclone/B2
+      description: PVC backup-on-delete and restore-from-backup via rclone/S3

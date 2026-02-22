@@ -5138,7 +5138,7 @@ spec:
                 type: object
               restoreFrom:
                 description: |-
-                  RestoreFrom is the B2 backup path to restore data from (e.g. "backups/{tenantId}/{instanceId}/{timestamp}").
+                  RestoreFrom is the remote backup path to restore data from (e.g. "backups/{tenantId}/{instanceId}/{timestamp}").
                   When set, the operator restores PVC data from this path before creating the StatefulSet.
                   Cleared automatically after successful restore.
                 type: string
@@ -8891,7 +8891,7 @@ spec:
                     description: PendingVersion is set during an in-flight update
                     type: string
                   preUpdateBackupPath:
-                    description: PreUpdateBackupPath is the B2 path of the pre-update
+                    description: PreUpdateBackupPath is the S3 path of the pre-update
                       backup (used for rollback restore)
                     type: string
                   previousVersion:
@@ -8982,7 +8982,7 @@ spec:
                 description: GatewayEndpoint is the endpoint for the OpenClaw gateway
                 type: string
               lastBackupPath:
-                description: LastBackupPath is the B2 path of the last successful
+                description: LastBackupPath is the S3 path of the last successful
                   backup
                 type: string
               lastBackupTime:
@@ -9071,7 +9071,7 @@ spec:
                 description: RestoreJobName is the name of the active restore Job
                 type: string
               restoredFrom:
-                description: RestoredFrom is the B2 path this instance was restored
+                description: RestoredFrom is the S3 path this instance was restored
                   from
                 type: string
             type: object

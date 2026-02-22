@@ -3169,6 +3169,16 @@ spec:
                   type: object
                 maxItems: 10
                 type: array
+              gateway:
+                description: Gateway configures the gateway authentication token
+                properties:
+                  existingSecret:
+                    description: |-
+                      ExistingSecret is the name of a user-managed Secret containing the gateway token.
+                      The Secret must have a key named "token". When set, the operator skips
+                      auto-generating a gateway token Secret and uses this Secret instead.
+                    type: string
+                type: object
               image:
                 description: Image configuration for the OpenClaw container
                 properties:
@@ -4680,6 +4690,14 @@ spec:
                                     - Exact
                                     - ImplementationSpecific
                                     type: string
+                                  port:
+                                    description: |-
+                                      Port is the backend service port number to route traffic to.
+                                      Defaults to the gateway port (18789) when not set.
+                                    format: int32
+                                    maximum: 65535
+                                    minimum: 1
+                                    type: integer
                                 type: object
                               type: array
                           required:
@@ -4741,6 +4759,47 @@ spec:
                           type: string
                         description: Annotations to add to the Service
                         type: object
+                      ports:
+                        description: |-
+                          Ports defines custom ports exposed on the Service.
+                          When set, these replace the default gateway and canvas ports.
+                          When empty, the operator creates default gateway (18789) and canvas (18793) ports.
+                        items:
+                          description: ServicePortSpec defines a port exposed by the
+                            Service
+                          properties:
+                            name:
+                              description: Name is the name of the port
+                              minLength: 1
+                              type: string
+                            port:
+                              description: Port is the port number exposed on the
+                                Service
+                              format: int32
+                              maximum: 65535
+                              minimum: 1
+                              type: integer
+                            protocol:
+                              default: TCP
+                              description: Protocol is the protocol for the port
+                              enum:
+                              - TCP
+                              - UDP
+                              - SCTP
+                              type: string
+                            targetPort:
+                              description: TargetPort is the port on the container
+                                to route to (defaults to Port)
+                              format: int32
+                              maximum: 65535
+                              minimum: 1
+                              type: integer
+                          required:
+                          - name
+                          - port
+                          type: object
+                        maxItems: 20
+                        type: array
                       type:
                         default: ClusterIP
                         description: Type is the Kubernetes Service type
@@ -4803,6 +4862,83 @@ spec:
                             description: Labels to add to the ServiceMonitor
                             type: object
                         type: object
+                    type: object
+                type: object
+              ollama:
+                description: Ollama enables the Ollama sidecar for local LLM inference
+                properties:
+                  enabled:
+                    default: false
+                    description: Enabled enables the Ollama sidecar
+                    type: boolean
+                  gpu:
+                    description: GPU is the number of NVIDIA GPUs to allocate (sets
+                      nvidia.com/gpu resource limit)
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  image:
+                    description: Image configures the Ollama container image
+                    properties:
+                      digest:
+                        description: Digest is the container image digest for supply
+                          chain security
+                        type: string
+                      repository:
+                        default: ollama/ollama
+                        description: Repository is the container image repository
+                        type: string
+                      tag:
+                        default: latest
+                        description: Tag is the container image tag
+                        type: string
+                    type: object
+                  models:
+                    description: Models is a list of models to pre-pull during pod
+                      init (e.g. ["llama3.2", "nomic-embed-text"])
+                    items:
+                      type: string
+                    maxItems: 10
+                    type: array
+                  resources:
+                    description: Resources specifies compute resources for the Ollama
+                      container
+                    properties:
+                      limits:
+                        description: Limits describes the maximum amount of compute
+                          resources allowed
+                        properties:
+                          cpu:
+                            description: CPU resource (e.g., "500m", "2")
+                            type: string
+                          memory:
+                            description: Memory resource (e.g., "512Mi", "2Gi")
+                            type: string
+                        type: object
+                      requests:
+                        description: Requests describes the minimum amount of compute
+                          resources required
+                        properties:
+                          cpu:
+                            description: CPU resource (e.g., "500m", "2")
+                            type: string
+                          memory:
+                            description: Memory resource (e.g., "512Mi", "2Gi")
+                            type: string
+                        type: object
+                    type: object
+                  storage:
+                    description: Storage configures the model cache volume
+                    properties:
+                      existingClaim:
+                        description: ExistingClaim is the name of an existing PVC
+                          for persistent model storage
+                        type: string
+                      sizeLimit:
+                        default: 20Gi
+                        description: SizeLimit is the size limit for the emptyDir
+                          model cache (default "20Gi")
+                        type: string
                     type: object
                 type: object
               probes:
@@ -4922,7 +5058,7 @@ spec:
                 type: object
               restoreFrom:
                 description: |-
-                  RestoreFrom is the B2 backup path to restore data from (e.g. "backups/{tenantId}/{instanceId}/{timestamp}").
+                  RestoreFrom is the remote backup path to restore data from (e.g. "backups/{tenantId}/{instanceId}/{timestamp}").
                   When set, the operator restores PVC data from this path before creating the StatefulSet.
                   Cleared automatically after successful restore.
                 type: string
@@ -8498,8 +8634,10 @@ spec:
                 type: array
               skills:
                 description: |-
-                  Skills is a list of ClawHub skills to install via init container.
-                  Each entry is a skill identifier (e.g., "@anthropic/mcp-server-fetch").
+                  Skills is a list of skills to install via init container.
+                  Each entry is either a ClawHub skill identifier (e.g., "@anthropic/mcp-server-fetch")
+                  or an npm package prefixed with "npm:" (e.g., "npm:@openclaw/matrix").
+                  npm lifecycle scripts are disabled for security (see #91).
                 items:
                   type: string
                 maxItems: 20
@@ -8535,6 +8673,56 @@ spec:
                           to use
                         type: string
                     type: object
+                type: object
+              tailscale:
+                description: Tailscale configures Tailscale integration for tailnet
+                  access and HTTPS
+                properties:
+                  authKeySecretKey:
+                    default: authkey
+                    description: AuthKeySecretKey is the key in the referenced Secret.
+                    type: string
+                  authKeySecretRef:
+                    description: |-
+                      AuthKeySecretRef references a Secret containing the Tailscale auth key.
+                      The Secret must have a key matching AuthKeySecretKey (default: "authkey").
+                      Use ephemeral+reusable keys from the Tailscale admin console.
+                    properties:
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  authSSO:
+                    default: false
+                    description: |-
+                      AuthSSO enables passwordless login for tailnet members.
+                      Sets gateway.auth.allowTailscale=true in the OpenClaw config.
+                    type: boolean
+                  enabled:
+                    default: false
+                    description: Enabled enables Tailscale integration
+                    type: boolean
+                  hostname:
+                    description: Hostname sets the Tailscale device name (defaults
+                      to instance name).
+                    type: string
+                  mode:
+                    default: serve
+                    description: |-
+                      Mode selects the Tailscale mode.
+                      "serve" exposes the instance to tailnet members only (default).
+                      "funnel" exposes the instance to the public internet via Tailscale Funnel.
+                    enum:
+                    - serve
+                    - funnel
+                    type: string
                 type: object
               workspace:
                 description: |-
@@ -8596,7 +8784,7 @@ spec:
                     description: PendingVersion is set during an in-flight update
                     type: string
                   preUpdateBackupPath:
-                    description: PreUpdateBackupPath is the B2 path of the pre-update
+                    description: PreUpdateBackupPath is the S3 path of the pre-update
                       backup (used for rollback restore)
                     type: string
                   previousVersion:
@@ -8687,7 +8875,7 @@ spec:
                 description: GatewayEndpoint is the endpoint for the OpenClaw gateway
                 type: string
               lastBackupPath:
-                description: LastBackupPath is the B2 path of the last successful
+                description: LastBackupPath is the S3 path of the last successful
                   backup
                 type: string
               lastBackupTime:
@@ -8761,7 +8949,7 @@ spec:
                 description: RestoreJobName is the name of the active restore Job
                 type: string
               restoredFrom:
-                description: RestoredFrom is the B2 path this instance was restored
+                description: RestoredFrom is the S3 path this instance was restored
                   from
                 type: string
             type: object
