@@ -37,11 +37,38 @@ spec:
 
 The operator reconciles this into a fully managed stack of 9+ Kubernetes resources: secured, monitored, and self-healing.
 
+## Agents That Adapt Themselves
+
+Agents can autonomously install skills, patch their config, add environment variables, and seed workspace files - all through the Kubernetes API, validated by the operator on every request.
+
+```yaml
+# 1. Enable self-configure on the instance
+spec:
+  selfConfigure:
+    enabled: true
+    allowedActions: [skills, config, envVars, workspaceFiles]
+```
+
+```yaml
+# 2. The agent creates this to install a skill at runtime
+apiVersion: openclaw.rocks/v1alpha1
+kind: OpenClawSelfConfig
+metadata:
+  name: add-fetch-skill
+spec:
+  instanceRef: my-agent
+  addSkills:
+    - "@anthropic/mcp-server-fetch"
+```
+
+Every request is validated against the instance's allowlist policy. Protected config keys cannot be overwritten, and denied requests are logged with a reason. See [Self-configure](#self-configure) for details.
+
 ## Features
 
 | | Feature | Details |
 |---|---|---|
 | **Declarative** | Single CRD | One resource defines the entire stack: StatefulSet, Service, RBAC, NetworkPolicy, PVC, PDB, Ingress, and more |
+| **Adaptive** | Agent self-configure | Agents autonomously install skills, patch config, and adapt their environment via the K8s API - every change validated against an allowlist policy |
 | **Secure** | Hardened by default | Non-root (UID 1000), read-only root filesystem, all capabilities dropped, seccomp RuntimeDefault, default-deny NetworkPolicy, validating webhook |
 | **Observable** | Built-in metrics | Prometheus metrics, ServiceMonitor integration, structured JSON logging, Kubernetes events |
 | **Flexible** | Provider-agnostic config | Use any AI provider (Anthropic, OpenAI, or others) via environment variables and inline or external config |
@@ -54,7 +81,6 @@ The operator reconciles this into a fully managed stack of 9+ Kubernetes resourc
 | **Workspace Seeding** | Initial files & dirs | Pre-populate the workspace with files and directories before the agent starts |
 | **Gateway Auth** | Auto-generated tokens | Automatic gateway token Secret per instance, bypassing mDNS pairing (unusable in k8s) |
 | **Tailscale** | Tailnet access | Expose via Tailscale Serve or Funnel with SSO auth - no Ingress needed |
-| **Self-Configure** | Agent self-modification | Agents can modify their own skills, config, env vars, and workspace files via the K8s API - controlled by an allowlist of permitted actions |
 | **Extensible** | Sidecars & init containers | Chromium for browser automation, Ollama for local LLMs, Tailscale for tailnet access, plus custom init containers and sidecars |
 | **Cloud Native** | SA annotations & CA bundles | AWS IRSA / GCP Workload Identity via ServiceAccount annotations; CA bundle injection for corporate proxies |
 
