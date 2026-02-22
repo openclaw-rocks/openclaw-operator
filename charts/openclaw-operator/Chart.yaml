@@ -28,7 +28,7 @@ annotations:
   artifacthub.io/category: ai-machine-learning
   artifacthub.io/license: Apache-2.0
   artifacthub.io/operator: 'true'
-  artifacthub.io/operatorCapabilities: Full Lifecycle
+  artifacthub.io/operatorCapabilities: Auto Pilot
   artifacthub.io/prerelease: 'false'
   artifacthub.io/links: |
     - name: Website

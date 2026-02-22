@@ -598,6 +598,11 @@ High availability and scheduling configuration.
 | `nodeSelector`                    | `map[string]string` | --      | Node labels for pod scheduling.                          |
 | `tolerations`                     | `[]Toleration`      | --      | Tolerations for pod scheduling.                          |
 | `affinity`                        | `*Affinity`         | --      | Affinity and anti-affinity rules.                        |
+| `autoScaling.enabled`             | `*bool`             | `false` | Create a HorizontalPodAutoscaler.                        |
+| `autoScaling.minReplicas`         | `*int32`            | `1`     | Minimum number of replicas.                              |
+| `autoScaling.maxReplicas`         | `*int32`            | `5`     | Maximum number of replicas.                              |
+| `autoScaling.targetCPUUtilization` | `*int32`           | `80`    | Target average CPU utilization (percentage).             |
+| `autoScaling.targetMemoryUtilization` | `*int32`        | --      | Target average memory utilization (percentage).          |
 
 ### spec.restoreFrom
 
@@ -729,6 +734,7 @@ Standard `metav1.Condition` array. Condition types:
 | `prometheusRule`     | `string` | Name of the managed PrometheusRule. |
 | `grafanaDashboardOperator` | `string` | Name of the operator overview dashboard ConfigMap. |
 | `grafanaDashboardInstance` | `string` | Name of the instance detail dashboard ConfigMap. |
+| `horizontalPodAutoscaler` | `string` | Name of the managed HorizontalPodAutoscaler. |
 
 ### status.backup and restore
 

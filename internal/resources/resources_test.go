@@ -6845,3 +6845,134 @@ func TestPrometheusRuleGVK(t *testing.T) {
 		t.Errorf("kind = %q, want %q", gvk.Kind, "PrometheusRule")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// HPA tests
+// ---------------------------------------------------------------------------
+
+func TestHPAName(t *testing.T) {
+	instance := newTestInstance("my-app")
+	if got := HPAName(instance); got != "my-app" {
+		t.Errorf("HPAName() = %q, want %q", got, "my-app")
+	}
+}
+
+func TestIsHPAEnabled(t *testing.T) {
+	tests := []struct {
+		name     string
+		as       *openclawv1alpha1.AutoScalingSpec
+		expected bool
+	}{
+		{"nil spec", nil, false},
+		{"nil enabled", &openclawv1alpha1.AutoScalingSpec{}, false},
+		{"enabled false", &openclawv1alpha1.AutoScalingSpec{Enabled: Ptr(false)}, false},
+		{"enabled true", &openclawv1alpha1.AutoScalingSpec{Enabled: Ptr(true)}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			instance := newTestInstance("test")
+			instance.Spec.Availability.AutoScaling = tt.as
+			if got := IsHPAEnabled(instance); got != tt.expected {
+				t.Errorf("IsHPAEnabled() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestBuildHPA_Defaults(t *testing.T) {
+	instance := newTestInstance("my-app")
+	instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+		Enabled: Ptr(true),
+	}
+
+	hpa := BuildHPA(instance)
+
+	if hpa.Name != "my-app" {
+		t.Errorf("name = %q, want %q", hpa.Name, "my-app")
+	}
+	if hpa.Namespace != "test-ns" {
+		t.Errorf("namespace = %q, want %q", hpa.Namespace, "test-ns")
+	}
+	if hpa.Spec.ScaleTargetRef.Kind != "StatefulSet" {
+		t.Errorf("target kind = %q, want StatefulSet", hpa.Spec.ScaleTargetRef.Kind)
+	}
+	if hpa.Spec.ScaleTargetRef.Name != StatefulSetName(instance) {
+		t.Errorf("target name = %q, want %q", hpa.Spec.ScaleTargetRef.Name, StatefulSetName(instance))
+	}
+	if *hpa.Spec.MinReplicas != 1 {
+		t.Errorf("minReplicas = %d, want 1", *hpa.Spec.MinReplicas)
+	}
+	if hpa.Spec.MaxReplicas != 5 {
+		t.Errorf("maxReplicas = %d, want 5", hpa.Spec.MaxReplicas)
+	}
+	if len(hpa.Spec.Metrics) != 1 {
+		t.Fatalf("metrics count = %d, want 1", len(hpa.Spec.Metrics))
+	}
+	if *hpa.Spec.Metrics[0].Resource.Target.AverageUtilization != 80 {
+		t.Errorf("cpu target = %d, want 80", *hpa.Spec.Metrics[0].Resource.Target.AverageUtilization)
+	}
+}
+
+func TestBuildHPA_CustomValues(t *testing.T) {
+	instance := newTestInstance("my-app")
+	instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+		Enabled:              Ptr(true),
+		MinReplicas:          Ptr(int32(2)),
+		MaxReplicas:          Ptr(int32(10)),
+		TargetCPUUtilization: Ptr(int32(60)),
+	}
+
+	hpa := BuildHPA(instance)
+
+	if *hpa.Spec.MinReplicas != 2 {
+		t.Errorf("minReplicas = %d, want 2", *hpa.Spec.MinReplicas)
+	}
+	if hpa.Spec.MaxReplicas != 10 {
+		t.Errorf("maxReplicas = %d, want 10", hpa.Spec.MaxReplicas)
+	}
+	if *hpa.Spec.Metrics[0].Resource.Target.AverageUtilization != 60 {
+		t.Errorf("cpu target = %d, want 60", *hpa.Spec.Metrics[0].Resource.Target.AverageUtilization)
+	}
+}
+
+func TestBuildHPA_WithMemoryMetric(t *testing.T) {
+	instance := newTestInstance("my-app")
+	instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+		Enabled:                 Ptr(true),
+		TargetMemoryUtilization: Ptr(int32(70)),
+	}
+
+	hpa := BuildHPA(instance)
+
+	if len(hpa.Spec.Metrics) != 2 {
+		t.Fatalf("metrics count = %d, want 2", len(hpa.Spec.Metrics))
+	}
+	memMetric := hpa.Spec.Metrics[1]
+	if string(memMetric.Resource.Name) != "memory" {
+		t.Errorf("second metric resource = %q, want memory", memMetric.Resource.Name)
+	}
+	if *memMetric.Resource.Target.AverageUtilization != 70 {
+		t.Errorf("memory target = %d, want 70", *memMetric.Resource.Target.AverageUtilization)
+	}
+}
+
+func TestStatefulSetReplicas_HPAEnabled(t *testing.T) {
+	instance := newTestInstance("my-app")
+	instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+		Enabled: Ptr(true),
+	}
+
+	sts := BuildStatefulSet(instance)
+	if sts.Spec.Replicas != nil {
+		t.Errorf("replicas should be nil when HPA is enabled, got %d", *sts.Spec.Replicas)
+	}
+}
+
+func TestStatefulSetReplicas_HPADisabled(t *testing.T) {
+	instance := newTestInstance("my-app")
+
+	sts := BuildStatefulSet(instance)
+	if sts.Spec.Replicas == nil || *sts.Spec.Replicas != 1 {
+		t.Errorf("replicas should be 1 when HPA is disabled")
+	}
+}

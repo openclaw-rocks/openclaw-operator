@@ -27,6 +27,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -1393,6 +1394,59 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			Expect(configVol.ConfigMap.Name).To(Equal(resources.ConfigMapName(instance)),
 				"config volume should reference operator-managed CM, not external CM")
 
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+	})
+
+	Context("When creating an instance with auto-scaling enabled", func() {
+		const hpaTestName = "e2e-hpa-test"
+		const hpaTestNs = "default"
+
+		It("Should create an HPA targeting the StatefulSet", func() {
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      hpaTestName,
+					Namespace: hpaTestNs,
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Availability: openclawv1alpha1.AvailabilitySpec{
+						AutoScaling: &openclawv1alpha1.AutoScalingSpec{
+							Enabled:              resources.Ptr(true),
+							MinReplicas:          resources.Ptr(int32(1)),
+							MaxReplicas:          resources.Ptr(int32(3)),
+							TargetCPUUtilization: resources.Ptr(int32(70)),
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			// Wait for HPA to be created
+			hpa := &autoscalingv2.HorizontalPodAutoscaler{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.HPAName(instance),
+					Namespace: hpaTestNs,
+				}, hpa)
+			}, 60*time.Second, 2*time.Second).Should(Succeed())
+
+			Expect(hpa.Spec.ScaleTargetRef.Kind).To(Equal("StatefulSet"))
+			Expect(hpa.Spec.ScaleTargetRef.Name).To(Equal(resources.StatefulSetName(instance)))
+			Expect(*hpa.Spec.MinReplicas).To(Equal(int32(1)))
+			Expect(hpa.Spec.MaxReplicas).To(Equal(int32(3)))
+			Expect(hpa.Spec.Metrics).To(HaveLen(1))
+			Expect(*hpa.Spec.Metrics[0].Resource.Target.AverageUtilization).To(Equal(int32(70)))
+
+			// Verify StatefulSet has nil replicas (HPA manages it)
+			sts := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.StatefulSetName(instance),
+					Namespace: hpaTestNs,
+				}, sts)
+			}, 60*time.Second, 2*time.Second).Should(Succeed())
+
+			// Cleanup
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})
 	})

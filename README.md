@@ -76,6 +76,7 @@ Every request is validated against the instance's allowlist policy. Protected co
 | **Skills** | Declarative install | Install ClawHub skills or npm packages via `spec.skills` - supports `npm:` prefix for npmjs.com packages |
 | **Runtime Deps** | pnpm & Python/uv | Built-in init containers install pnpm (via corepack) or Python 3.12 + uv for MCP servers and skills |
 | **Auto-Update** | OCI registry polling | Opt-in version tracking: checks the registry for new semver releases, backs up first, rolls out, and auto-rolls back if the new version fails health checks |
+| **Scalable** | Auto-scaling | HPA integration with CPU and memory metrics, min/max replica bounds, automatic StatefulSet replica management |
 | **Resilient** | Self-healing lifecycle | PodDisruptionBudgets, health probes, automatic config rollouts via content hashing, 5-minute drift detection |
 | **Backup/Restore** | B2-backed snapshots | Automatic backup to Backblaze B2 on instance deletion; restore into a new instance from any snapshot |
 | **Workspace Seeding** | Initial files & dirs | Pre-populate the workspace with files and directories before the agent starts |
@@ -620,6 +621,23 @@ spec:
 Dashboards:
 - **OpenClaw Operator** - fleet overview with reconciliation metrics, instance table, workqueue, and auto-update panels
 - **OpenClaw Instance** - per-instance detail with CPU, memory, storage, network, and pod health panels
+
+### Auto-Scaling (HPA)
+
+Enable horizontal pod auto-scaling to automatically adjust the number of replicas based on CPU and memory utilization:
+
+```yaml
+spec:
+  availability:
+    autoScaling:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 10
+      targetCPUUtilization: 80
+      targetMemoryUtilization: 70  # optional
+```
+
+When enabled, the operator creates a `HorizontalPodAutoscaler` targeting the StatefulSet and sets the StatefulSet's replica count to nil so the HPA manages scaling. The HPA is deleted when auto-scaling is disabled.
 
 Phases: `Pending` -> `Restoring` -> `Provisioning` -> `Running` | `Updating` | `BackingUp` | `Degraded` | `Failed` | `Terminating`
 

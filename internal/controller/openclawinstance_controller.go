@@ -27,6 +27,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -97,6 +98,7 @@ type OpenClawInstanceReconciler struct {
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=list
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=prometheusrules,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop
@@ -318,6 +320,12 @@ func (r *OpenClawInstanceReconciler) reconcileResources(ctx context.Context, ins
 		return fmt.Errorf("failed to reconcile PodDisruptionBudget: %w", err)
 	}
 	logger.V(1).Info("PodDisruptionBudget reconciled")
+
+	// 5b. Reconcile HorizontalPodAutoscaler
+	if err := r.reconcileHPA(ctx, instance); err != nil {
+		return fmt.Errorf("failed to reconcile HPA: %w", err)
+	}
+	logger.V(1).Info("HPA reconciled")
 
 	// 6. Migrate Deployment → StatefulSet (if legacy Deployment exists), then reconcile StatefulSet
 	if err := r.migrateDeploymentToStatefulSet(ctx, instance); err != nil {
@@ -735,6 +743,39 @@ func (r *OpenClawInstanceReconciler) reconcilePDB(ctx context.Context, instance 
 	return nil
 }
 
+// reconcileHPA reconciles the HorizontalPodAutoscaler
+func (r *OpenClawInstanceReconciler) reconcileHPA(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) error {
+	if !resources.IsHPAEnabled(instance) {
+		// Delete existing HPA if it exists
+		hpa := &autoscalingv2.HorizontalPodAutoscaler{}
+		hpa.Name = resources.HPAName(instance)
+		hpa.Namespace = instance.Namespace
+		if err := r.Delete(ctx, hpa); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+		instance.Status.ManagedResources.HorizontalPodAutoscaler = ""
+		return nil
+	}
+
+	hpa := &autoscalingv2.HorizontalPodAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      resources.HPAName(instance),
+			Namespace: instance.Namespace,
+		},
+	}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, hpa, func() error {
+		desired := resources.BuildHPA(instance)
+		hpa.Labels = desired.Labels
+		hpa.Spec = desired.Spec
+		return controllerutil.SetControllerReference(instance, hpa, r.Scheme)
+	}); err != nil {
+		return err
+	}
+	instance.Status.ManagedResources.HorizontalPodAutoscaler = hpa.Name
+
+	return nil
+}
+
 // migrateDeploymentToStatefulSet detects and deletes a legacy Deployment so
 // the reconciler can create the replacement StatefulSet. This is a one-time
 // migration step — once the Deployment is gone, this function is a no-op.
@@ -833,7 +874,12 @@ func (r *OpenClawInstanceReconciler) reconcileStatefulSet(ctx context.Context, i
 		}
 		desired := resources.BuildStatefulSet(instance, gwSecretName)
 		sts.Labels = desired.Labels
+		// Preserve current replica count when HPA manages scaling
+		existingReplicas := sts.Spec.Replicas
 		sts.Spec = desired.Spec
+		if resources.IsHPAEnabled(instance) && existingReplicas != nil {
+			sts.Spec.Replicas = existingReplicas
+		}
 		// Inject secret hash annotation to trigger rollout on secret rotation
 		if secretHash != "" {
 			if sts.Spec.Template.Annotations == nil {
@@ -1230,6 +1276,7 @@ func (r *OpenClawInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&networkingv1.NetworkPolicy{}).
 		Owns(&networkingv1.Ingress{}).
 		Owns(&policyv1.PodDisruptionBudget{}).
+		Owns(&autoscalingv2.HorizontalPodAutoscaler{}).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.findInstancesForSecret)).
 		Complete(r)
 }

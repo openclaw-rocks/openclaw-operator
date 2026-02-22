@@ -56,7 +56,7 @@ func BuildStatefulSet(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenS
 			Labels:    labels,
 		},
 		Spec: appsv1.StatefulSetSpec{
-			Replicas:             Ptr(int32(1)), // OpenClaw is single-instance
+			Replicas:             statefulSetReplicas(instance),
 			RevisionHistoryLimit: Ptr(int32(10)),
 			ServiceName:          ServiceName(instance),
 			PodManagementPolicy:  appsv1.ParallelPodManagement,
@@ -1482,4 +1482,14 @@ func calculateConfigHash(instance *openclawv1alpha1.OpenClawInstance) string {
 		h.Write(tsData)
 	}
 	return hex.EncodeToString(h.Sum(nil)[:8])
+}
+
+// statefulSetReplicas returns the replica count for the StatefulSet.
+// When HPA is enabled, replicas is set to nil so the HPA manages scaling.
+// Otherwise defaults to 1 (single-instance).
+func statefulSetReplicas(instance *openclawv1alpha1.OpenClawInstance) *int32 {
+	if IsHPAEnabled(instance) {
+		return nil
+	}
+	return Ptr(int32(1))
 }

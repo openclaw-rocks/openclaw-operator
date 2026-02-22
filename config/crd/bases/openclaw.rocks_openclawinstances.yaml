@@ -1015,6 +1015,44 @@ spec:
                             x-kubernetes-list-type: atomic
                         type: object
                     type: object
+                  autoScaling:
+                    description: AutoScaling configures horizontal pod auto-scaling
+                    properties:
+                      enabled:
+                        default: false
+                        description: Enabled enables HorizontalPodAutoscaler creation
+                        type: boolean
+                      maxReplicas:
+                        default: 5
+                        description: MaxReplicas is the upper limit for the number
+                          of replicas
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      minReplicas:
+                        default: 1
+                        description: MinReplicas is the lower limit for the number
+                          of replicas
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      targetCPUUtilization:
+                        default: 80
+                        description: TargetCPUUtilization is the target average CPU
+                          utilization (percentage)
+                        format: int32
+                        maximum: 100
+                        minimum: 1
+                        type: integer
+                      targetMemoryUtilization:
+                        description: |-
+                          TargetMemoryUtilization is the target average memory utilization (percentage).
+                          When not set, only CPU-based scaling is used.
+                        format: int32
+                        maximum: 100
+                        minimum: 1
+                        type: integer
+                    type: object
                   nodeSelector:
                     additionalProperties:
                       type: string
@@ -8978,6 +9016,10 @@ spec:
                   grafanaDashboardOperator:
                     description: GrafanaDashboardOperator is the name of the operator
                       overview dashboard ConfigMap
+                    type: string
+                  horizontalPodAutoscaler:
+                    description: HorizontalPodAutoscaler is the name of the managed
+                      HPA
                     type: string
                   networkPolicy:
                     description: NetworkPolicy is the name of the managed NetworkPolicy

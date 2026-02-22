@@ -862,6 +862,10 @@ type AvailabilitySpec struct {
 	// +optional
 	PodDisruptionBudget *PodDisruptionBudgetSpec `json:"podDisruptionBudget,omitempty"`
 
+	// AutoScaling configures horizontal pod auto-scaling
+	// +optional
+	AutoScaling *AutoScalingSpec `json:"autoScaling,omitempty"`
+
 	// NodeSelector is a selector which must match a node's labels for the pod to be scheduled
 	// +optional
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
@@ -873,6 +877,40 @@ type AvailabilitySpec struct {
 	// Affinity specifies affinity scheduling rules
 	// +optional
 	Affinity *corev1.Affinity `json:"affinity,omitempty"`
+}
+
+// AutoScalingSpec configures horizontal pod auto-scaling via HPA
+type AutoScalingSpec struct {
+	// Enabled enables HorizontalPodAutoscaler creation
+	// +kubebuilder:default=false
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// MinReplicas is the lower limit for the number of replicas
+	// +kubebuilder:default=1
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	MinReplicas *int32 `json:"minReplicas,omitempty"`
+
+	// MaxReplicas is the upper limit for the number of replicas
+	// +kubebuilder:default=5
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	MaxReplicas *int32 `json:"maxReplicas,omitempty"`
+
+	// TargetCPUUtilization is the target average CPU utilization (percentage)
+	// +kubebuilder:default=80
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
+	// +optional
+	TargetCPUUtilization *int32 `json:"targetCPUUtilization,omitempty"`
+
+	// TargetMemoryUtilization is the target average memory utilization (percentage).
+	// When not set, only CPU-based scaling is used.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
+	// +optional
+	TargetMemoryUtilization *int32 `json:"targetMemoryUtilization,omitempty"`
 }
 
 // PodDisruptionBudgetSpec defines PDB configuration
@@ -1104,6 +1142,10 @@ type ManagedResourcesStatus struct {
 	// GrafanaDashboardInstance is the name of the instance detail dashboard ConfigMap
 	// +optional
 	GrafanaDashboardInstance string `json:"grafanaDashboardInstance,omitempty"`
+
+	// HorizontalPodAutoscaler is the name of the managed HPA
+	// +optional
+	HorizontalPodAutoscaler string `json:"horizontalPodAutoscaler,omitempty"`
 }
 
 // +kubebuilder:object:root=true

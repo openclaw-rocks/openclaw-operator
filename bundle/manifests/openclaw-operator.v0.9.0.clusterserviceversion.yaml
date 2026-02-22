@@ -4,7 +4,7 @@ metadata:
   name: openclaw-operator.v0.9.0
   namespace: placeholder
   annotations:
-    capabilities: "Deep Insights"
+    capabilities: "Auto Pilot"
     categories: "AI/Machine Learning, Developer Tools, Application Runtime"
     containerImage: ghcr.io/openclaw-rocks/openclaw-operator:v0.9.0
     createdAt: "2026-02-11T00:00:00Z"
