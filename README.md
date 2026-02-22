@@ -292,6 +292,34 @@ When enabled, the operator:
 
 See [Custom AI Providers](docs/custom-providers.md) for configuring OpenClaw to use Ollama models via `llmConfig`.
 
+### Web terminal sidecar
+
+Provide browser-based shell access to running instances for debugging and inspection without requiring `kubectl exec`:
+
+```yaml
+spec:
+  webTerminal:
+    enabled: true
+    readOnly: false
+    credential:
+      secretRef:
+        name: my-terminal-creds
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "64Mi"
+      limits:
+        cpu: "200m"
+        memory: "128Mi"
+```
+
+When enabled, the operator:
+- Injects a [ttyd](https://github.com/tsl0922/ttyd) sidecar container on port 7681
+- Mounts the instance data volume at `/home/openclaw/.openclaw` so you can inspect config, logs, and data files
+- Adds the web terminal port to the Service and NetworkPolicy for external access
+- Supports basic auth via a Secret with `username` and `password` keys
+- Supports read-only mode (`readOnly: true`) for production environments where shell input should be disabled
+
 ### Tailscale integration
 
 Expose your instance via [Tailscale](https://tailscale.com) Serve (tailnet-only) or Funnel (public internet) - no Ingress or LoadBalancer needed:
@@ -547,6 +575,7 @@ The operator follows a **secure-by-default** philosophy. Every instance ships wi
 | Ingress without TLS | Deployment proceeds with a warning |
 | Chromium without digest pinning | Deployment proceeds with a warning |
 | Ollama without digest pinning | Deployment proceeds with a warning |
+| Web terminal without digest pinning | Deployment proceeds with a warning |
 | Ollama runs as root | Required by official image; informational |
 | Auto-update with digest pin | Digest overrides auto-update; updates won't apply |
 | `readOnlyRootFilesystem` disabled | Proceeds with a security recommendation |

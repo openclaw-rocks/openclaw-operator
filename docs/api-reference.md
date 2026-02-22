@@ -302,6 +302,45 @@ spec:
     gpu: 1
 ```
 
+### spec.webTerminal
+
+Optional ttyd web terminal sidecar for browser-based shell access and debugging.
+
+| Field                      | Type     | Default         | Description                                                                    |
+|----------------------------|----------|-----------------|--------------------------------------------------------------------------------|
+| `enabled`                  | `bool`   | `false`         | Enable the ttyd web terminal sidecar container.                                |
+| `image.repository`         | `string` | `tsl0922/ttyd`  | Web terminal container image repository.                                       |
+| `image.tag`                | `string` | `latest`        | Web terminal image tag.                                                        |
+| `image.digest`             | `string` | --              | Web terminal image digest for supply chain security.                           |
+| `resources.requests.cpu`   | `string` | `50m`           | Web terminal minimum CPU.                                                      |
+| `resources.requests.memory`| `string` | `64Mi`          | Web terminal minimum memory.                                                   |
+| `resources.limits.cpu`     | `string` | `200m`          | Web terminal maximum CPU.                                                      |
+| `resources.limits.memory`  | `string` | `128Mi`         | Web terminal maximum memory.                                                   |
+| `readOnly`                 | `bool`   | `false`         | Start ttyd in read-only mode (view-only, no input). Data volume mount is also set to read-only. |
+| `credential.secretRef.name`| `string` | --              | Name of a Secret with `username` and `password` keys for basic auth.           |
+
+When enabled, the operator:
+
+- Adds a ttyd sidecar container on port 7681 to the pod.
+- Mounts the instance data volume at `/home/openclaw/.openclaw` for inspection.
+- Adds a `/tmp` emptyDir volume for the web terminal container.
+- Adds the web terminal port to the Service and NetworkPolicy.
+- Runs as UID 1000 (same as the main container) for shared file permissions on the data volume.
+
+```yaml
+spec:
+  webTerminal:
+    enabled: true
+    readOnly: true
+    credential:
+      secretRef:
+        name: terminal-credentials
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+```
+
 ### spec.initContainers
 
 | Field            | Type            | Default | Description                                                              |

@@ -8831,6 +8831,87 @@ spec:
                     - funnel
                     type: string
                 type: object
+              webTerminal:
+                description: WebTerminal enables a browser-based terminal (ttyd) sidecar
+                  for debugging
+                properties:
+                  credential:
+                    description: |-
+                      Credential configures basic auth for the web terminal via a Secret.
+                      The Secret must have "username" and "password" keys.
+                    properties:
+                      secretRef:
+                        description: SecretRef references a Secret containing "username"
+                          and "password" keys
+                        properties:
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                    required:
+                    - secretRef
+                    type: object
+                  enabled:
+                    default: false
+                    description: Enabled enables the ttyd web terminal sidecar for
+                      browser-based shell access
+                    type: boolean
+                  image:
+                    description: Image configures the ttyd container image
+                    properties:
+                      digest:
+                        description: Digest is the container image digest for supply
+                          chain security
+                        type: string
+                      repository:
+                        default: tsl0922/ttyd
+                        description: Repository is the container image repository
+                        type: string
+                      tag:
+                        default: latest
+                        description: Tag is the container image tag
+                        type: string
+                    type: object
+                  readOnly:
+                    default: false
+                    description: ReadOnly starts ttyd in read-only mode (view-only,
+                      no input)
+                    type: boolean
+                  resources:
+                    description: Resources specifies compute resources for the ttyd
+                      container
+                    properties:
+                      limits:
+                        description: Limits describes the maximum amount of compute
+                          resources allowed
+                        properties:
+                          cpu:
+                            description: CPU resource (e.g., "500m", "2")
+                            type: string
+                          memory:
+                            description: Memory resource (e.g., "512Mi", "2Gi")
+                            type: string
+                        type: object
+                      requests:
+                        description: Requests describes the minimum amount of compute
+                          resources required
+                        properties:
+                          cpu:
+                            description: CPU resource (e.g., "500m", "2")
+                            type: string
+                          memory:
+                            description: Memory resource (e.g., "512Mi", "2Gi")
+                            type: string
+                        type: object
+                    type: object
+                type: object
               workspace:
                 description: |-
                   Workspace configures initial workspace files seeded into the instance.

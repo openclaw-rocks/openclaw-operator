@@ -6976,3 +6976,424 @@ func TestStatefulSetReplicas_HPADisabled(t *testing.T) {
 		t.Errorf("replicas should be 1 when HPA is disabled")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Web terminal sidecar tests
+// ---------------------------------------------------------------------------
+
+func TestBuildStatefulSet_WebTerminalEnabled(t *testing.T) {
+	instance := newTestInstance("web-terminal-test")
+	instance.Spec.WebTerminal.Enabled = true
+
+	sts := BuildStatefulSet(instance)
+	containers := sts.Spec.Template.Spec.Containers
+
+	if len(containers) != 2 {
+		t.Fatalf("expected 2 containers (main + web-terminal), got %d", len(containers))
+	}
+
+	var wt *corev1.Container
+	for i := range containers {
+		if containers[i].Name == "web-terminal" {
+			wt = &containers[i]
+			break
+		}
+	}
+	if wt == nil {
+		t.Fatal("web-terminal container not found")
+	}
+
+	// Image defaults
+	if wt.Image != "tsl0922/ttyd:latest" {
+		t.Errorf("web-terminal image = %q, want default", wt.Image)
+	}
+
+	// Port
+	if len(wt.Ports) != 1 {
+		t.Fatalf("web-terminal container should have 1 port, got %d", len(wt.Ports))
+	}
+	if wt.Ports[0].ContainerPort != WebTerminalPort {
+		t.Errorf("web-terminal port = %d, want %d", wt.Ports[0].ContainerPort, WebTerminalPort)
+	}
+	if wt.Ports[0].Name != "web-terminal" {
+		t.Errorf("web-terminal port name = %q, want %q", wt.Ports[0].Name, "web-terminal")
+	}
+
+	// Security context
+	sc := wt.SecurityContext
+	if sc == nil {
+		t.Fatal("web-terminal security context is nil")
+	}
+	if sc.ReadOnlyRootFilesystem == nil || *sc.ReadOnlyRootFilesystem {
+		t.Error("web-terminal: readOnlyRootFilesystem should be false")
+	}
+	if sc.RunAsUser == nil || *sc.RunAsUser != 1000 {
+		t.Errorf("web-terminal: runAsUser = %v, want 1000", sc.RunAsUser)
+	}
+	if sc.RunAsNonRoot == nil || !*sc.RunAsNonRoot {
+		t.Error("web-terminal: runAsNonRoot should be true")
+	}
+	if sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation {
+		t.Error("web-terminal: allowPrivilegeEscalation should be false")
+	}
+
+	// Resource defaults
+	cpuReq := wt.Resources.Requests[corev1.ResourceCPU]
+	if cpuReq.String() != "50m" {
+		t.Errorf("web-terminal cpu request = %v, want 50m", cpuReq.String())
+	}
+	memReq := wt.Resources.Requests[corev1.ResourceMemory]
+	if memReq.Cmp(resource.MustParse("64Mi")) != 0 {
+		t.Errorf("web-terminal memory request = %v, want 64Mi", memReq.String())
+	}
+	cpuLim := wt.Resources.Limits[corev1.ResourceCPU]
+	if cpuLim.String() != "200m" {
+		t.Errorf("web-terminal cpu limit = %v, want 200m", cpuLim.String())
+	}
+	memLim := wt.Resources.Limits[corev1.ResourceMemory]
+	if memLim.Cmp(resource.MustParse("128Mi")) != 0 {
+		t.Errorf("web-terminal memory limit = %v, want 128Mi", memLim.String())
+	}
+
+	// Volume mounts
+	assertVolumeMount(t, wt.VolumeMounts, "data", "/home/openclaw/.openclaw")
+	assertVolumeMount(t, wt.VolumeMounts, "web-terminal-tmp", "/tmp")
+
+	// Data mount should NOT be read-only by default
+	for _, m := range wt.VolumeMounts {
+		if m.Name == "data" && m.ReadOnly {
+			t.Error("data mount should not be read-only by default")
+		}
+	}
+
+	// Volumes - check web-terminal-tmp volume exists
+	volumes := sts.Spec.Template.Spec.Volumes
+	var wtVol *corev1.Volume
+	for i := range volumes {
+		if volumes[i].Name == "web-terminal-tmp" {
+			wtVol = &volumes[i]
+			break
+		}
+	}
+	if wtVol == nil {
+		t.Fatal("web-terminal-tmp volume not found")
+	}
+	if wtVol.EmptyDir == nil {
+		t.Fatal("web-terminal-tmp volume should be emptyDir")
+	}
+
+	// Command
+	if len(wt.Command) != 3 {
+		t.Fatalf("web-terminal command should have 3 elements, got %d", len(wt.Command))
+	}
+	if wt.Command[0] != "sh" || wt.Command[1] != "-c" {
+		t.Errorf("web-terminal command prefix = %v, want [sh -c ...]", wt.Command[:2])
+	}
+	if !strings.Contains(wt.Command[2], "exec ttyd") {
+		t.Errorf("web-terminal command should contain 'exec ttyd', got %q", wt.Command[2])
+	}
+
+	// No credential env vars by default
+	if len(wt.Env) != 0 {
+		t.Errorf("web-terminal should have 0 env vars by default, got %d", len(wt.Env))
+	}
+}
+
+func TestBuildStatefulSet_WebTerminalCustomImage(t *testing.T) {
+	instance := newTestInstance("wt-custom-img")
+	instance.Spec.WebTerminal.Enabled = true
+	instance.Spec.WebTerminal.Image = openclawv1alpha1.WebTerminalImageSpec{
+		Repository: "my-registry.io/ttyd",
+		Tag:        "v1.7.0",
+	}
+
+	sts := BuildStatefulSet(instance)
+
+	var wt corev1.Container
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		if c.Name == "web-terminal" {
+			wt = c
+			break
+		}
+	}
+
+	if wt.Image != "my-registry.io/ttyd:v1.7.0" {
+		t.Errorf("web-terminal image = %q, want my-registry.io/ttyd:v1.7.0", wt.Image)
+	}
+}
+
+func TestBuildStatefulSet_WebTerminalDigest(t *testing.T) {
+	instance := newTestInstance("wt-digest")
+	instance.Spec.WebTerminal.Enabled = true
+	instance.Spec.WebTerminal.Image = openclawv1alpha1.WebTerminalImageSpec{
+		Repository: "tsl0922/ttyd",
+		Digest:     "sha256:abcdef1234567890",
+	}
+
+	sts := BuildStatefulSet(instance)
+
+	var wt corev1.Container
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		if c.Name == "web-terminal" {
+			wt = c
+			break
+		}
+	}
+
+	if wt.Image != "tsl0922/ttyd@sha256:abcdef1234567890" {
+		t.Errorf("web-terminal image = %q, want tsl0922/ttyd@sha256:abcdef1234567890", wt.Image)
+	}
+}
+
+func TestBuildStatefulSet_WebTerminalCustomResources(t *testing.T) {
+	instance := newTestInstance("wt-resources")
+	instance.Spec.WebTerminal.Enabled = true
+	instance.Spec.WebTerminal.Resources = openclawv1alpha1.ResourcesSpec{
+		Requests: openclawv1alpha1.ResourceList{CPU: "100m", Memory: "128Mi"},
+		Limits:   openclawv1alpha1.ResourceList{CPU: "500m", Memory: "256Mi"},
+	}
+
+	sts := BuildStatefulSet(instance)
+
+	var wt corev1.Container
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		if c.Name == "web-terminal" {
+			wt = c
+			break
+		}
+	}
+
+	cpuReq := wt.Resources.Requests[corev1.ResourceCPU]
+	if cpuReq.String() != "100m" {
+		t.Errorf("cpu request = %v, want 100m", cpuReq.String())
+	}
+	memReq := wt.Resources.Requests[corev1.ResourceMemory]
+	if memReq.Cmp(resource.MustParse("128Mi")) != 0 {
+		t.Errorf("memory request = %v, want 128Mi", memReq.String())
+	}
+	cpuLim := wt.Resources.Limits[corev1.ResourceCPU]
+	if cpuLim.String() != "500m" {
+		t.Errorf("cpu limit = %v, want 500m", cpuLim.String())
+	}
+	memLim := wt.Resources.Limits[corev1.ResourceMemory]
+	if memLim.Cmp(resource.MustParse("256Mi")) != 0 {
+		t.Errorf("memory limit = %v, want 256Mi", memLim.String())
+	}
+}
+
+func TestBuildStatefulSet_WebTerminalReadOnly(t *testing.T) {
+	instance := newTestInstance("wt-readonly")
+	instance.Spec.WebTerminal.Enabled = true
+	instance.Spec.WebTerminal.ReadOnly = true
+
+	sts := BuildStatefulSet(instance)
+
+	var wt corev1.Container
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		if c.Name == "web-terminal" {
+			wt = c
+			break
+		}
+	}
+
+	// Command should include -R flag
+	if !strings.Contains(wt.Command[2], "-R") {
+		t.Errorf("web-terminal command should contain '-R' for read-only, got %q", wt.Command[2])
+	}
+
+	// Data mount should be read-only
+	for _, m := range wt.VolumeMounts {
+		if m.Name == "data" && !m.ReadOnly {
+			t.Error("data mount should be read-only when readOnly is true")
+		}
+	}
+}
+
+func TestBuildStatefulSet_WebTerminalCredential(t *testing.T) {
+	instance := newTestInstance("wt-cred")
+	instance.Spec.WebTerminal.Enabled = true
+	instance.Spec.WebTerminal.Credential = &openclawv1alpha1.WebTerminalCredentialSpec{
+		SecretRef: corev1.LocalObjectReference{Name: "wt-secret"},
+	}
+
+	sts := BuildStatefulSet(instance)
+
+	var wt corev1.Container
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		if c.Name == "web-terminal" {
+			wt = c
+			break
+		}
+	}
+
+	// Command should include -c flag with credential env vars
+	if !strings.Contains(wt.Command[2], `-c "${TTYD_USERNAME}:${TTYD_PASSWORD}"`) {
+		t.Errorf("web-terminal command should contain credential flag, got %q", wt.Command[2])
+	}
+
+	// Should have TTYD_USERNAME and TTYD_PASSWORD env vars
+	if len(wt.Env) != 2 {
+		t.Fatalf("expected 2 env vars, got %d", len(wt.Env))
+	}
+
+	var foundUsername, foundPassword bool
+	for _, env := range wt.Env {
+		if env.Name == "TTYD_USERNAME" {
+			foundUsername = true
+			if env.ValueFrom == nil || env.ValueFrom.SecretKeyRef == nil {
+				t.Error("TTYD_USERNAME should use secretKeyRef")
+			} else {
+				if env.ValueFrom.SecretKeyRef.Name != "wt-secret" {
+					t.Errorf("TTYD_USERNAME secret name = %q, want wt-secret", env.ValueFrom.SecretKeyRef.Name)
+				}
+				if env.ValueFrom.SecretKeyRef.Key != "username" {
+					t.Errorf("TTYD_USERNAME secret key = %q, want username", env.ValueFrom.SecretKeyRef.Key)
+				}
+			}
+		}
+		if env.Name == "TTYD_PASSWORD" {
+			foundPassword = true
+			if env.ValueFrom == nil || env.ValueFrom.SecretKeyRef == nil {
+				t.Error("TTYD_PASSWORD should use secretKeyRef")
+			} else {
+				if env.ValueFrom.SecretKeyRef.Name != "wt-secret" {
+					t.Errorf("TTYD_PASSWORD secret name = %q, want wt-secret", env.ValueFrom.SecretKeyRef.Name)
+				}
+				if env.ValueFrom.SecretKeyRef.Key != "password" {
+					t.Errorf("TTYD_PASSWORD secret key = %q, want password", env.ValueFrom.SecretKeyRef.Key)
+				}
+			}
+		}
+	}
+	if !foundUsername {
+		t.Error("TTYD_USERNAME env var not found")
+	}
+	if !foundPassword {
+		t.Error("TTYD_PASSWORD env var not found")
+	}
+}
+
+func TestBuildStatefulSet_WebTerminalDisabled(t *testing.T) {
+	instance := newTestInstance("no-web-terminal")
+
+	sts := BuildStatefulSet(instance)
+
+	// No web-terminal container
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		if c.Name == "web-terminal" {
+			t.Error("web-terminal container should not be present when disabled")
+		}
+	}
+
+	// No web-terminal-tmp volume
+	for _, v := range sts.Spec.Template.Spec.Volumes {
+		if v.Name == "web-terminal-tmp" {
+			t.Error("web-terminal-tmp volume should not be present when disabled")
+		}
+	}
+}
+
+func TestBuildStatefulSet_WebTerminalContainerDefaults(t *testing.T) {
+	instance := newTestInstance("wt-defaults")
+	instance.Spec.WebTerminal.Enabled = true
+
+	sts := BuildStatefulSet(instance)
+
+	var wt corev1.Container
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		if c.Name == "web-terminal" {
+			wt = c
+			break
+		}
+	}
+
+	// Verify Kubernetes default fields are set
+	if wt.TerminationMessagePath != corev1.TerminationMessagePathDefault {
+		t.Errorf("TerminationMessagePath = %q, want default", wt.TerminationMessagePath)
+	}
+	if wt.TerminationMessagePolicy != corev1.TerminationMessageReadFile {
+		t.Errorf("TerminationMessagePolicy = %v, want ReadFile", wt.TerminationMessagePolicy)
+	}
+	if wt.ImagePullPolicy != corev1.PullIfNotPresent {
+		t.Errorf("ImagePullPolicy = %v, want IfNotPresent", wt.ImagePullPolicy)
+	}
+
+	// Seccomp profile
+	if wt.SecurityContext.SeccompProfile == nil {
+		t.Fatal("seccomp profile should be set")
+	}
+	if wt.SecurityContext.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Errorf("seccomp type = %v, want RuntimeDefault", wt.SecurityContext.SeccompProfile.Type)
+	}
+}
+
+func TestBuildService_WithWebTerminal(t *testing.T) {
+	instance := newTestInstance("svc-web-terminal")
+	instance.Spec.WebTerminal.Enabled = true
+
+	svc := BuildService(instance)
+
+	if len(svc.Spec.Ports) != 3 {
+		t.Fatalf("expected 3 ports with web terminal, got %d", len(svc.Spec.Ports))
+	}
+
+	assertServicePort(t, svc.Spec.Ports, "gateway", int32(GatewayPort))
+	assertServicePort(t, svc.Spec.Ports, "canvas", int32(CanvasPort))
+	assertServicePort(t, svc.Spec.Ports, "web-terminal", int32(WebTerminalPort))
+}
+
+func TestBuildNetworkPolicy_WebTerminalIngressPort(t *testing.T) {
+	instance := newTestInstance("np-web-terminal")
+	instance.Spec.WebTerminal.Enabled = true
+
+	np := BuildNetworkPolicy(instance)
+
+	// Default ingress rule should have 3 ports (gateway, canvas, web-terminal)
+	if len(np.Spec.Ingress) == 0 {
+		t.Fatal("expected at least one ingress rule")
+	}
+
+	ports := np.Spec.Ingress[0].Ports
+	if len(ports) != 3 {
+		t.Fatalf("expected 3 ingress ports with web terminal, got %d", len(ports))
+	}
+
+	// Verify web-terminal port is present
+	found := false
+	for _, p := range ports {
+		if p.Port != nil && p.Port.IntValue() == WebTerminalPort {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("web-terminal port not found in NetworkPolicy ingress ports")
+	}
+}
+
+func TestBuildStatefulSet_WebTerminalReadOnlyWithCredential(t *testing.T) {
+	instance := newTestInstance("wt-readonly-cred")
+	instance.Spec.WebTerminal.Enabled = true
+	instance.Spec.WebTerminal.ReadOnly = true
+	instance.Spec.WebTerminal.Credential = &openclawv1alpha1.WebTerminalCredentialSpec{
+		SecretRef: corev1.LocalObjectReference{Name: "cred-secret"},
+	}
+
+	sts := BuildStatefulSet(instance)
+
+	var wt corev1.Container
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		if c.Name == "web-terminal" {
+			wt = c
+			break
+		}
+	}
+
+	// Command should include both -R and -c flags
+	if !strings.Contains(wt.Command[2], "-R") {
+		t.Errorf("command should contain '-R', got %q", wt.Command[2])
+	}
+	if !strings.Contains(wt.Command[2], `-c "${TTYD_USERNAME}:${TTYD_PASSWORD}"`) {
+		t.Errorf("command should contain credential flag, got %q", wt.Command[2])
+	}
+}

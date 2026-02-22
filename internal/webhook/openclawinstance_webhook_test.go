@@ -1370,3 +1370,51 @@ func TestValidateCreate_JSON5_SkipsConfigSchemaValidation(t *testing.T) {
 		t.Fatalf("should not warn about config keys when format is json5, got: %v", warnings)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Web terminal validation tests
+// ---------------------------------------------------------------------------
+
+func TestValidateCreate_WarnsWebTerminalWithoutDigest(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.WebTerminal.Enabled = true
+	instance.Spec.WebTerminal.Image.Digest = "" // no digest
+
+	warnings, err := v.ValidateCreate(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if !containsWarning(warnings, "Web terminal") || !containsWarning(warnings, "digest") {
+		t.Fatalf("expected warning about web terminal digest pinning, got: %v", warnings)
+	}
+}
+
+func TestValidateCreate_NoWarnWebTerminalWithDigest(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.WebTerminal.Enabled = true
+	instance.Spec.WebTerminal.Image.Digest = "sha256:abc123"
+
+	warnings, err := v.ValidateCreate(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if containsWarning(warnings, "Web terminal") {
+		t.Fatalf("expected no web terminal warning when digest is set, got: %v", warnings)
+	}
+}
+
+func TestValidateCreate_NoWarnWebTerminalDisabled(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	// WebTerminal.Enabled defaults to false.
+
+	warnings, err := v.ValidateCreate(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if containsWarning(warnings, "Web terminal") {
+		t.Fatalf("expected no web terminal warning when disabled, got: %v", warnings)
+	}
+}

@@ -64,6 +64,10 @@ type OpenClawInstanceSpec struct {
 	// +optional
 	Ollama OllamaSpec `json:"ollama,omitempty"`
 
+	// WebTerminal enables a browser-based terminal (ttyd) sidecar for debugging
+	// +optional
+	WebTerminal WebTerminalSpec `json:"webTerminal,omitempty"`
+
 	// InitContainers is a list of additional init containers to run before the main container.
 	// They run after the operator-managed init-config and init-skills containers.
 	// +kubebuilder:validation:MaxItems=10
@@ -560,6 +564,55 @@ type OllamaStorageSpec struct {
 	// ExistingClaim is the name of an existing PVC for persistent model storage
 	// +optional
 	ExistingClaim string `json:"existingClaim,omitempty"`
+}
+
+// WebTerminalSpec defines the ttyd web terminal sidecar configuration
+type WebTerminalSpec struct {
+	// Enabled enables the ttyd web terminal sidecar for browser-based shell access
+	// +kubebuilder:default=false
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
+
+	// Image configures the ttyd container image
+	// +optional
+	Image WebTerminalImageSpec `json:"image,omitempty"`
+
+	// Resources specifies compute resources for the ttyd container
+	// +optional
+	Resources ResourcesSpec `json:"resources,omitempty"`
+
+	// ReadOnly starts ttyd in read-only mode (view-only, no input)
+	// +kubebuilder:default=false
+	// +optional
+	ReadOnly bool `json:"readOnly,omitempty"`
+
+	// Credential configures basic auth for the web terminal via a Secret.
+	// The Secret must have "username" and "password" keys.
+	// +optional
+	Credential *WebTerminalCredentialSpec `json:"credential,omitempty"`
+}
+
+// WebTerminalImageSpec defines the ttyd container image
+type WebTerminalImageSpec struct {
+	// Repository is the container image repository
+	// +kubebuilder:default="tsl0922/ttyd"
+	// +optional
+	Repository string `json:"repository,omitempty"`
+
+	// Tag is the container image tag
+	// +kubebuilder:default="latest"
+	// +optional
+	Tag string `json:"tag,omitempty"`
+
+	// Digest is the container image digest for supply chain security
+	// +optional
+	Digest string `json:"digest,omitempty"`
+}
+
+// WebTerminalCredentialSpec configures basic auth for the web terminal
+type WebTerminalCredentialSpec struct {
+	// SecretRef references a Secret containing "username" and "password" keys
+	SecretRef corev1.LocalObjectReference `json:"secretRef"`
 }
 
 // NetworkingSpec defines network-related configuration

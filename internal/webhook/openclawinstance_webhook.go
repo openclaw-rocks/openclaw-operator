@@ -157,6 +157,13 @@ func (v *OpenClawInstanceValidator) validate(instance *openclawv1alpha1.OpenClaw
 		warnings = append(warnings, "Ollama sidecar runs as root (UID 0) - required by the official Ollama image")
 	}
 
+	// 5c. Warn if WebTerminal is enabled without digest pinning
+	if instance.Spec.WebTerminal.Enabled {
+		if instance.Spec.WebTerminal.Image.Digest == "" {
+			warnings = append(warnings, "Web terminal sidecar is enabled without image digest pinning - consider pinning to a specific digest for supply chain security")
+		}
+	}
+
 	// 6. Warn if no AI provider API keys detected
 	warnings = append(warnings, validateProviderKeys(instance)...)
 
