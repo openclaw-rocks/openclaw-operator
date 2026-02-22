@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.22](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.21...v0.9.22) (2026-02-22)
+
+
+### Features
+
+* add OpenClawSelfConfig CRD for agent self-modification ([#146](https://github.com/openclaw-rocks/k8s-operator/issues/146)) ([2351737](https://github.com/openclaw-rocks/k8s-operator/commit/235173750618afd32e64c571604c3bf753add2ef))
+
 ## [0.9.21](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.20...v0.9.21) (2026-02-21)
 
 
