@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.23](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.22...v0.9.23) (2026-02-22)
+
+
+### Features
+
+* add HPA auto-scaling and Auto Pilot capability level ([#155](https://github.com/openclaw-rocks/k8s-operator/issues/155)) ([024e51a](https://github.com/openclaw-rocks/k8s-operator/commit/024e51aac294851ae0c9102d89c3ab38e9768d59))
+
 ## [0.9.22](https://github.com/openclaw-rocks/k8s-operator/compare/v0.9.21...v0.9.22) (2026-02-22)
 
 
