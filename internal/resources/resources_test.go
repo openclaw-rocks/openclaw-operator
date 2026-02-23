@@ -876,6 +876,11 @@ func TestBuildStatefulSet_PostStart_MergeMode(t *testing.T) {
 	if !strings.Contains(cmd[2], "/operator-config/openclaw.json") {
 		t.Errorf("merge mode postStart should reference operator-config path, got %q", cmd[2])
 	}
+	// Regression #162: node -e argument must be single-quoted so that
+	// !Array.isArray is not interpreted as bash history expansion.
+	if !strings.Contains(cmd[2], "node -e '") {
+		t.Errorf("merge mode postStart must single-quote the node -e argument to avoid bash history expansion (#162), got %q", cmd[2])
+	}
 }
 
 func TestBuildStatefulSet_PostStart_JSON5Mode_NoHook(t *testing.T) {
@@ -3631,6 +3636,11 @@ func TestBuildInitScript_MergeMode(t *testing.T) {
 	}
 	if !strings.Contains(script, "copyFileSync") {
 		t.Errorf("merge mode should use copyFileSync to move merged config to /data, got: %q", script)
+	}
+	// Regression #162: node -e argument must be single-quoted so that
+	// !Array.isArray is not interpreted as bash history expansion.
+	if !strings.Contains(script, "node -e '") {
+		t.Errorf("merge mode init script must single-quote the node -e argument to avoid bash history expansion (#162), got %q", script)
 	}
 }
 

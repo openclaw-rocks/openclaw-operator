@@ -500,15 +500,15 @@ func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance) string {
 			// cannot be used because it has no shell (#105).
 			// The config path is passed via env var to avoid shell/JS quoting issues.
 			lines = append(lines, fmt.Sprintf(
-				`__cfgpath=/config/%s node -e "`+
-					`const fs=require('fs');`+
-					`function dm(a,b){const r={...a};for(const k in b){r[k]=b[k]&&typeof b[k]==='object'&&!Array.isArray(b[k])&&r[k]&&typeof r[k]==='object'&&!Array.isArray(r[k])?dm(r[k],b[k]):b[k]}return r}`+
-					`const e='/data/openclaw.json',c=process.env.__cfgpath,t='/tmp/merged.json';`+
-					`const base=fs.existsSync(e)?JSON.parse(fs.readFileSync(e,'utf8')):{};`+
-					`const inc=JSON.parse(fs.readFileSync(c,'utf8'));`+
+				`__cfgpath=/config/%s node -e '`+
+					`const fs=require("fs");`+
+					`function dm(a,b){const r={...a};for(const k in b){r[k]=b[k]&&typeof b[k]==="object"&&!Array.isArray(b[k])&&r[k]&&typeof r[k]==="object"&&!Array.isArray(r[k])?dm(r[k],b[k]):b[k]}return r}`+
+					`const e="/data/openclaw.json",c=process.env.__cfgpath,t="/tmp/merged.json";`+
+					`const base=fs.existsSync(e)?JSON.parse(fs.readFileSync(e,"utf8")):{};`+
+					`const inc=JSON.parse(fs.readFileSync(c,"utf8"));`+
 					`fs.writeFileSync(t,JSON.stringify(dm(base,inc),null,2));`+
 					`fs.copyFileSync(t,e);`+
-					`"`,
+					`'`,
 				shellQuote(key)))
 		case instance.Spec.Config.Format == ConfigFormatJSON5:
 			// JSON5 overwrite — convert to standard JSON via npx json5
@@ -1427,15 +1427,15 @@ func buildConfigRestoreCommand(instance *openclawv1alpha1.OpenClawInstance) stri
 		// Deep-merge operator config into existing PVC config via Node.js.
 		// Same logic as the init container merge, but with main container paths.
 		return fmt.Sprintf(
-			`node -e "`+
-				`const fs=require('fs');`+
-				`function dm(a,b){const r={...a};for(const k in b){r[k]=b[k]&&typeof b[k]==='object'&&!Array.isArray(b[k])&&r[k]&&typeof r[k]==='object'&&!Array.isArray(r[k])?dm(r[k],b[k]):b[k]}return r}`+
-				`const e=%q,c=%q,t='/tmp/merged.json';`+
-				`const base=fs.existsSync(e)?JSON.parse(fs.readFileSync(e,'utf8')):{};`+
-				`const inc=JSON.parse(fs.readFileSync(c,'utf8'));`+
+			`node -e '`+
+				`const fs=require("fs");`+
+				`function dm(a,b){const r={...a};for(const k in b){r[k]=b[k]&&typeof b[k]==="object"&&!Array.isArray(b[k])&&r[k]&&typeof r[k]==="object"&&!Array.isArray(r[k])?dm(r[k],b[k]):b[k]}return r}`+
+				`const e="%s",c="%s",t="/tmp/merged.json";`+
+				`const base=fs.existsSync(e)?JSON.parse(fs.readFileSync(e,"utf8")):{};`+
+				`const inc=JSON.parse(fs.readFileSync(c,"utf8"));`+
 				`fs.writeFileSync(t,JSON.stringify(dm(base,inc),null,2));`+
 				`fs.copyFileSync(t,e);`+
-				`"`,
+				`'`,
 			dst, src)
 	case instance.Spec.Config.Format == ConfigFormatJSON5:
 		// JSON5 conversion requires npx which is too slow for a postStart hook.
