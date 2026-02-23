@@ -75,7 +75,7 @@ func BuildServiceMonitor(instance *openclawv1alpha1.OpenClawInstance) *unstructu
 				},
 				"endpoints": []interface{}{
 					map[string]interface{}{
-						"port":     "gateway",
+						"port":     "metrics",
 						"interval": interval,
 						"path":     "/metrics",
 					},

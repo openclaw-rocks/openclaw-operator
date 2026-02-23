@@ -99,5 +99,15 @@ func buildServicePorts(instance *openclawv1alpha1.OpenClawInstance) []corev1.Ser
 		})
 	}
 
+	if IsMetricsEnabled(instance) {
+		metricsPort := MetricsPort(instance)
+		ports = append(ports, corev1.ServicePort{
+			Name:       "metrics",
+			Port:       metricsPort,
+			TargetPort: intstr.FromInt32(metricsPort),
+			Protocol:   corev1.ProtocolTCP,
+		})
+	}
+
 	return ports
 }

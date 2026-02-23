@@ -200,6 +200,33 @@ func buildContainers(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSe
 	return containers
 }
 
+// buildMainContainerPorts returns the container ports for the main container.
+// Always includes gateway and canvas; conditionally adds metrics when enabled.
+func buildMainContainerPorts(instance *openclawv1alpha1.OpenClawInstance) []corev1.ContainerPort {
+	ports := []corev1.ContainerPort{
+		{
+			Name:          "gateway",
+			ContainerPort: GatewayPort,
+			Protocol:      corev1.ProtocolTCP,
+		},
+		{
+			Name:          "canvas",
+			ContainerPort: CanvasPort,
+			Protocol:      corev1.ProtocolTCP,
+		},
+	}
+
+	if IsMetricsEnabled(instance) {
+		ports = append(ports, corev1.ContainerPort{
+			Name:          "metrics",
+			ContainerPort: MetricsPort(instance),
+			Protocol:      corev1.ProtocolTCP,
+		})
+	}
+
+	return ports
+}
+
 // buildMainContainer creates the main OpenClaw container
 func buildMainContainer(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecretName string) corev1.Container {
 	container := corev1.Container{
@@ -209,21 +236,10 @@ func buildMainContainer(instance *openclawv1alpha1.OpenClawInstance, gatewayToke
 		SecurityContext:          buildContainerSecurityContext(instance),
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
-		Ports: []corev1.ContainerPort{
-			{
-				Name:          "gateway",
-				ContainerPort: GatewayPort,
-				Protocol:      corev1.ProtocolTCP,
-			},
-			{
-				Name:          "canvas",
-				ContainerPort: CanvasPort,
-				Protocol:      corev1.ProtocolTCP,
-			},
-		},
-		Env:       buildMainEnv(instance, gatewayTokenSecretName),
-		EnvFrom:   instance.Spec.EnvFrom,
-		Resources: buildResourceRequirements(instance),
+		Ports:                    buildMainContainerPorts(instance),
+		Env:                      buildMainEnv(instance, gatewayTokenSecretName),
+		EnvFrom:                  instance.Spec.EnvFrom,
+		Resources:                buildResourceRequirements(instance),
 		VolumeMounts: []corev1.VolumeMount{
 			{
 				Name:      "data",

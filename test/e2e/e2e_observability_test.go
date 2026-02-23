@@ -22,6 +22,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -43,6 +44,18 @@ func prometheusRuleCRDAvailable() bool {
 		Kind:    "PrometheusRule",
 	})
 	err := k8sClient.List(ctx, &unstructured.UnstructuredList{Object: pr.Object})
+	return !meta.IsNoMatchError(err)
+}
+
+// serviceMonitorCRDAvailable checks if the ServiceMonitor CRD is installed in the cluster.
+func serviceMonitorCRDAvailable() bool {
+	sm := &unstructured.Unstructured{}
+	sm.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "monitoring.coreos.com",
+		Version: "v1",
+		Kind:    "ServiceMonitor",
+	})
+	err := k8sClient.List(ctx, &unstructured.UnstructuredList{Object: sm.Object})
 	return !meta.IsNoMatchError(err)
 }
 
@@ -228,6 +241,118 @@ var _ = Describe("Observability - Deep Insights", func() {
 				}, opCM)
 				return apierrors.IsNotFound(err)
 			}, timeout, interval).Should(BeTrue())
+		})
+	})
+
+	Context("When creating an instance with ServiceMonitor enabled", func() {
+		var namespace string
+
+		BeforeEach(func() {
+			namespace = "test-sm-" + time.Now().Format("20060102150405")
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+			Expect(k8sClient.Create(ctx, ns)).Should(Succeed())
+		})
+
+		AfterEach(func() {
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+			_ = k8sClient.Delete(ctx, ns)
+		})
+
+		It("Should expose metrics port in Service, StatefulSet, and ServiceMonitor", func() {
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+			if !serviceMonitorCRDAvailable() {
+				Skip("ServiceMonitor CRD not installed (prometheus-operator required)")
+			}
+
+			instanceName := "sm-metrics-test"
+			trueVal := true
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					Observability: openclawv1alpha1.ObservabilitySpec{
+						Metrics: openclawv1alpha1.MetricsSpec{
+							ServiceMonitor: &openclawv1alpha1.ServiceMonitorSpec{
+								Enabled: &trueVal,
+							},
+						},
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			// Verify Service has metrics port
+			svc := &corev1.Service{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.ServiceName(instance),
+					Namespace: namespace,
+				}, svc)
+			}, timeout, interval).Should(Succeed())
+
+			foundMetricsSvcPort := false
+			for _, p := range svc.Spec.Ports {
+				if p.Name == "metrics" {
+					foundMetricsSvcPort = true
+					Expect(p.Port).To(Equal(resources.DefaultMetricsPort))
+				}
+			}
+			Expect(foundMetricsSvcPort).To(BeTrue(), "Service should have a metrics port")
+
+			// Verify StatefulSet main container has metrics port
+			sts := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.StatefulSetName(instance),
+					Namespace: namespace,
+				}, sts)
+			}, timeout, interval).Should(Succeed())
+
+			mainContainer := sts.Spec.Template.Spec.Containers[0]
+			foundMetricsContainerPort := false
+			for _, p := range mainContainer.Ports {
+				if p.Name == "metrics" {
+					foundMetricsContainerPort = true
+					Expect(p.ContainerPort).To(Equal(resources.DefaultMetricsPort))
+				}
+			}
+			Expect(foundMetricsContainerPort).To(BeTrue(), "main container should have a metrics port")
+
+			// Verify ServiceMonitor targets metrics port
+			sm := &unstructured.Unstructured{}
+			sm.SetGroupVersionKind(schema.GroupVersionKind{
+				Group:   "monitoring.coreos.com",
+				Version: "v1",
+				Kind:    "ServiceMonitor",
+			})
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.ServiceMonitorName(instance),
+					Namespace: namespace,
+				}, sm)
+			}, timeout, interval).Should(Succeed())
+
+			endpoints, ok := sm.Object["spec"].(map[string]interface{})["endpoints"].([]interface{})
+			Expect(ok).To(BeTrue(), "ServiceMonitor should have endpoints")
+			Expect(endpoints).To(HaveLen(1))
+			ep := endpoints[0].(map[string]interface{})
+			Expect(ep["port"]).To(Equal("metrics"))
+
+			// Clean up
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})
 	})
 

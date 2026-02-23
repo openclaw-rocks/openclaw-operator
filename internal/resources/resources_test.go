@@ -341,12 +341,13 @@ func TestBuildStatefulSet_Defaults(t *testing.T) {
 		t.Error("HOME env var should be set to /home/openclaw")
 	}
 
-	// Ports
-	if len(main.Ports) != 2 {
-		t.Fatalf("expected 2 ports, got %d", len(main.Ports))
+	// Ports (gateway, canvas, metrics - metrics enabled by default)
+	if len(main.Ports) != 3 {
+		t.Fatalf("expected 3 ports, got %d", len(main.Ports))
 	}
 	assertContainerPort(t, main.Ports, "gateway", GatewayPort)
 	assertContainerPort(t, main.Ports, "canvas", CanvasPort)
+	assertContainerPort(t, main.Ports, "metrics", DefaultMetricsPort)
 
 	// Default resources
 	cpuReq := main.Resources.Requests[corev1.ResourceCPU]
@@ -1101,13 +1102,14 @@ func TestBuildService_Default(t *testing.T) {
 		t.Error("service selector does not match expected values")
 	}
 
-	// Ports - should have gateway and canvas
-	if len(svc.Spec.Ports) != 2 {
-		t.Fatalf("expected 2 ports, got %d", len(svc.Spec.Ports))
+	// Ports - should have gateway, canvas, and metrics (metrics enabled by default)
+	if len(svc.Spec.Ports) != 3 {
+		t.Fatalf("expected 3 ports, got %d", len(svc.Spec.Ports))
 	}
 
 	assertServicePort(t, svc.Spec.Ports, "gateway", int32(GatewayPort))
 	assertServicePort(t, svc.Spec.Ports, "canvas", int32(CanvasPort))
+	assertServicePort(t, svc.Spec.Ports, "metrics", DefaultMetricsPort)
 }
 
 func TestBuildService_WithChromium(t *testing.T) {
@@ -1116,13 +1118,14 @@ func TestBuildService_WithChromium(t *testing.T) {
 
 	svc := BuildService(instance)
 
-	if len(svc.Spec.Ports) != 3 {
-		t.Fatalf("expected 3 ports with chromium, got %d", len(svc.Spec.Ports))
+	if len(svc.Spec.Ports) != 4 {
+		t.Fatalf("expected 4 ports with chromium, got %d", len(svc.Spec.Ports))
 	}
 
 	assertServicePort(t, svc.Spec.Ports, "gateway", int32(GatewayPort))
 	assertServicePort(t, svc.Spec.Ports, "canvas", int32(CanvasPort))
 	assertServicePort(t, svc.Spec.Ports, "chromium", int32(ChromiumPort))
+	assertServicePort(t, svc.Spec.Ports, "metrics", DefaultMetricsPort)
 }
 
 func TestBuildService_LoadBalancer(t *testing.T) {
@@ -6975,4 +6978,160 @@ func TestStatefulSetReplicas_HPADisabled(t *testing.T) {
 	if sts.Spec.Replicas == nil || *sts.Spec.Replicas != 1 {
 		t.Errorf("replicas should be 1 when HPA is disabled")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Metrics port tests
+// ---------------------------------------------------------------------------
+
+func TestIsMetricsEnabled_DefaultTrue(t *testing.T) {
+	instance := newTestInstance("metrics-default")
+	if !IsMetricsEnabled(instance) {
+		t.Error("IsMetricsEnabled() should return true when Enabled is nil (default)")
+	}
+}
+
+func TestIsMetricsEnabled_ExplicitTrue(t *testing.T) {
+	instance := newTestInstance("metrics-enabled")
+	instance.Spec.Observability.Metrics.Enabled = Ptr(true)
+	if !IsMetricsEnabled(instance) {
+		t.Error("IsMetricsEnabled() should return true when explicitly enabled")
+	}
+}
+
+func TestIsMetricsEnabled_ExplicitFalse(t *testing.T) {
+	instance := newTestInstance("metrics-disabled")
+	instance.Spec.Observability.Metrics.Enabled = Ptr(false)
+	if IsMetricsEnabled(instance) {
+		t.Error("IsMetricsEnabled() should return false when explicitly disabled")
+	}
+}
+
+func TestMetricsPort_Default(t *testing.T) {
+	instance := newTestInstance("metrics-port-default")
+	if got := MetricsPort(instance); got != DefaultMetricsPort {
+		t.Errorf("MetricsPort() = %d, want %d", got, DefaultMetricsPort)
+	}
+}
+
+func TestMetricsPort_Custom(t *testing.T) {
+	instance := newTestInstance("metrics-port-custom")
+	instance.Spec.Observability.Metrics.Port = Ptr(int32(8080))
+	if got := MetricsPort(instance); got != 8080 {
+		t.Errorf("MetricsPort() = %d, want 8080", got)
+	}
+}
+
+func TestBuildServiceMonitor_MetricsPort(t *testing.T) {
+	instance := newTestInstance("sm-port")
+	instance.Spec.Observability.Metrics.ServiceMonitor = &openclawv1alpha1.ServiceMonitorSpec{
+		Enabled: Ptr(true),
+	}
+
+	sm := BuildServiceMonitor(instance)
+
+	endpoints, ok := sm.Object["spec"].(map[string]interface{})["endpoints"].([]interface{})
+	if !ok || len(endpoints) == 0 {
+		t.Fatal("ServiceMonitor should have at least one endpoint")
+	}
+	ep := endpoints[0].(map[string]interface{})
+	if ep["port"] != "metrics" {
+		t.Errorf("ServiceMonitor endpoint port = %q, want %q", ep["port"], "metrics")
+	}
+}
+
+func TestBuildService_MetricsPortEnabled(t *testing.T) {
+	instance := newTestInstance("svc-metrics-enabled")
+	// Metrics enabled by default (nil)
+
+	svc := BuildService(instance)
+
+	found := false
+	for _, p := range svc.Spec.Ports {
+		if p.Name == "metrics" {
+			found = true
+			if p.Port != DefaultMetricsPort {
+				t.Errorf("metrics service port = %d, want %d", p.Port, DefaultMetricsPort)
+			}
+			if p.TargetPort.IntValue() != int(DefaultMetricsPort) {
+				t.Errorf("metrics target port = %d, want %d", p.TargetPort.IntValue(), DefaultMetricsPort)
+			}
+		}
+	}
+	if !found {
+		t.Error("service should include metrics port when metrics is enabled")
+	}
+}
+
+func TestBuildService_MetricsPortDisabled(t *testing.T) {
+	instance := newTestInstance("svc-metrics-disabled")
+	instance.Spec.Observability.Metrics.Enabled = Ptr(false)
+
+	svc := BuildService(instance)
+
+	for _, p := range svc.Spec.Ports {
+		if p.Name == "metrics" {
+			t.Error("service should not include metrics port when metrics is disabled")
+		}
+	}
+	if len(svc.Spec.Ports) != 2 {
+		t.Errorf("expected 2 ports (gateway, canvas) when metrics disabled, got %d", len(svc.Spec.Ports))
+	}
+}
+
+func TestBuildService_MetricsPortCustom(t *testing.T) {
+	instance := newTestInstance("svc-metrics-custom")
+	instance.Spec.Observability.Metrics.Port = Ptr(int32(8080))
+
+	svc := BuildService(instance)
+
+	assertServicePort(t, svc.Spec.Ports, "metrics", 8080)
+}
+
+func TestBuildStatefulSet_MetricsPortEnabled(t *testing.T) {
+	instance := newTestInstance("sts-metrics-enabled")
+	// Metrics enabled by default (nil)
+
+	sts := BuildStatefulSet(instance)
+	main := sts.Spec.Template.Spec.Containers[0]
+
+	found := false
+	for _, p := range main.Ports {
+		if p.Name == "metrics" {
+			found = true
+			if p.ContainerPort != DefaultMetricsPort {
+				t.Errorf("metrics container port = %d, want %d", p.ContainerPort, DefaultMetricsPort)
+			}
+		}
+	}
+	if !found {
+		t.Error("main container should include metrics port when metrics is enabled")
+	}
+}
+
+func TestBuildStatefulSet_MetricsPortDisabled(t *testing.T) {
+	instance := newTestInstance("sts-metrics-disabled")
+	instance.Spec.Observability.Metrics.Enabled = Ptr(false)
+
+	sts := BuildStatefulSet(instance)
+	main := sts.Spec.Template.Spec.Containers[0]
+
+	for _, p := range main.Ports {
+		if p.Name == "metrics" {
+			t.Error("main container should not include metrics port when metrics is disabled")
+		}
+	}
+	if len(main.Ports) != 2 {
+		t.Errorf("expected 2 ports (gateway, canvas) when metrics disabled, got %d", len(main.Ports))
+	}
+}
+
+func TestBuildStatefulSet_MetricsPortCustom(t *testing.T) {
+	instance := newTestInstance("sts-metrics-custom")
+	instance.Spec.Observability.Metrics.Port = Ptr(int32(8080))
+
+	sts := BuildStatefulSet(instance)
+	main := sts.Spec.Template.Spec.Containers[0]
+
+	assertContainerPort(t, main.Ports, "metrics", 8080)
 }
