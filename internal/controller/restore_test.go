@@ -91,20 +91,20 @@ var _ = Describe("Restore from Backup", func() {
 
 	Context("When creating an instance with restoreFrom", func() {
 		It("Should enter Restoring phase and create a restore Job", func() {
-			// Ensure B2 credentials exist
-			b2Secret := &corev1.Secret{
+			// Ensure S3 credentials exist
+			s3Secret := &corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      BackupSecretName,
 					Namespace: "default",
 				},
 				Data: map[string][]byte{
-					"B2_BUCKET":   []byte("test-bucket"),
-					"B2_KEY_ID":   []byte("key123"),
-					"B2_APP_KEY":  []byte("secret456"),
-					"B2_ENDPOINT": []byte("https://s3.example.com"),
+					"S3_BUCKET":            []byte("test-bucket"),
+					"S3_ACCESS_KEY_ID":     []byte("key123"),
+					"S3_SECRET_ACCESS_KEY": []byte("secret456"),
+					"S3_ENDPOINT":          []byte("https://s3.example.com"),
 				},
 			}
-			_ = k8sClient.Create(ctx, b2Secret)
+			_ = k8sClient.Create(ctx, s3Secret)
 
 			instance := &openclawv1alpha1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{

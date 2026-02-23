@@ -33,6 +33,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -161,6 +162,9 @@ func (r *OpenClawInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 	}
 
+	// Snapshot status before mutations so we can skip no-op status updates
+	savedStatus := instance.Status.DeepCopy()
+
 	// If an auto-update is in progress, drive the state machine
 	if instance.Status.AutoUpdate.PendingVersion != "" {
 		result, err := r.reconcileAutoUpdate(ctx, instance)
@@ -188,11 +192,10 @@ func (r *OpenClawInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 		// Update status to Failed
 		meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
-			Type:               openclawv1alpha1.ConditionTypeReady,
-			Status:             metav1.ConditionFalse,
-			Reason:             "ReconcileFailed",
-			Message:            err.Error(),
-			LastTransitionTime: metav1.Now(),
+			Type:    openclawv1alpha1.ConditionTypeReady,
+			Status:  metav1.ConditionFalse,
+			Reason:  "ReconcileFailed",
+			Message: err.Error(),
 		})
 		instance.Status.Phase = openclawv1alpha1.PhaseFailed
 		reconcileTotal.WithLabelValues(instance.Name, instance.Namespace, "error").Inc()
@@ -212,15 +215,16 @@ func (r *OpenClawInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	// Update status to Running
 	instance.Status.Phase = openclawv1alpha1.PhaseRunning
+	if instance.Status.ObservedGeneration != instance.Generation {
+		instance.Status.LastReconcileTime = &metav1.Time{Time: time.Now()}
+	}
 	instance.Status.ObservedGeneration = instance.Generation
-	instance.Status.LastReconcileTime = &metav1.Time{Time: time.Now()}
 
 	meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
-		Type:               openclawv1alpha1.ConditionTypeReady,
-		Status:             metav1.ConditionTrue,
-		Reason:             "ReconcileSucceeded",
-		Message:            "All resources reconciled successfully",
-		LastTransitionTime: metav1.Now(),
+		Type:    openclawv1alpha1.ConditionTypeReady,
+		Status:  metav1.ConditionTrue,
+		Reason:  "ReconcileSucceeded",
+		Message: "All resources reconciled successfully",
 	})
 
 	// Check for auto-updates (non-fatal — errors are logged and evented)
@@ -229,15 +233,18 @@ func (r *OpenClawInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		logger.Error(autoUpdateErr, "Auto-update check failed (non-fatal)")
 	}
 
-	if err := r.Status().Update(ctx, instance); err != nil {
-		logger.Error(err, "Failed to update status")
-		return ctrl.Result{}, err
+	// Skip status update and event when nothing changed (avoids watch-triggered requeue loop)
+	statusChanged := !equality.Semantic.DeepEqual(&instance.Status, savedStatus)
+	if statusChanged {
+		if err := r.Status().Update(ctx, instance); err != nil {
+			logger.Error(err, "Failed to update status")
+			return ctrl.Result{}, err
+		}
+		r.Recorder.Event(instance, corev1.EventTypeNormal, "ReconcileSucceeded", "All resources reconciled successfully")
 	}
 
 	reconcileTotal.WithLabelValues(instance.Name, instance.Namespace, "success").Inc()
 	updatePhaseMetric(instance.Name, instance.Namespace, instance.Status.Phase)
-
-	r.Recorder.Event(instance, corev1.EventTypeNormal, "ReconcileSucceeded", "All resources reconciled successfully")
 	logger.Info("Reconciliation completed successfully")
 
 	// If auto-update needs a requeue, use its interval if shorter
@@ -430,11 +437,10 @@ func (r *OpenClawInstanceReconciler) reconcileRBAC(ctx context.Context, instance
 	}
 
 	meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
-		Type:               openclawv1alpha1.ConditionTypeRBACReady,
-		Status:             metav1.ConditionTrue,
-		Reason:             "RBACCreated",
-		Message:            "RBAC resources created successfully",
-		LastTransitionTime: metav1.Now(),
+		Type:    openclawv1alpha1.ConditionTypeRBACReady,
+		Status:  metav1.ConditionTrue,
+		Reason:  "RBACCreated",
+		Message: "RBAC resources created successfully",
 	})
 
 	return nil
@@ -474,11 +480,10 @@ func (r *OpenClawInstanceReconciler) reconcileNetworkPolicy(ctx context.Context,
 	instance.Status.ManagedResources.NetworkPolicy = np.Name
 
 	meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
-		Type:               openclawv1alpha1.ConditionTypeNetworkPolicyReady,
-		Status:             metav1.ConditionTrue,
-		Reason:             "NetworkPolicyCreated",
-		Message:            "NetworkPolicy created successfully",
-		LastTransitionTime: metav1.Now(),
+		Type:    openclawv1alpha1.ConditionTypeNetworkPolicyReady,
+		Status:  metav1.ConditionTrue,
+		Reason:  "NetworkPolicyCreated",
+		Message: "NetworkPolicy created successfully",
 	})
 
 	return nil
@@ -570,11 +575,10 @@ func (r *OpenClawInstanceReconciler) reconcileConfigMap(ctx context.Context, ins
 			Name:      ref.Name,
 		}, externalCM); err != nil {
 			meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
-				Type:               openclawv1alpha1.ConditionTypeConfigValid,
-				Status:             metav1.ConditionFalse,
-				Reason:             "ConfigMapNotFound",
-				Message:            fmt.Sprintf("External ConfigMap %q not found: %v", ref.Name, err),
-				LastTransitionTime: metav1.Now(),
+				Type:    openclawv1alpha1.ConditionTypeConfigValid,
+				Status:  metav1.ConditionFalse,
+				Reason:  "ConfigMapNotFound",
+				Message: fmt.Sprintf("External ConfigMap %q not found: %v", ref.Name, err),
 			})
 			return fmt.Errorf("external ConfigMap %q not found: %w", ref.Name, err)
 		}
@@ -586,11 +590,10 @@ func (r *OpenClawInstanceReconciler) reconcileConfigMap(ctx context.Context, ins
 		data, ok := externalCM.Data[key]
 		if !ok {
 			meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
-				Type:               openclawv1alpha1.ConditionTypeConfigValid,
-				Status:             metav1.ConditionFalse,
-				Reason:             "ConfigMapKeyNotFound",
-				Message:            fmt.Sprintf("Key %q not found in ConfigMap %q", key, ref.Name),
-				LastTransitionTime: metav1.Now(),
+				Type:    openclawv1alpha1.ConditionTypeConfigValid,
+				Status:  metav1.ConditionFalse,
+				Reason:  "ConfigMapKeyNotFound",
+				Message: fmt.Sprintf("Key %q not found in ConfigMap %q", key, ref.Name),
 			})
 			return fmt.Errorf("key %q not found in ConfigMap %q", key, ref.Name)
 		}
@@ -616,11 +619,10 @@ func (r *OpenClawInstanceReconciler) reconcileConfigMap(ctx context.Context, ins
 	instance.Status.ManagedResources.ConfigMap = cm.Name
 
 	meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
-		Type:               openclawv1alpha1.ConditionTypeConfigValid,
-		Status:             metav1.ConditionTrue,
-		Reason:             "ConfigMapCreated",
-		Message:            "ConfigMap created successfully",
-		LastTransitionTime: metav1.Now(),
+		Type:    openclawv1alpha1.ConditionTypeConfigValid,
+		Status:  metav1.ConditionTrue,
+		Reason:  "ConfigMapCreated",
+		Message: "ConfigMap created successfully",
 	})
 
 	return nil
@@ -695,11 +697,10 @@ func (r *OpenClawInstanceReconciler) reconcilePVC(ctx context.Context, instance 
 	instance.Status.ManagedResources.PVC = pvc.Name
 
 	meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
-		Type:               openclawv1alpha1.ConditionTypeStorageReady,
-		Status:             metav1.ConditionTrue,
-		Reason:             "PVCCreated",
-		Message:            "PersistentVolumeClaim created successfully",
-		LastTransitionTime: metav1.Now(),
+		Type:    openclawv1alpha1.ConditionTypeStorageReady,
+		Status:  metav1.ConditionTrue,
+		Reason:  "PVCCreated",
+		Message: "PersistentVolumeClaim created successfully",
 	})
 
 	return nil
@@ -840,19 +841,17 @@ func (r *OpenClawInstanceReconciler) reconcileStatefulSet(ctx context.Context, i
 				"Secret %q referenced in envFrom is not found", name)
 		}
 		meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
-			Type:               openclawv1alpha1.ConditionTypeSecretsReady,
-			Status:             metav1.ConditionFalse,
-			Reason:             "SecretsMissing",
-			Message:            fmt.Sprintf("Missing secrets: %s", strings.Join(missingSecrets, ", ")),
-			LastTransitionTime: metav1.Now(),
+			Type:    openclawv1alpha1.ConditionTypeSecretsReady,
+			Status:  metav1.ConditionFalse,
+			Reason:  "SecretsMissing",
+			Message: fmt.Sprintf("Missing secrets: %s", strings.Join(missingSecrets, ", ")),
 		})
 	} else {
 		meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
-			Type:               openclawv1alpha1.ConditionTypeSecretsReady,
-			Status:             metav1.ConditionTrue,
-			Reason:             "AllSecretsFound",
-			Message:            "All referenced secrets exist",
-			LastTransitionTime: metav1.Now(),
+			Type:    openclawv1alpha1.ConditionTypeSecretsReady,
+			Status:  metav1.ConditionTrue,
+			Reason:  "AllSecretsFound",
+			Message: "All referenced secrets exist",
 		})
 	}
 
@@ -905,11 +904,10 @@ func (r *OpenClawInstanceReconciler) reconcileStatefulSet(ctx context.Context, i
 	}
 
 	meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
-		Type:               openclawv1alpha1.ConditionTypeStatefulSetReady,
-		Status:             status,
-		Reason:             reason,
-		Message:            message,
-		LastTransitionTime: metav1.Now(),
+		Type:    openclawv1alpha1.ConditionTypeStatefulSetReady,
+		Status:  status,
+		Reason:  reason,
+		Message: message,
 	})
 
 	// Update instance readiness metric
@@ -959,11 +957,10 @@ func (r *OpenClawInstanceReconciler) reconcileService(ctx context.Context, insta
 	instance.Status.CanvasEndpoint = fmt.Sprintf("%s.%s.svc:%d", service.Name, service.Namespace, resources.CanvasPort)
 
 	meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
-		Type:               openclawv1alpha1.ConditionTypeServiceReady,
-		Status:             metav1.ConditionTrue,
-		Reason:             "ServiceCreated",
-		Message:            "Service created successfully",
-		LastTransitionTime: metav1.Now(),
+		Type:    openclawv1alpha1.ConditionTypeServiceReady,
+		Status:  metav1.ConditionTrue,
+		Reason:  "ServiceCreated",
+		Message: "Service created successfully",
 	})
 
 	return nil

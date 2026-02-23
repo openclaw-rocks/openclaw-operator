@@ -85,6 +85,14 @@ func networkPolicyIngressPorts(instance *openclawv1alpha1.OpenClawInstance) []ne
 			Port:     Ptr(intstr.FromInt32(int32(CanvasPort))),
 		},
 	}
+
+	if instance.Spec.WebTerminal.Enabled {
+		ports = append(ports, networkingv1.NetworkPolicyPort{
+			Protocol: Ptr(corev1.ProtocolTCP),
+			Port:     Ptr(intstr.FromInt32(int32(WebTerminalPort))),
+		})
+	}
+
 	return ports
 }
 

@@ -378,11 +378,11 @@ var _ = Describe("OpenClawInstance Controller", func() {
 		})
 	})
 
-	Context("When deleting an OpenClawInstance without B2 backup credentials", func() {
+	Context("When deleting an OpenClawInstance without S3 backup credentials", func() {
 		var namespace string
 
 		BeforeEach(func() {
-			namespace = "test-no-b2-" + time.Now().Format("20060102150405")
+			namespace = "test-no-s3-" + time.Now().Format("20060102150405")
 			ns := &corev1.Namespace{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: namespace,
@@ -400,14 +400,14 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			_ = k8sClient.Delete(ctx, ns)
 		})
 
-		It("Should delete cleanly when B2 backup credentials are not configured", func() {
+		It("Should delete cleanly when S3 backup credentials are not configured", func() {
 			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
 				Skip("Skipping resource validation in minimal mode")
 			}
 
-			instanceName := "no-b2-delete"
+			instanceName := "no-s3-delete"
 
-			// No B2 secret exists in the namespace or operator namespace
+			// No S3 secret exists in the namespace or operator namespace
 			instance := &openclawv1alpha1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
@@ -434,7 +434,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				}, statefulSet)
 			}, timeout, interval).Should(Succeed())
 
-			// Delete the instance - should succeed without B2 credentials
+			// Delete the instance - should succeed without S3 credentials
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 
 			// Instance should be fully garbage collected (finalizer removed)
@@ -1046,6 +1046,109 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			for _, ic := range statefulSet.Spec.Template.Spec.InitContainers {
 				Expect(ic.Name).NotTo(Equal("init-ollama"), "init-ollama should not be present without models")
 			}
+
+			// Clean up
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+	})
+
+	Context("When creating an OpenClawInstance with WebTerminal", func() {
+		var namespace string
+
+		BeforeEach(func() {
+			namespace = "test-webterminal-" + time.Now().Format("20060102150405")
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: namespace,
+				},
+			}
+			Expect(k8sClient.Create(ctx, ns)).Should(Succeed())
+		})
+
+		AfterEach(func() {
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: namespace,
+				},
+			}
+			_ = k8sClient.Delete(ctx, ns)
+		})
+
+		It("Should create web terminal sidecar when enabled", func() {
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instanceName := "web-terminal-test"
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					WebTerminal: openclawv1alpha1.WebTerminalSpec{
+						Enabled: true,
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			// Verify StatefulSet has web-terminal sidecar container
+			statefulSet := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName,
+					Namespace: namespace,
+				}, statefulSet)
+			}, timeout, interval).Should(Succeed())
+
+			// Verify web-terminal container exists
+			var wtContainer *corev1.Container
+			for i := range statefulSet.Spec.Template.Spec.Containers {
+				if statefulSet.Spec.Template.Spec.Containers[i].Name == "web-terminal" {
+					wtContainer = &statefulSet.Spec.Template.Spec.Containers[i]
+					break
+				}
+			}
+			Expect(wtContainer).NotTo(BeNil(), "web-terminal sidecar container should exist")
+			Expect(wtContainer.Image).To(Equal("tsl0922/ttyd:latest"))
+
+			// Verify web-terminal-tmp volume exists
+			var wtVol *corev1.Volume
+			for i := range statefulSet.Spec.Template.Spec.Volumes {
+				if statefulSet.Spec.Template.Spec.Volumes[i].Name == "web-terminal-tmp" {
+					wtVol = &statefulSet.Spec.Template.Spec.Volumes[i]
+					break
+				}
+			}
+			Expect(wtVol).NotTo(BeNil(), "web-terminal-tmp volume should exist")
+
+			// Verify Service has web-terminal port
+			svc := &corev1.Service{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName,
+					Namespace: namespace,
+				}, svc)
+			}, timeout, interval).Should(Succeed())
+
+			var foundWTPort bool
+			for _, port := range svc.Spec.Ports {
+				if port.Name == "web-terminal" && port.Port == int32(resources.WebTerminalPort) {
+					foundWTPort = true
+					break
+				}
+			}
+			Expect(foundWTPort).To(BeTrue(), "Service should have web-terminal port")
 
 			// Clean up
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())

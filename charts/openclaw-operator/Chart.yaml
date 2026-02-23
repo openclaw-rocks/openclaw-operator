@@ -4,8 +4,8 @@ description: >-
   A Kubernetes operator for deploying and managing OpenClaw AI assistant
   instances
 type: application
-version: 0.9.23
-appVersion: 0.9.23
+version: 0.10.2
+appVersion: 0.10.2
 keywords:
   - kubernetes
   - operator
@@ -70,4 +70,4 @@ annotations:
       image: ghcr.io/openclaw-rocks/openclaw-operator:v0.9.0
   artifacthub.io/changes: |
     - kind: added
-      description: PVC backup-on-delete and restore-from-backup via rclone/B2
+      description: PVC backup-on-delete and restore-from-backup via rclone/S3

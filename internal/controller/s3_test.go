@@ -27,7 +27,7 @@ import (
 	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
 )
 
-var _ = Describe("B2 Helpers", func() {
+var _ = Describe("S3 Helpers", func() {
 	Context("getTenantID", func() {
 		It("Should return the tenant label value when present", func() {
 			instance := &openclawv1alpha1.OpenClawInstance{
@@ -64,10 +64,10 @@ var _ = Describe("B2 Helpers", func() {
 	})
 
 	Context("buildRcloneJob", func() {
-		var creds *b2Credentials
+		var creds *s3Credentials
 
 		BeforeEach(func() {
-			creds = &b2Credentials{
+			creds = &s3Credentials{
 				Bucket:   "test-bucket",
 				KeyID:    "key123",
 				AppKey:   "secret456",
@@ -111,10 +111,10 @@ var _ = Describe("B2 Helpers", func() {
 			for _, e := range container.Env {
 				envNames = append(envNames, e.Name)
 			}
-			Expect(envNames).To(ContainElements("B2_ENDPOINT", "B2_KEY_ID", "B2_APP_KEY"))
+			Expect(envNames).To(ContainElements("S3_ENDPOINT", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"))
 		})
 
-		It("Should build a restore Job with B2 as source", func() {
+		It("Should build a restore Job with S3 as source", func() {
 			instance := &openclawv1alpha1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "myinst",

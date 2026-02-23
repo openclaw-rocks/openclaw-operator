@@ -78,7 +78,7 @@ Every request is validated against the instance's allowlist policy. Protected co
 | **Auto-Update** | OCI registry polling | Opt-in version tracking: checks the registry for new semver releases, backs up first, rolls out, and auto-rolls back if the new version fails health checks |
 | **Scalable** | Auto-scaling | HPA integration with CPU and memory metrics, min/max replica bounds, automatic StatefulSet replica management |
 | **Resilient** | Self-healing lifecycle | PodDisruptionBudgets, health probes, automatic config rollouts via content hashing, 5-minute drift detection |
-| **Backup/Restore** | B2-backed snapshots | Automatic backup to Backblaze B2 on instance deletion; restore into a new instance from any snapshot |
+| **Backup/Restore** | S3-backed snapshots | Automatic backup to S3-compatible storage on instance deletion; restore into a new instance from any snapshot |
 | **Workspace Seeding** | Initial files & dirs | Pre-populate the workspace with files and directories before the agent starts |
 | **Gateway Auth** | Auto-generated tokens | Automatic gateway token Secret per instance, bypassing mDNS pairing (unusable in k8s) |
 | **Tailscale** | Tailnet access | Expose via Tailscale Serve or Funnel with SSO auth - no Ingress needed |
@@ -292,6 +292,34 @@ When enabled, the operator:
 
 See [Custom AI Providers](docs/custom-providers.md) for configuring OpenClaw to use Ollama models via `llmConfig`.
 
+### Web terminal sidecar
+
+Provide browser-based shell access to running instances for debugging and inspection without requiring `kubectl exec`:
+
+```yaml
+spec:
+  webTerminal:
+    enabled: true
+    readOnly: false
+    credential:
+      secretRef:
+        name: my-terminal-creds
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "64Mi"
+      limits:
+        cpu: "200m"
+        memory: "128Mi"
+```
+
+When enabled, the operator:
+- Injects a [ttyd](https://github.com/tsl0922/ttyd) sidecar container on port 7681
+- Mounts the instance data volume at `/home/openclaw/.openclaw` so you can inspect config, logs, and data files
+- Adds the web terminal port to the Service and NetworkPolicy for external access
+- Supports basic auth via a Secret with `username` and `password` keys
+- Supports read-only mode (`readOnly: true`) for production environments where shell input should be disabled
+
 ### Tailscale integration
 
 Expose your instance via [Tailscale](https://tailscale.com) Serve (tailnet-only) or Funnel (public internet) - no Ingress or LoadBalancer needed:
@@ -488,7 +516,7 @@ spec:
     healthCheckTimeout: "10m"    # how long to wait for the pod to become ready (2m-30m)
 ```
 
-When enabled, the operator resolves `latest` to the highest stable semver tag on creation, then polls for newer versions on each `checkInterval`. Before updating, it optionally runs a B2 backup, then patches the image tag and monitors the rollout. If the pod fails to become ready within `healthCheckTimeout`, it reverts the image tag and (optionally) restores the PVC from the pre-update snapshot.
+When enabled, the operator resolves `latest` to the highest stable semver tag on creation, then polls for newer versions on each `checkInterval`. Before updating, it optionally runs an S3 backup, then patches the image tag and monitors the rollout. If the pod fails to become ready within `healthCheckTimeout`, it reverts the image tag and (optionally) restores the PVC from the pre-update snapshot.
 
 Safety mechanisms include failed-version tracking (skips versions that failed health checks), a circuit breaker (pauses after 3 consecutive rollbacks), and full data restore when `backupBeforeUpdate` is enabled. Auto-update is a no-op for digest-pinned images (`spec.image.digest`).
 
@@ -547,6 +575,7 @@ The operator follows a **secure-by-default** philosophy. Every instance ships wi
 | Ingress without TLS | Deployment proceeds with a warning |
 | Chromium without digest pinning | Deployment proceeds with a warning |
 | Ollama without digest pinning | Deployment proceeds with a warning |
+| Web terminal without digest pinning | Deployment proceeds with a warning |
 | Ollama runs as root | Required by official image; informational |
 | Auto-update with digest pin | Digest overrides auto-update; updates won't apply |
 | `readOnlyRootFilesystem` disabled | Proceeds with a security recommendation |

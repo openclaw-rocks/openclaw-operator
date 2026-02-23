@@ -113,13 +113,13 @@ func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Conte
 	}
 
 	// Step 4: Create/check backup Job
-	creds, err := r.getB2Credentials(ctx)
+	creds, err := r.getS3Credentials(ctx)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			// B2 credentials not configured - skip backup gracefully
-			logger.Info("B2 backup credentials not configured, skipping backup")
+			// S3 credentials not configured - skip backup gracefully
+			logger.Info("S3 backup credentials not configured, skipping backup")
 			r.Recorder.Event(instance, corev1.EventTypeNormal, "BackupSkipped",
-				"B2 backup credentials Secret not found - skipping pre-delete backup")
+				"S3 backup credentials Secret not found - skipping pre-delete backup")
 			instance.Status.Phase = openclawv1alpha1.PhaseTerminating
 			if statusErr := r.Status().Update(ctx, instance); statusErr != nil {
 				return ctrl.Result{}, statusErr
@@ -127,7 +127,7 @@ func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Conte
 			return r.removeFinalizer(ctx, instance)
 		}
 		// Other errors (RBAC, network) - retry with warning
-		logger.Error(err, "Failed to get B2 credentials, cannot backup")
+		logger.Error(err, "Failed to get S3 credentials, cannot backup")
 		r.Recorder.Event(instance, corev1.EventTypeWarning, "BackupCredentialsFailed", err.Error())
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
@@ -165,7 +165,7 @@ func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Conte
 			return ctrl.Result{}, err
 		}
 
-		logger.Info("Creating backup Job", "job", jobName, "b2Path", b2Path)
+		logger.Info("Creating backup Job", "job", jobName, "remotePath", b2Path)
 		if err := r.Create(ctx, job); err != nil {
 			if apierrors.IsAlreadyExists(err) {
 				// Race condition — Job was created between our check and create
@@ -190,11 +190,10 @@ func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Conte
 			fmt.Sprintf("Backup Job %s failed. Fix and delete the Job to retry, or annotate %s=true to skip.", jobName, AnnotationSkipBackup))
 
 		meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
-			Type:               openclawv1alpha1.ConditionTypeBackupComplete,
-			Status:             metav1.ConditionFalse,
-			Reason:             "BackupFailed",
-			Message:            "Backup Job failed",
-			LastTransitionTime: metav1.Now(),
+			Type:    openclawv1alpha1.ConditionTypeBackupComplete,
+			Status:  metav1.ConditionFalse,
+			Reason:  "BackupFailed",
+			Message: "Backup Job failed",
 		})
 		if err := r.Status().Update(ctx, instance); err != nil {
 			return ctrl.Result{}, err
@@ -203,7 +202,7 @@ func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Conte
 	}
 
 	// Step 5: Backup succeeded — record and remove finalizer
-	logger.Info("Backup Job completed successfully", "job", jobName, "b2Path", instance.Status.LastBackupPath)
+	logger.Info("Backup Job completed successfully", "job", jobName, "remotePath", instance.Status.LastBackupPath)
 	r.Recorder.Event(instance, corev1.EventTypeNormal, "BackupComplete",
 		fmt.Sprintf("Backup completed to %s", instance.Status.LastBackupPath))
 
@@ -212,11 +211,10 @@ func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Conte
 	instance.Status.Phase = openclawv1alpha1.PhaseTerminating
 
 	meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
-		Type:               openclawv1alpha1.ConditionTypeBackupComplete,
-		Status:             metav1.ConditionTrue,
-		Reason:             "BackupSucceeded",
-		Message:            fmt.Sprintf("Backup completed to %s", instance.Status.LastBackupPath),
-		LastTransitionTime: metav1.Now(),
+		Type:    openclawv1alpha1.ConditionTypeBackupComplete,
+		Status:  metav1.ConditionTrue,
+		Reason:  "BackupSucceeded",
+		Message: fmt.Sprintf("Backup completed to %s", instance.Status.LastBackupPath),
 	})
 	if err := r.Status().Update(ctx, instance); err != nil {
 		return ctrl.Result{}, err

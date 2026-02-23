@@ -38,6 +38,9 @@ const (
 	// OllamaPort is the port for the Ollama API
 	OllamaPort = 11434
 
+	// WebTerminalPort is the port for the ttyd web terminal
+	WebTerminalPort = 7681
+
 	// ConfigMergeModeMerge is the merge mode that deep-merges config with existing PVC config
 	ConfigMergeModeMerge = "merge"
 

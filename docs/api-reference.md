@@ -302,6 +302,45 @@ spec:
     gpu: 1
 ```
 
+### spec.webTerminal
+
+Optional ttyd web terminal sidecar for browser-based shell access and debugging.
+
+| Field                      | Type     | Default         | Description                                                                    |
+|----------------------------|----------|-----------------|--------------------------------------------------------------------------------|
+| `enabled`                  | `bool`   | `false`         | Enable the ttyd web terminal sidecar container.                                |
+| `image.repository`         | `string` | `tsl0922/ttyd`  | Web terminal container image repository.                                       |
+| `image.tag`                | `string` | `latest`        | Web terminal image tag.                                                        |
+| `image.digest`             | `string` | --              | Web terminal image digest for supply chain security.                           |
+| `resources.requests.cpu`   | `string` | `50m`           | Web terminal minimum CPU.                                                      |
+| `resources.requests.memory`| `string` | `64Mi`          | Web terminal minimum memory.                                                   |
+| `resources.limits.cpu`     | `string` | `200m`          | Web terminal maximum CPU.                                                      |
+| `resources.limits.memory`  | `string` | `128Mi`         | Web terminal maximum memory.                                                   |
+| `readOnly`                 | `bool`   | `false`         | Start ttyd in read-only mode (view-only, no input). Data volume mount is also set to read-only. |
+| `credential.secretRef.name`| `string` | --              | Name of a Secret with `username` and `password` keys for basic auth.           |
+
+When enabled, the operator:
+
+- Adds a ttyd sidecar container on port 7681 to the pod.
+- Mounts the instance data volume at `/home/openclaw/.openclaw` for inspection.
+- Adds a `/tmp` emptyDir volume for the web terminal container.
+- Adds the web terminal port to the Service and NetworkPolicy.
+- Runs as UID 1000 (same as the main container) for shared file permissions on the data volume.
+
+```yaml
+spec:
+  webTerminal:
+    enabled: true
+    readOnly: true
+    credential:
+      secretRef:
+        name: terminal-credentials
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+```
+
 ### spec.initContainers
 
 | Field            | Type            | Default | Description                                                              |
@@ -608,7 +647,7 @@ High availability and scheduling configuration.
 
 | Field         | Type     | Default | Description                                                                                       |
 |---------------|----------|---------|---------------------------------------------------------------------------------------------------|
-| `restoreFrom` | `string` | --      | B2 backup path to restore data from (e.g., `backups/{tenantId}/{instanceId}/{timestamp}`). When set, the operator restores PVC data from this path before creating the StatefulSet. Cleared automatically after successful restore. |
+| `restoreFrom` | `string` | --      | Remote backup path to restore data from (e.g., `backups/{tenantId}/{instanceId}/{timestamp}`). When set, the operator restores PVC data from this S3 path before creating the StatefulSet. Cleared automatically after successful restore. |
 
 ### spec.runtimeDeps
 
@@ -742,9 +781,9 @@ Standard `metav1.Condition` array. Condition types:
 |------------------|----------------|----------------------------------------------------------|
 | `backupJobName`  | `string`       | Name of the active backup Job.                           |
 | `restoreJobName` | `string`       | Name of the active restore Job.                          |
-| `lastBackupPath` | `string`       | B2 path of the last successful backup.                   |
+| `lastBackupPath` | `string`       | S3 path of the last successful backup.                   |
 | `lastBackupTime` | `*metav1.Time` | Timestamp of the last successful backup.                 |
-| `restoredFrom`   | `string`       | B2 path this instance was restored from.                 |
+| `restoredFrom`   | `string`       | S3 path this instance was restored from.                 |
 
 ### status.autoUpdate
 
@@ -760,7 +799,7 @@ Tracks the state of automatic version updates.
 | `lastUpdateTime`     | `*metav1.Time` | When the last successful update was applied.                                             |
 | `lastUpdateError`    | `string`       | Error message from the last failed update attempt.                                       |
 | `previousVersion`    | `string`       | Version before the last update (used for rollback).                                      |
-| `preUpdateBackupPath`| `string`       | B2 path of the pre-update backup (used for rollback restore).                            |
+| `preUpdateBackupPath`| `string`       | S3 path of the pre-update backup (used for rollback restore).                            |
 | `failedVersion`      | `string`       | Version that failed health checks and will be skipped in future checks. Cleared when a newer version becomes available. |
 | `rollbackCount`      | `int32`        | Consecutive rollback count. Auto-update pauses after 3. Reset to 0 on any successful update. |
 

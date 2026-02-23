@@ -99,6 +99,15 @@ func buildServicePorts(instance *openclawv1alpha1.OpenClawInstance) []corev1.Ser
 		})
 	}
 
+	if instance.Spec.WebTerminal.Enabled {
+		ports = append(ports, corev1.ServicePort{
+			Name:       "web-terminal",
+			Port:       int32(WebTerminalPort),
+			TargetPort: intstr.FromInt32(int32(WebTerminalPort)),
+			Protocol:   corev1.ProtocolTCP,
+		})
+	}
+
 	if IsMetricsEnabled(instance) {
 		metricsPort := MetricsPort(instance)
 		ports = append(ports, corev1.ServicePort{

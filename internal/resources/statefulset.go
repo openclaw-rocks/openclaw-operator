@@ -194,6 +194,11 @@ func buildContainers(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSe
 		containers = append(containers, buildOllamaContainer(instance))
 	}
 
+	// Add web terminal sidecar if enabled
+	if instance.Spec.WebTerminal.Enabled {
+		containers = append(containers, buildWebTerminalContainer(instance))
+	}
+
 	// Add custom sidecars
 	containers = append(containers, instance.Spec.Sidecars...)
 
@@ -516,15 +521,15 @@ func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance) string {
 			// cannot be used because it has no shell (#105).
 			// The config path is passed via env var to avoid shell/JS quoting issues.
 			lines = append(lines, fmt.Sprintf(
-				`__cfgpath=/config/%s node -e "`+
-					`const fs=require('fs');`+
-					`function dm(a,b){const r={...a};for(const k in b){r[k]=b[k]&&typeof b[k]==='object'&&!Array.isArray(b[k])&&r[k]&&typeof r[k]==='object'&&!Array.isArray(r[k])?dm(r[k],b[k]):b[k]}return r}`+
-					`const e='/data/openclaw.json',c=process.env.__cfgpath,t='/tmp/merged.json';`+
-					`const base=fs.existsSync(e)?JSON.parse(fs.readFileSync(e,'utf8')):{};`+
-					`const inc=JSON.parse(fs.readFileSync(c,'utf8'));`+
+				`__cfgpath=/config/%s node -e '`+
+					`const fs=require("fs");`+
+					`function dm(a,b){const r={...a};for(const k in b){r[k]=b[k]&&typeof b[k]==="object"&&!Array.isArray(b[k])&&r[k]&&typeof r[k]==="object"&&!Array.isArray(r[k])?dm(r[k],b[k]):b[k]}return r}`+
+					`const e="/data/openclaw.json",c=process.env.__cfgpath,t="/tmp/merged.json";`+
+					`const base=fs.existsSync(e)?JSON.parse(fs.readFileSync(e,"utf8")):{};`+
+					`const inc=JSON.parse(fs.readFileSync(c,"utf8"));`+
 					`fs.writeFileSync(t,JSON.stringify(dm(base,inc),null,2));`+
 					`fs.copyFileSync(t,e);`+
-					`"`,
+					`'`,
 				shellQuote(key)))
 		case instance.Spec.Config.Format == ConfigFormatJSON5:
 			// JSON5 overwrite — convert to standard JSON via npx json5
@@ -954,6 +959,147 @@ func buildOllamaContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Co
 	return container
 }
 
+// buildWebTerminalContainer creates the ttyd web terminal sidecar container
+func buildWebTerminalContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
+	repo := instance.Spec.WebTerminal.Image.Repository
+	if repo == "" {
+		repo = "tsl0922/ttyd"
+	}
+
+	tag := instance.Spec.WebTerminal.Image.Tag
+	if tag == "" {
+		tag = DefaultImageTag
+	}
+
+	image := repo + ":" + tag
+	if instance.Spec.WebTerminal.Image.Digest != "" {
+		image = repo + "@" + instance.Spec.WebTerminal.Image.Digest
+	}
+
+	// Build ttyd command flags
+	var flags []string
+	if instance.Spec.WebTerminal.ReadOnly {
+		flags = append(flags, "-R")
+	}
+	if instance.Spec.WebTerminal.Credential != nil {
+		flags = append(flags, `-c "${TTYD_USERNAME}:${TTYD_PASSWORD}"`)
+	}
+
+	// Always use sh -c to support env var expansion for credentials
+	var flagStr string
+	if len(flags) > 0 {
+		flagStr = strings.Join(flags, " ") + " "
+	}
+	command := []string{"sh", "-c", "exec ttyd " + flagStr + "sh"}
+
+	// Volume mounts
+	dataReadOnly := instance.Spec.WebTerminal.ReadOnly
+	mounts := []corev1.VolumeMount{
+		{
+			Name:      "data",
+			MountPath: "/home/openclaw/.openclaw",
+			ReadOnly:  dataReadOnly,
+		},
+		{
+			Name:      "web-terminal-tmp",
+			MountPath: "/tmp",
+		},
+	}
+
+	// Environment variables (credentials from Secret)
+	var env []corev1.EnvVar
+	if instance.Spec.WebTerminal.Credential != nil {
+		secretName := instance.Spec.WebTerminal.Credential.SecretRef.Name
+		env = append(env,
+			corev1.EnvVar{
+				Name: "TTYD_USERNAME",
+				ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
+						Key:                  "username",
+					},
+				},
+			},
+			corev1.EnvVar{
+				Name: "TTYD_PASSWORD",
+				ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
+						Key:                  "password",
+					},
+				},
+			},
+		)
+	}
+
+	return corev1.Container{
+		Name:                     "web-terminal",
+		Image:                    image,
+		Command:                  command,
+		ImagePullPolicy:          corev1.PullIfNotPresent,
+		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
+		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: Ptr(false),
+			ReadOnlyRootFilesystem:   Ptr(false), // ttyd needs writable rootfs
+			RunAsNonRoot:             Ptr(true),
+			RunAsUser:                Ptr(int64(1000)), // same as main container
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+			SeccompProfile: &corev1.SeccompProfile{
+				Type: corev1.SeccompProfileTypeRuntimeDefault,
+			},
+		},
+		Ports: []corev1.ContainerPort{
+			{
+				Name:          "web-terminal",
+				ContainerPort: WebTerminalPort,
+				Protocol:      corev1.ProtocolTCP,
+			},
+		},
+		Resources:    buildWebTerminalResourceRequirements(instance),
+		Env:          env,
+		VolumeMounts: mounts,
+	}
+}
+
+// buildWebTerminalResourceRequirements creates resource requirements for the web terminal container
+func buildWebTerminalResourceRequirements(instance *openclawv1alpha1.OpenClawInstance) corev1.ResourceRequirements {
+	req := corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{},
+		Limits:   corev1.ResourceList{},
+	}
+
+	// Requests
+	cpuReq := instance.Spec.WebTerminal.Resources.Requests.CPU
+	if cpuReq == "" {
+		cpuReq = "50m"
+	}
+	req.Requests[corev1.ResourceCPU] = resource.MustParse(cpuReq)
+
+	memReq := instance.Spec.WebTerminal.Resources.Requests.Memory
+	if memReq == "" {
+		memReq = "64Mi"
+	}
+	req.Requests[corev1.ResourceMemory] = resource.MustParse(memReq)
+
+	// Limits
+	cpuLim := instance.Spec.WebTerminal.Resources.Limits.CPU
+	if cpuLim == "" {
+		cpuLim = "200m"
+	}
+	req.Limits[corev1.ResourceCPU] = resource.MustParse(cpuLim)
+
+	memLim := instance.Spec.WebTerminal.Resources.Limits.Memory
+	if memLim == "" {
+		memLim = "128Mi"
+	}
+	req.Limits[corev1.ResourceMemory] = resource.MustParse(memLim)
+
+	return req
+}
+
 // buildOllamaResourceRequirements creates resource requirements for the Ollama container
 func buildOllamaResourceRequirements(instance *openclawv1alpha1.OpenClawInstance) corev1.ResourceRequirements {
 	req := corev1.ResourceRequirements{
@@ -1202,6 +1348,16 @@ func buildVolumes(instance *openclawv1alpha1.OpenClawInstance) []corev1.Volume {
 		}
 	}
 
+	// Web terminal tmp volume
+	if instance.Spec.WebTerminal.Enabled {
+		volumes = append(volumes, corev1.Volume{
+			Name: "web-terminal-tmp",
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		})
+	}
+
 	// CA bundle volume
 	if cab := instance.Spec.Security.CABundle; cab != nil {
 		if cab.ConfigMapName != "" {
@@ -1443,15 +1599,15 @@ func buildConfigRestoreCommand(instance *openclawv1alpha1.OpenClawInstance) stri
 		// Deep-merge operator config into existing PVC config via Node.js.
 		// Same logic as the init container merge, but with main container paths.
 		return fmt.Sprintf(
-			`node -e "`+
-				`const fs=require('fs');`+
-				`function dm(a,b){const r={...a};for(const k in b){r[k]=b[k]&&typeof b[k]==='object'&&!Array.isArray(b[k])&&r[k]&&typeof r[k]==='object'&&!Array.isArray(r[k])?dm(r[k],b[k]):b[k]}return r}`+
-				`const e=%q,c=%q,t='/tmp/merged.json';`+
-				`const base=fs.existsSync(e)?JSON.parse(fs.readFileSync(e,'utf8')):{};`+
-				`const inc=JSON.parse(fs.readFileSync(c,'utf8'));`+
+			`node -e '`+
+				`const fs=require("fs");`+
+				`function dm(a,b){const r={...a};for(const k in b){r[k]=b[k]&&typeof b[k]==="object"&&!Array.isArray(b[k])&&r[k]&&typeof r[k]==="object"&&!Array.isArray(r[k])?dm(r[k],b[k]):b[k]}return r}`+
+				`const e="%s",c="%s",t="/tmp/merged.json";`+
+				`const base=fs.existsSync(e)?JSON.parse(fs.readFileSync(e,"utf8")):{};`+
+				`const inc=JSON.parse(fs.readFileSync(c,"utf8"));`+
 				`fs.writeFileSync(t,JSON.stringify(dm(base,inc),null,2));`+
 				`fs.copyFileSync(t,e);`+
-				`"`,
+				`'`,
 			dst, src)
 	case instance.Spec.Config.Format == ConfigFormatJSON5:
 		// JSON5 conversion requires npx which is too slow for a postStart hook.
