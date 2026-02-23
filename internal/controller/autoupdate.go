@@ -202,11 +202,10 @@ func (r *OpenClawInstanceReconciler) reconcileAutoUpdate(ctx context.Context, in
 		fmt.Sprintf("New version %s available (current: %s)", version, currentTag))
 
 	meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
-		Type:               openclawv1alpha1.ConditionTypeAutoUpdateAvailable,
-		Status:             metav1.ConditionTrue,
-		Reason:             "NewVersionAvailable",
-		Message:            fmt.Sprintf("Version %s is available (current: %s)", version, currentTag),
-		LastTransitionTime: metav1.Now(),
+		Type:    openclawv1alpha1.ConditionTypeAutoUpdateAvailable,
+		Status:  metav1.ConditionTrue,
+		Reason:  "NewVersionAvailable",
+		Message: fmt.Sprintf("Version %s is available (current: %s)", version, currentTag),
 	})
 
 	instance.Status.AutoUpdate.PendingVersion = version

@@ -190,11 +190,10 @@ func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Conte
 			fmt.Sprintf("Backup Job %s failed. Fix and delete the Job to retry, or annotate %s=true to skip.", jobName, AnnotationSkipBackup))
 
 		meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
-			Type:               openclawv1alpha1.ConditionTypeBackupComplete,
-			Status:             metav1.ConditionFalse,
-			Reason:             "BackupFailed",
-			Message:            "Backup Job failed",
-			LastTransitionTime: metav1.Now(),
+			Type:    openclawv1alpha1.ConditionTypeBackupComplete,
+			Status:  metav1.ConditionFalse,
+			Reason:  "BackupFailed",
+			Message: "Backup Job failed",
 		})
 		if err := r.Status().Update(ctx, instance); err != nil {
 			return ctrl.Result{}, err
@@ -212,11 +211,10 @@ func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Conte
 	instance.Status.Phase = openclawv1alpha1.PhaseTerminating
 
 	meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
-		Type:               openclawv1alpha1.ConditionTypeBackupComplete,
-		Status:             metav1.ConditionTrue,
-		Reason:             "BackupSucceeded",
-		Message:            fmt.Sprintf("Backup completed to %s", instance.Status.LastBackupPath),
-		LastTransitionTime: metav1.Now(),
+		Type:    openclawv1alpha1.ConditionTypeBackupComplete,
+		Status:  metav1.ConditionTrue,
+		Reason:  "BackupSucceeded",
+		Message: fmt.Sprintf("Backup completed to %s", instance.Status.LastBackupPath),
 	})
 	if err := r.Status().Update(ctx, instance); err != nil {
 		return ctrl.Result{}, err

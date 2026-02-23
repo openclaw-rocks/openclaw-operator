@@ -118,11 +118,10 @@ func (r *OpenClawInstanceReconciler) reconcileRestore(ctx context.Context, insta
 			fmt.Sprintf("Restore Job %s failed. Delete the Job to retry.", jobName))
 
 		meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
-			Type:               openclawv1alpha1.ConditionTypeRestoreComplete,
-			Status:             metav1.ConditionFalse,
-			Reason:             "RestoreFailed",
-			Message:            fmt.Sprintf("Restore Job %s failed", jobName),
-			LastTransitionTime: metav1.Now(),
+			Type:    openclawv1alpha1.ConditionTypeRestoreComplete,
+			Status:  metav1.ConditionFalse,
+			Reason:  "RestoreFailed",
+			Message: fmt.Sprintf("Restore Job %s failed", jobName),
 		})
 		if err := r.Status().Update(ctx, instance); err != nil {
 			return ctrl.Result{}, false, err
@@ -139,11 +138,10 @@ func (r *OpenClawInstanceReconciler) reconcileRestore(ctx context.Context, insta
 	instance.Status.RestoredFrom = instance.Spec.RestoreFrom
 	instance.Status.Phase = openclawv1alpha1.PhaseProvisioning
 	meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
-		Type:               openclawv1alpha1.ConditionTypeRestoreComplete,
-		Status:             metav1.ConditionTrue,
-		Reason:             "RestoreSucceeded",
-		Message:            fmt.Sprintf("Restored from %s", instance.Spec.RestoreFrom),
-		LastTransitionTime: metav1.Now(),
+		Type:    openclawv1alpha1.ConditionTypeRestoreComplete,
+		Status:  metav1.ConditionTrue,
+		Reason:  "RestoreSucceeded",
+		Message: fmt.Sprintf("Restored from %s", instance.Spec.RestoreFrom),
 	})
 	if err := r.Status().Update(ctx, instance); err != nil {
 		return ctrl.Result{}, false, err
