@@ -75,6 +75,15 @@ const (
 	// TailscaleModeServe is the default Tailscale mode (tailnet-only access)
 	TailscaleModeServe = "serve"
 
+	// TailscaleModeFunnel exposes the instance to the public internet via Tailscale Funnel
+	TailscaleModeFunnel = "funnel"
+
+	// GatewayBindLoopback is the bind value for loopback mode (required for Tailscale serve/funnel)
+	GatewayBindLoopback = "loopback"
+
+	// GatewayBindLAN is the default bind value for LAN mode (pod IP, required for TCPSocket probes)
+	GatewayBindLAN = "lan"
+
 	// DefaultMetricsPort is the default port for the Prometheus metrics endpoint
 	DefaultMetricsPort int32 = 9090
 )
@@ -187,6 +196,16 @@ func GetImage(instance *openclawv1alpha1.OpenClawInstance) string {
 		return repo + "@" + instance.Spec.Image.Digest
 	}
 	return repo + ":" + GetImageTag(instance)
+}
+
+// IsTailscaleServeOrFunnel returns true when Tailscale is enabled with serve
+// or funnel mode. Both modes require gateway.bind=loopback.
+func IsTailscaleServeOrFunnel(instance *openclawv1alpha1.OpenClawInstance) bool {
+	if !instance.Spec.Tailscale.Enabled {
+		return false
+	}
+	mode := instance.Spec.Tailscale.Mode
+	return mode == "" || mode == TailscaleModeServe || mode == TailscaleModeFunnel
 }
 
 // IsMetricsEnabled returns true if the metrics endpoint is enabled for the instance

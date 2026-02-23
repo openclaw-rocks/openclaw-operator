@@ -894,6 +894,9 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			Expect(ok).To(BeTrue(), "gateway should have auth key when AuthSSO is enabled")
 			Expect(auth["allowTailscale"]).To(BeTrue(), "auth.allowTailscale should be true")
 
+			// Verify gateway.bind=loopback for Tailscale serve mode
+			Expect(gw["bind"]).To(Equal("loopback"), "gateway.bind should be loopback when Tailscale serve is enabled")
+
 			// Verify StatefulSet env vars
 			statefulSet := &appsv1.StatefulSet{}
 			Eventually(func() error {
@@ -920,6 +923,15 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			}
 			Expect(foundAuthKey).To(BeTrue(), "TS_AUTHKEY env var should be present")
 			Expect(foundHostname).To(BeTrue(), "TS_HOSTNAME env var should be present")
+
+			// Verify probes use exec (not TCPSocket) for loopback-bound gateway
+			Expect(mainContainer.LivenessProbe).NotTo(BeNil(), "liveness probe should be set")
+			Expect(mainContainer.LivenessProbe.Exec).NotTo(BeNil(), "liveness probe should use exec for Tailscale serve")
+			Expect(mainContainer.LivenessProbe.TCPSocket).To(BeNil(), "liveness probe should not use TCPSocket for Tailscale serve")
+			Expect(mainContainer.ReadinessProbe).NotTo(BeNil(), "readiness probe should be set")
+			Expect(mainContainer.ReadinessProbe.Exec).NotTo(BeNil(), "readiness probe should use exec for Tailscale serve")
+			Expect(mainContainer.StartupProbe).NotTo(BeNil(), "startup probe should be set")
+			Expect(mainContainer.StartupProbe.Exec).NotTo(BeNil(), "startup probe should use exec for Tailscale serve")
 
 			// Verify NetworkPolicy has STUN and WireGuard egress
 			np := &networkingv1.NetworkPolicy{}

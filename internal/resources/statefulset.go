@@ -1466,6 +1466,29 @@ func buildChromiumResourceRequirements(instance *openclawv1alpha1.OpenClawInstan
 	return req
 }
 
+// buildProbeHandler returns a TCPSocket handler by default, or an exec-based
+// handler when Tailscale serve/funnel is active. In loopback mode the gateway
+// binds to 127.0.0.1, which is unreachable from the kubelet via TCPSocket
+// probes (they connect to the pod IP). Exec probes run inside the container
+// and can reach localhost.
+func buildProbeHandler(instance *openclawv1alpha1.OpenClawInstance) corev1.ProbeHandler {
+	if IsTailscaleServeOrFunnel(instance) {
+		return corev1.ProbeHandler{
+			Exec: &corev1.ExecAction{
+				Command: []string{
+					"sh", "-c",
+					fmt.Sprintf("wget -q --spider --timeout=2 http://127.0.0.1:%d/", GatewayPort),
+				},
+			},
+		}
+	}
+	return corev1.ProbeHandler{
+		TCPSocket: &corev1.TCPSocketAction{
+			Port: intstr.FromInt(GatewayPort),
+		},
+	}
+}
+
 // buildLivenessProbe creates the liveness probe
 func buildLivenessProbe(instance *openclawv1alpha1.OpenClawInstance) *corev1.Probe {
 	spec := instance.Spec.Probes.Liveness
@@ -1474,11 +1497,7 @@ func buildLivenessProbe(instance *openclawv1alpha1.OpenClawInstance) *corev1.Pro
 	}
 
 	probe := &corev1.Probe{
-		ProbeHandler: corev1.ProbeHandler{
-			TCPSocket: &corev1.TCPSocketAction{
-				Port: intstr.FromInt(GatewayPort),
-			},
-		},
+		ProbeHandler:        buildProbeHandler(instance),
 		InitialDelaySeconds: 30,
 		PeriodSeconds:       10,
 		TimeoutSeconds:      5,
@@ -1512,11 +1531,7 @@ func buildReadinessProbe(instance *openclawv1alpha1.OpenClawInstance) *corev1.Pr
 	}
 
 	probe := &corev1.Probe{
-		ProbeHandler: corev1.ProbeHandler{
-			TCPSocket: &corev1.TCPSocketAction{
-				Port: intstr.FromInt(GatewayPort),
-			},
-		},
+		ProbeHandler:        buildProbeHandler(instance),
 		InitialDelaySeconds: 5,
 		PeriodSeconds:       5,
 		TimeoutSeconds:      3,
@@ -1550,11 +1565,7 @@ func buildStartupProbe(instance *openclawv1alpha1.OpenClawInstance) *corev1.Prob
 	}
 
 	probe := &corev1.Probe{
-		ProbeHandler: corev1.ProbeHandler{
-			TCPSocket: &corev1.TCPSocketAction{
-				Port: intstr.FromInt(GatewayPort),
-			},
-		},
+		ProbeHandler:        buildProbeHandler(instance),
 		InitialDelaySeconds: 0,
 		PeriodSeconds:       5,
 		TimeoutSeconds:      3,
