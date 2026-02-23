@@ -1566,6 +1566,104 @@ var _ = Describe("OpenClawInstance Controller", func() {
 		})
 	})
 
+	Context("When creating an instance with selfConfigure enabled (#168)", func() {
+		var namespace string
+
+		BeforeEach(func() {
+			namespace = "test-selfcfg-" + time.Now().Format("20060102150405")
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+			Expect(k8sClient.Create(ctx, ns)).Should(Succeed())
+		})
+
+		AfterEach(func() {
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+			_ = k8sClient.Delete(ctx, ns)
+		})
+
+		It("Should accept selfConfigure in the CRD schema and configure RBAC", func() {
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instanceName := "selfcfg-e2e"
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					SelfConfigure: openclawv1alpha1.SelfConfigureSpec{
+						Enabled: true,
+						AllowedActions: []openclawv1alpha1.SelfConfigAction{
+							openclawv1alpha1.SelfConfigActionSkills,
+							openclawv1alpha1.SelfConfigActionConfig,
+						},
+					},
+				},
+			}
+
+			// The core assertion: selfConfigure must be accepted by the API server
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			// Verify the instance was created with selfConfigure preserved
+			created := &openclawv1alpha1.OpenClawInstance{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName,
+					Namespace: namespace,
+				}, created)
+			}, timeout, interval).Should(Succeed())
+			Expect(created.Spec.SelfConfigure.Enabled).To(BeTrue())
+			Expect(created.Spec.SelfConfigure.AllowedActions).To(HaveLen(2))
+
+			// Verify ServiceAccount has automountServiceAccountToken=true
+			sa := &corev1.ServiceAccount{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.ServiceAccountName(instance),
+					Namespace: namespace,
+				}, sa)
+			}, timeout, interval).Should(Succeed())
+			Expect(sa.AutomountServiceAccountToken).NotTo(BeNil())
+			Expect(*sa.AutomountServiceAccountToken).To(BeTrue(),
+				"selfConfigure should enable SA token automount")
+
+			// Verify StatefulSet has automountServiceAccountToken=true
+			statefulSet := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName,
+					Namespace: namespace,
+				}, statefulSet)
+			}, timeout, interval).Should(Succeed())
+			Expect(statefulSet.Spec.Template.Spec.AutomountServiceAccountToken).NotTo(BeNil())
+			Expect(*statefulSet.Spec.Template.Spec.AutomountServiceAccountToken).To(BeTrue(),
+				"selfConfigure should enable pod SA token automount")
+
+			// Verify selfconfig env vars are injected
+			mainContainer := statefulSet.Spec.Template.Spec.Containers[0]
+			envMap := map[string]string{}
+			for _, e := range mainContainer.Env {
+				envMap[e.Name] = e.Value
+			}
+			Expect(envMap).To(HaveKey("OPENCLAW_INSTANCE_NAME"),
+				"selfConfigure should inject OPENCLAW_INSTANCE_NAME env var")
+			Expect(envMap["OPENCLAW_INSTANCE_NAME"]).To(Equal(instanceName))
+			Expect(envMap).To(HaveKey("OPENCLAW_NAMESPACE"),
+				"selfConfigure should inject OPENCLAW_NAMESPACE env var")
+
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+	})
+
 	Context("When the operator is running", func() {
 		It("Should have the controller manager deployment available", func() {
 			deployment := &appsv1.Deployment{}

@@ -33,6 +33,10 @@ help: ## Display this help.
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
 
+.PHONY: sync-chart-crds
+sync-chart-crds: manifests ## Sync CRDs from config/crd/bases/ into Helm chart templates.
+	bash hack/sync-chart-crds.sh
+
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
