@@ -182,8 +182,8 @@ All checks run on every push to main and every PR:
 
 ## Helm Chart
 
-- CRDs in `charts/openclaw-operator/crds/` — installed on `helm install`, but NOT upgraded by Helm
-- Users must `kubectl apply -f` CRDs before `helm upgrade` when CRD schema changes
+- CRDs are Helm templates in `charts/openclaw-operator/templates/crds/` -- updated on every `helm upgrade`
+- Run `make sync-chart-crds` after `make manifests` to sync CRDs into the Helm chart (CI enforces this)
 - `appVersion` in `Chart.yaml` uses plain semver (no `v` prefix); the deployment template prepends `v`
 - Chart version and appVersion are managed by release-please via `extra-files` in `release-please-config.json`
 

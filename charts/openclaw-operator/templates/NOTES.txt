@@ -7,6 +7,20 @@ To learn more about the release, try:
   $ helm status {{ .Release.Name }}
   $ helm get all {{ .Release.Name }}
 
+## Upgrading from versions that used crds/ directory
+
+If you are upgrading from a chart version that installed CRDs via the Helm
+crds/ directory (prior to this version), you must adopt the existing CRDs
+into Helm management before upgrading:
+
+  kubectl label crd openclawinstances.openclaw.rocks app.kubernetes.io/managed-by=Helm
+  kubectl annotate crd openclawinstances.openclaw.rocks meta.helm.sh/release-name={{ .Release.Name }} meta.helm.sh/release-namespace={{ .Release.Namespace }}
+  kubectl label crd openclawselfconfigs.openclaw.rocks app.kubernetes.io/managed-by=Helm
+  kubectl annotate crd openclawselfconfigs.openclaw.rocks meta.helm.sh/release-name={{ .Release.Name }} meta.helm.sh/release-namespace={{ .Release.Namespace }}
+
+This is only needed once. After this, CRDs will be updated automatically
+on every `helm upgrade`.
+
 ## Quick Start
 
 1. Create a secret with your API keys:

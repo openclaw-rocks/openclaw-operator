@@ -62,13 +62,19 @@ kubectl get openclawinstance my-assistant -n openclaw \
    ```
    Verify the operator pod is `Running` and ready. If it is in `CrashLoopBackOff`, check its logs.
 
-2. **CRD not installed**:
+2. **CRD not installed or outdated**:
    ```bash
    kubectl get crd openclawinstances.openclaw.rocks
    ```
    If the CRD is missing, install it:
    ```bash
-   kubectl apply -f charts/openclaw-operator/crds/
+   kubectl apply -f config/crd/bases/
+   ```
+   If you upgraded the operator but new fields (e.g. `selfConfigure`) are
+   rejected as "field not declared in schema", the CRD is outdated. Upgrade
+   the Helm chart or apply CRDs manually:
+   ```bash
+   kubectl apply --server-side -f config/crd/bases/
    ```
 
 3. **RBAC issues with the operator**:
