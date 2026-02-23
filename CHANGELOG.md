@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.2](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.1...v0.10.2) (2026-02-23)
+
+
+### Bug Fixes
+
+* break reconciliation tight loop caused by unconditional status writes ([#163](https://github.com/openclaw-rocks/k8s-operator/issues/163)) ([88921b7](https://github.com/openclaw-rocks/k8s-operator/commit/88921b7fafe3e703441030d49885dc3277c61213)), closes [#161](https://github.com/openclaw-rocks/k8s-operator/issues/161)
+* use single-quoted node -e argument in merge mode scripts ([#164](https://github.com/openclaw-rocks/k8s-operator/issues/164)) ([a661ed8](https://github.com/openclaw-rocks/k8s-operator/commit/a661ed8d7fbaa91bbedcd9a198dbe74d52c27444)), closes [#162](https://github.com/openclaw-rocks/k8s-operator/issues/162)
+
 ## [0.10.1](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.0...v0.10.1) (2026-02-22)
 
 
