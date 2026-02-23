@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.3](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.2...v0.10.3) (2026-02-23)
+
+
+### Bug Fixes
+
+* auto-set gateway.bind=loopback and use exec probes for Tailscale serve/funnel ([#170](https://github.com/openclaw-rocks/k8s-operator/issues/170)) ([e26694b](https://github.com/openclaw-rocks/k8s-operator/commit/e26694b5bd38d7bd4a286f1e6caf5d3438bf6366)), closes [#167](https://github.com/openclaw-rocks/k8s-operator/issues/167)
+* expose metrics port in Service, StatefulSet, and ServiceMonitor ([#169](https://github.com/openclaw-rocks/k8s-operator/issues/169)) ([049d097](https://github.com/openclaw-rocks/k8s-operator/commit/049d097d81a42493a224bf129a243162685b1e5d)), closes [#166](https://github.com/openclaw-rocks/k8s-operator/issues/166)
+* move CRDs from Helm crds/ to templates/ for upgrade support ([#173](https://github.com/openclaw-rocks/k8s-operator/issues/173)) ([599b394](https://github.com/openclaw-rocks/k8s-operator/commit/599b39450a91a858e15d5ccf5f702db0c2c82392)), closes [#168](https://github.com/openclaw-rocks/k8s-operator/issues/168)
+
 ## [0.10.2](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.1...v0.10.2) (2026-02-23)
 
 
