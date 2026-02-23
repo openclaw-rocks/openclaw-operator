@@ -19,6 +19,7 @@ package resources
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -1964,7 +1965,8 @@ func TestBuildConfigMapFromBytes_JSON5Passthrough(t *testing.T) {
 
 func TestEnrichConfigWithGatewayBind(t *testing.T) {
 	input := []byte(`{}`)
-	out, err := enrichConfigWithGatewayBind(input)
+	instance := newTestInstance("bind-test")
+	out, err := enrichConfigWithGatewayBind(input, instance)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1985,7 +1987,8 @@ func TestEnrichConfigWithGatewayBind(t *testing.T) {
 
 func TestEnrichConfigWithGatewayBind_PreservesUserBind(t *testing.T) {
 	input := []byte(`{"gateway":{"bind":"0.0.0.0"}}`)
-	out, err := enrichConfigWithGatewayBind(input)
+	instance := newTestInstance("bind-user-override")
+	out, err := enrichConfigWithGatewayBind(input, instance)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2003,7 +2006,8 @@ func TestEnrichConfigWithGatewayBind_PreservesUserBind(t *testing.T) {
 
 func TestEnrichConfigWithGatewayBind_PreservesOtherFields(t *testing.T) {
 	input := []byte(`{"gateway":{"auth":{"mode":"token","token":"secret"}}}`)
-	out, err := enrichConfigWithGatewayBind(input)
+	instance := newTestInstance("bind-other-fields")
+	out, err := enrichConfigWithGatewayBind(input, instance)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2028,7 +2032,8 @@ func TestEnrichConfigWithGatewayBind_PreservesOtherFields(t *testing.T) {
 
 func TestEnrichConfigWithGatewayBind_InvalidJSON(t *testing.T) {
 	input := []byte(`not valid json`)
-	out, err := enrichConfigWithGatewayBind(input)
+	instance := newTestInstance("bind-invalid-json")
+	out, err := enrichConfigWithGatewayBind(input, instance)
 	if err != nil {
 		t.Fatal("should not error on invalid JSON")
 	}
@@ -5522,6 +5527,195 @@ func TestBuildConfigMap_TailscaleNoAuthSSO(t *testing.T) {
 		if _, hasAllowTS := auth["allowTailscale"]; hasAllowTS {
 			t.Error("auth.allowTailscale should not be set when AuthSSO is disabled")
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tailscale loopback bind + exec probe tests
+// ---------------------------------------------------------------------------
+
+func TestBuildConfigMap_TailscaleServe_SetsLoopbackBind(t *testing.T) {
+	instance := newTestInstance("ts-loopback-serve")
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.Mode = "serve"
+
+	cm := BuildConfigMap(instance, "")
+	content := cm.Data["openclaw.json"]
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config JSON: %v", err)
+	}
+
+	gw := parsed["gateway"].(map[string]interface{})
+	if gw["bind"] != "loopback" {
+		t.Errorf("gateway.bind = %v, want %q when Tailscale serve is enabled", gw["bind"], "loopback")
+	}
+}
+
+func TestBuildConfigMap_TailscaleFunnel_SetsLoopbackBind(t *testing.T) {
+	instance := newTestInstance("ts-loopback-funnel")
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.Mode = "funnel"
+
+	cm := BuildConfigMap(instance, "")
+	content := cm.Data["openclaw.json"]
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config JSON: %v", err)
+	}
+
+	gw := parsed["gateway"].(map[string]interface{})
+	if gw["bind"] != "loopback" {
+		t.Errorf("gateway.bind = %v, want %q when Tailscale funnel is enabled", gw["bind"], "loopback")
+	}
+}
+
+func TestBuildConfigMap_TailscaleDefaultMode_SetsLoopbackBind(t *testing.T) {
+	instance := newTestInstance("ts-loopback-default")
+	instance.Spec.Tailscale.Enabled = true
+	// Mode left empty -- defaults to "serve"
+
+	cm := BuildConfigMap(instance, "")
+	content := cm.Data["openclaw.json"]
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config JSON: %v", err)
+	}
+
+	gw := parsed["gateway"].(map[string]interface{})
+	if gw["bind"] != "loopback" {
+		t.Errorf("gateway.bind = %v, want %q when Tailscale is enabled with default mode", gw["bind"], "loopback")
+	}
+}
+
+func TestBuildConfigMap_TailscaleDisabled_SetsLanBind(t *testing.T) {
+	instance := newTestInstance("ts-lan-disabled")
+	// Tailscale not enabled
+
+	cm := BuildConfigMap(instance, "")
+	content := cm.Data["openclaw.json"]
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config JSON: %v", err)
+	}
+
+	gw := parsed["gateway"].(map[string]interface{})
+	if gw["bind"] != "lan" {
+		t.Errorf("gateway.bind = %v, want %q when Tailscale is disabled", gw["bind"], "lan")
+	}
+}
+
+func TestBuildConfigMap_TailscaleLoopback_UserOverridePreserved(t *testing.T) {
+	instance := newTestInstance("ts-user-override")
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.Mode = "serve"
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{
+			Raw: []byte(`{"gateway":{"bind":"0.0.0.0"}}`),
+		},
+	}
+
+	cm := BuildConfigMap(instance, "")
+	content := cm.Data["openclaw.json"]
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config JSON: %v", err)
+	}
+
+	gw := parsed["gateway"].(map[string]interface{})
+	if gw["bind"] != "0.0.0.0" {
+		t.Errorf("gateway.bind = %v, want %q (user override should be preserved)", gw["bind"], "0.0.0.0")
+	}
+}
+
+func TestBuildStatefulSet_TailscaleServe_UsesExecProbes(t *testing.T) {
+	instance := newTestInstance("ts-exec-probes")
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.Mode = "serve"
+
+	sts := BuildStatefulSet(instance, "hash")
+	container := sts.Spec.Template.Spec.Containers[0]
+
+	if container.LivenessProbe == nil {
+		t.Fatal("liveness probe should not be nil")
+	}
+	if container.LivenessProbe.Exec == nil {
+		t.Fatal("liveness probe should use exec handler when Tailscale serve is enabled")
+	}
+	if container.LivenessProbe.TCPSocket != nil {
+		t.Error("liveness probe should not use TCPSocket when Tailscale serve is enabled")
+	}
+
+	if container.ReadinessProbe == nil {
+		t.Fatal("readiness probe should not be nil")
+	}
+	if container.ReadinessProbe.Exec == nil {
+		t.Fatal("readiness probe should use exec handler when Tailscale serve is enabled")
+	}
+
+	if container.StartupProbe == nil {
+		t.Fatal("startup probe should not be nil")
+	}
+	if container.StartupProbe.Exec == nil {
+		t.Fatal("startup probe should use exec handler when Tailscale serve is enabled")
+	}
+
+	// Verify exec command targets localhost
+	cmd := strings.Join(container.LivenessProbe.Exec.Command, " ")
+	if !strings.Contains(cmd, "127.0.0.1") {
+		t.Errorf("exec probe should target 127.0.0.1, got command: %s", cmd)
+	}
+	if !strings.Contains(cmd, fmt.Sprintf("%d", GatewayPort)) {
+		t.Errorf("exec probe should target port %d, got command: %s", GatewayPort, cmd)
+	}
+}
+
+func TestBuildStatefulSet_TailscaleDisabled_UsesTCPSocketProbes(t *testing.T) {
+	instance := newTestInstance("ts-tcp-probes")
+	// Tailscale not enabled
+
+	sts := BuildStatefulSet(instance, "hash")
+	container := sts.Spec.Template.Spec.Containers[0]
+
+	if container.LivenessProbe == nil {
+		t.Fatal("liveness probe should not be nil")
+	}
+	if container.LivenessProbe.TCPSocket == nil {
+		t.Fatal("liveness probe should use TCPSocket when Tailscale is disabled")
+	}
+	if container.LivenessProbe.Exec != nil {
+		t.Error("liveness probe should not use exec when Tailscale is disabled")
+	}
+
+	if container.ReadinessProbe.TCPSocket == nil {
+		t.Fatal("readiness probe should use TCPSocket when Tailscale is disabled")
+	}
+	if container.StartupProbe.TCPSocket == nil {
+		t.Fatal("startup probe should use TCPSocket when Tailscale is disabled")
+	}
+}
+
+func TestBuildStatefulSet_TailscaleFunnel_UsesExecProbes(t *testing.T) {
+	instance := newTestInstance("ts-funnel-probes")
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.Mode = "funnel"
+
+	sts := BuildStatefulSet(instance, "hash")
+	container := sts.Spec.Template.Spec.Containers[0]
+
+	if container.LivenessProbe.Exec == nil {
+		t.Fatal("liveness probe should use exec handler when Tailscale funnel is enabled")
+	}
+	if container.ReadinessProbe.Exec == nil {
+		t.Fatal("readiness probe should use exec handler when Tailscale funnel is enabled")
+	}
+	if container.StartupProbe.Exec == nil {
+		t.Fatal("startup probe should use exec handler when Tailscale funnel is enabled")
 	}
 }
 

@@ -27,8 +27,8 @@ import (
 )
 
 // BuildConfigMap creates a ConfigMap for the OpenClawInstance configuration.
-// It always injects gateway.bind=lan (so health probes work) and optionally
-// injects gateway.auth credentials when gatewayToken is non-empty.
+// It injects gateway.bind (lan or loopback depending on Tailscale mode) and
+// optionally injects gateway.auth credentials when gatewayToken is non-empty.
 // Uses the inline raw config from the instance spec as the base.
 func BuildConfigMap(instance *openclawv1alpha1.OpenClawInstance, gatewayToken string) *corev1.ConfigMap {
 	// Start with empty config, overlay raw config if present
@@ -69,7 +69,7 @@ func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseCo
 			configBytes = enriched
 		}
 	}
-	if enriched, err := enrichConfigWithGatewayBind(configBytes); err == nil {
+	if enriched, err := enrichConfigWithGatewayBind(configBytes, instance); err == nil {
 		configBytes = enriched
 	}
 
@@ -236,11 +236,13 @@ func enrichConfigWithBrowser(configJSON []byte) ([]byte, error) {
 	return json.Marshal(config)
 }
 
-// enrichConfigWithGatewayBind injects gateway.bind=lan into the config JSON
-// so that the gateway listens on the pod IP (required for TCPSocket health
-// probes). If the user has already set gateway.bind, the config is returned
+// enrichConfigWithGatewayBind injects gateway.bind into the config JSON.
+// When Tailscale serve/funnel is active, sets bind=loopback (required by
+// the OpenClaw gateway for Tailscale modes). Otherwise sets bind=lan so
+// the gateway listens on the pod IP (required for TCPSocket health probes).
+// If the user has already set gateway.bind, the config is returned
 // unchanged (user override wins).
-func enrichConfigWithGatewayBind(configJSON []byte) ([]byte, error) {
+func enrichConfigWithGatewayBind(configJSON []byte, instance *openclawv1alpha1.OpenClawInstance) ([]byte, error) {
 	var config map[string]interface{}
 	if err := json.Unmarshal(configJSON, &config); err != nil {
 		return configJSON, nil // not a JSON object, return unchanged
@@ -256,7 +258,12 @@ func enrichConfigWithGatewayBind(configJSON []byte) ([]byte, error) {
 		return configJSON, nil
 	}
 
-	gw["bind"] = "lan"
+	bindValue := GatewayBindLAN
+	if IsTailscaleServeOrFunnel(instance) {
+		bindValue = GatewayBindLoopback
+	}
+
+	gw["bind"] = bindValue
 	config["gateway"] = gw
 
 	return json.Marshal(config)
