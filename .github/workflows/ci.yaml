@@ -62,6 +62,15 @@ jobs:
       - name: Check Helm chart RBAC matches kubebuilder markers
         run: bash hack/check-helm-rbac-sync.sh
 
+  helm-crd-sync:
+    name: Helm CRD Sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Helm chart CRD templates match generated CRDs
+        run: bash hack/sync-chart-crds.sh --check
+
   test:
     name: Test
     runs-on: ubuntu-latest
