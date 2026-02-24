@@ -455,7 +455,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			Expect(json.Unmarshal([]byte(configContent), &parsed)).To(Succeed())
 			gw, ok := parsed["gateway"].(map[string]interface{})
 			Expect(ok).To(BeTrue(), "config should have gateway key")
-			Expect(gw["bind"]).To(Equal("lan"), "gateway.bind should be lan")
+			Expect(gw["bind"]).To(Equal("loopback"), "gateway.bind should be loopback")
 
 			// Clean up via owner-reference garbage collection
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
@@ -1398,8 +1398,8 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			out, err := kubectlExec(namespace, podName,
 				"cat", "/home/openclaw/.openclaw/openclaw.json")
 			Expect(err).NotTo(HaveOccurred(), "should read config file: %s", out)
-			Expect(out).To(ContainSubstring(`"lan"`),
-				"config should contain gateway.bind=lan from operator enrichment")
+			Expect(out).To(ContainSubstring(`"loopback"`),
+				"config should contain gateway.bind=loopback from operator enrichment")
 
 			// Corrupt the config file on the PVC
 			_, err = kubectlExec(namespace, podName,
@@ -1479,8 +1479,8 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				"cat", "/home/openclaw/.openclaw/openclaw.json")
 			Expect(err).NotTo(HaveOccurred(),
 				"should read config after restart: %s", out)
-			Expect(out).To(ContainSubstring(`"lan"`),
-				"gateway.bind=lan should be restored by postStart hook")
+			Expect(out).To(ContainSubstring(`"loopback"`),
+				"gateway.bind=loopback should be restored by postStart hook")
 			Expect(out).NotTo(ContainSubstring("corrupted"),
 				"corrupted content should be overwritten by postStart hook")
 
@@ -1566,7 +1566,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			// Gateway auth should be injected
 			gw, ok := parsed["gateway"].(map[string]interface{})
 			Expect(ok).To(BeTrue(), "config should have gateway key")
-			Expect(gw["bind"]).To(Equal("lan"), "gateway.bind should be lan")
+			Expect(gw["bind"]).To(Equal("loopback"), "gateway.bind should be loopback")
 			auth, ok := gw["auth"].(map[string]interface{})
 			Expect(ok).To(BeTrue(), "gateway should have auth key (injected by operator)")
 			Expect(auth["mode"]).To(Equal("token"), "gateway.auth.mode should be token")
