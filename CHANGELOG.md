@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.5](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.4...v0.10.5) (2026-02-24)
+
+
+### Features
+
+* add Tailscale sidecar for working tailnet integration ([#177](https://github.com/openclaw-rocks/k8s-operator/issues/177)) ([d956925](https://github.com/openclaw-rocks/k8s-operator/commit/d956925bb60437aa67ff82f961228933e286e0fc))
+
 ## [0.10.4](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.3...v0.10.4) (2026-02-24)
 
 
