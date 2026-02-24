@@ -817,7 +817,11 @@ func (in *OpenClawInstanceSpec) DeepCopyInto(out *OpenClawInstanceSpec) {
 		}
 	}
 	in.Networking.DeepCopyInto(&out.Networking)
-	in.Probes.DeepCopyInto(&out.Probes)
+	if in.Probes != nil {
+		in, out := &in.Probes, &out.Probes
+		*out = new(ProbesSpec)
+		(*in).DeepCopyInto(*out)
+	}
 	in.Observability.DeepCopyInto(&out.Observability)
 	in.Availability.DeepCopyInto(&out.Availability)
 	out.RuntimeDeps = in.RuntimeDeps

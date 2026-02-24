@@ -101,7 +101,7 @@ type OpenClawInstanceSpec struct {
 
 	// Probes configures health probes for the OpenClaw container
 	// +optional
-	Probes ProbesSpec `json:"probes,omitempty"`
+	Probes *ProbesSpec `json:"probes,omitempty"`
 
 	// Observability configures metrics and logging
 	// +optional

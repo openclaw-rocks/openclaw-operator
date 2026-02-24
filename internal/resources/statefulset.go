@@ -1742,7 +1742,10 @@ func buildProbeHandler(_ *openclawv1alpha1.OpenClawInstance) corev1.ProbeHandler
 
 // buildLivenessProbe creates the liveness probe
 func buildLivenessProbe(instance *openclawv1alpha1.OpenClawInstance) *corev1.Probe {
-	spec := instance.Spec.Probes.Liveness
+	var spec *openclawv1alpha1.ProbeSpec
+	if instance.Spec.Probes != nil {
+		spec = instance.Spec.Probes.Liveness
+	}
 	if spec != nil && spec.Enabled != nil && !*spec.Enabled {
 		return nil
 	}
@@ -1776,7 +1779,10 @@ func buildLivenessProbe(instance *openclawv1alpha1.OpenClawInstance) *corev1.Pro
 
 // buildReadinessProbe creates the readiness probe
 func buildReadinessProbe(instance *openclawv1alpha1.OpenClawInstance) *corev1.Probe {
-	spec := instance.Spec.Probes.Readiness
+	var spec *openclawv1alpha1.ProbeSpec
+	if instance.Spec.Probes != nil {
+		spec = instance.Spec.Probes.Readiness
+	}
 	if spec != nil && spec.Enabled != nil && !*spec.Enabled {
 		return nil
 	}
@@ -1810,7 +1816,10 @@ func buildReadinessProbe(instance *openclawv1alpha1.OpenClawInstance) *corev1.Pr
 
 // buildStartupProbe creates the startup probe
 func buildStartupProbe(instance *openclawv1alpha1.OpenClawInstance) *corev1.Probe {
-	spec := instance.Spec.Probes.Startup
+	var spec *openclawv1alpha1.ProbeSpec
+	if instance.Spec.Probes != nil {
+		spec = instance.Spec.Probes.Startup
+	}
 	if spec != nil && spec.Enabled != nil && !*spec.Enabled {
 		return nil
 	}

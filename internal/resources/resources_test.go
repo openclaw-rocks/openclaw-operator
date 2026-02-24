@@ -587,7 +587,7 @@ func TestBuildStatefulSet_ImageDigest(t *testing.T) {
 
 func TestBuildStatefulSet_ProbesDisabled(t *testing.T) {
 	instance := newTestInstance("probes-disabled")
-	instance.Spec.Probes = openclawv1alpha1.ProbesSpec{
+	instance.Spec.Probes = &openclawv1alpha1.ProbesSpec{
 		Liveness: &openclawv1alpha1.ProbeSpec{
 			Enabled: Ptr(false),
 		},
@@ -615,7 +615,7 @@ func TestBuildStatefulSet_ProbesDisabled(t *testing.T) {
 
 func TestBuildStatefulSet_CustomProbeValues(t *testing.T) {
 	instance := newTestInstance("probes-custom")
-	instance.Spec.Probes = openclawv1alpha1.ProbesSpec{
+	instance.Spec.Probes = &openclawv1alpha1.ProbesSpec{
 		Liveness: &openclawv1alpha1.ProbeSpec{
 			InitialDelaySeconds: Ptr(int32(60)),
 			PeriodSeconds:       Ptr(int32(20)),

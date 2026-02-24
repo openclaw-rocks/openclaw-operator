@@ -1407,7 +1407,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
-					Probes: openclawv1alpha1.ProbesSpec{
+					Probes: &openclawv1alpha1.ProbesSpec{
 						Liveness:  &openclawv1alpha1.ProbeSpec{Enabled: &falseVal},
 						Readiness: &openclawv1alpha1.ProbeSpec{Enabled: &falseVal},
 						Startup:   &openclawv1alpha1.ProbeSpec{Enabled: &falseVal},
