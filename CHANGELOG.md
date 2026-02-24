@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.6](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.5...v0.10.6) (2026-02-24)
+
+
+### Bug Fixes
+
+* make Probes a pointer type to accept null/omitted values ([#181](https://github.com/openclaw-rocks/k8s-operator/issues/181)) ([df42069](https://github.com/openclaw-rocks/k8s-operator/commit/df42069191e451a756ced3b74faaed3cf44acab0)), closes [#179](https://github.com/openclaw-rocks/k8s-operator/issues/179)
+
 ## [0.10.5](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.4...v0.10.5) (2026-02-24)
 
 
