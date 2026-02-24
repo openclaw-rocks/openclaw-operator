@@ -78,11 +78,11 @@ func networkPolicyIngressPorts(instance *openclawv1alpha1.OpenClawInstance) []ne
 	ports := []networkingv1.NetworkPolicyPort{
 		{
 			Protocol: Ptr(corev1.ProtocolTCP),
-			Port:     Ptr(intstr.FromInt32(int32(GatewayPort))),
+			Port:     Ptr(intstr.FromInt32(int32(GatewayProxyPort))),
 		},
 		{
 			Protocol: Ptr(corev1.ProtocolTCP),
-			Port:     Ptr(intstr.FromInt32(int32(CanvasPort))),
+			Port:     Ptr(intstr.FromInt32(int32(CanvasProxyPort))),
 		},
 	}
 

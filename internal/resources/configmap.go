@@ -27,8 +27,9 @@ import (
 )
 
 // BuildConfigMap creates a ConfigMap for the OpenClawInstance configuration.
-// It injects gateway.bind (lan or loopback depending on Tailscale mode) and
-// optionally injects gateway.auth credentials when gatewayToken is non-empty.
+// It always sets gateway.bind=loopback (the proxy sidecar handles external
+// access) and optionally injects gateway.auth credentials when gatewayToken
+// is non-empty. Also includes the nginx stream config for the proxy sidecar.
 // Uses the inline raw config from the instance spec as the base.
 func BuildConfigMap(instance *openclawv1alpha1.OpenClawInstance, gatewayToken string) *corev1.ConfigMap {
 	// Start with empty config, overlay raw config if present
@@ -91,6 +92,7 @@ func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseCo
 		},
 		Data: map[string]string{
 			"openclaw.json": configContent,
+			NginxConfigKey:  nginxStreamConfig(),
 		},
 	}
 }
@@ -236,13 +238,12 @@ func enrichConfigWithBrowser(configJSON []byte) ([]byte, error) {
 	return json.Marshal(config)
 }
 
-// enrichConfigWithGatewayBind injects gateway.bind into the config JSON.
-// When Tailscale serve/funnel is active, sets bind=loopback (required by
-// the OpenClaw gateway for Tailscale modes). Otherwise sets bind=lan so
-// the gateway listens on the pod IP (required for TCPSocket health probes).
-// If the user has already set gateway.bind, the config is returned
-// unchanged (user override wins).
+// enrichConfigWithGatewayBind injects gateway.bind=loopback into the config
+// JSON. The gateway proxy sidecar handles external access, so the gateway
+// process always binds to loopback. If the user has already set gateway.bind,
+// the config is returned unchanged (user override wins).
 func enrichConfigWithGatewayBind(configJSON []byte, instance *openclawv1alpha1.OpenClawInstance) ([]byte, error) {
+	_ = instance // signature kept for enrichment pipeline consistency
 	var config map[string]interface{}
 	if err := json.Unmarshal(configJSON, &config); err != nil {
 		return configJSON, nil // not a JSON object, return unchanged
@@ -258,13 +259,29 @@ func enrichConfigWithGatewayBind(configJSON []byte, instance *openclawv1alpha1.O
 		return configJSON, nil
 	}
 
-	bindValue := GatewayBindLAN
-	if IsTailscaleServeOrFunnel(instance) {
-		bindValue = GatewayBindLoopback
-	}
-
-	gw["bind"] = bindValue
+	gw["bind"] = GatewayBindLoopback
 	config["gateway"] = gw
 
 	return json.Marshal(config)
+}
+
+// nginxStreamConfig returns the static nginx stream configuration for the
+// gateway reverse proxy sidecar. It proxies external traffic on dedicated
+// ports to the gateway and canvas processes listening on loopback.
+func nginxStreamConfig() string {
+	return fmt.Sprintf(`worker_processes 1;
+pid /tmp/nginx.pid;
+error_log /dev/stderr warn;
+
+stream {
+    server {
+        listen 0.0.0.0:%d;
+        proxy_pass 127.0.0.1:%d;
+    }
+    server {
+        listen 0.0.0.0:%d;
+        proxy_pass 127.0.0.1:%d;
+    }
+}
+`, GatewayProxyPort, GatewayPort, CanvasProxyPort, CanvasPort)
 }

@@ -117,7 +117,8 @@ Every request is validated against the instance's allowlist policy. Protected co
 |  | Init: config -> pnpm* -> python* -> skills* -> custom      | |
 |  |                                        (* = opt-in)        | |
 |  +------------------------------------------------------------+ |
-|  | OpenClaw Container  Chromium (opt) / Ollama (opt)          | |
+|  | OpenClaw Container  Gateway Proxy (nginx)                  | |
+|  |                     Chromium (opt) / Ollama (opt)          | |
 |  |                     Tailscale (opt) + custom sidecars      | |
 |  +------------------------------------------------------------+ |
 |                                                                 |
@@ -528,7 +529,7 @@ These behaviors are always applied - no configuration needed:
 
 | Behavior | Details |
 |----------|---------|
-| `gateway.bind=lan` | Always injected into config so health probes can reach the gateway |
+| `gateway.bind=loopback` | Always injected into config; an nginx reverse proxy sidecar exposes the gateway and canvas ports for external access |
 | Gateway auth token | Auto-generated Secret per instance; injected into config and env |
 | `OPENCLAW_DISABLE_BONJOUR=1` | Always set (mDNS does not work in Kubernetes) |
 | Browser profiles | When Chromium is enabled, `"default"` and `"chrome"` profiles are auto-configured with the sidecar's CDP endpoint |

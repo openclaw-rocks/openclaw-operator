@@ -79,13 +79,13 @@ func buildServicePorts(instance *openclawv1alpha1.OpenClawInstance) []corev1.Ser
 		{
 			Name:       "gateway",
 			Port:       int32(GatewayPort),
-			TargetPort: intstr.FromInt32(int32(GatewayPort)),
+			TargetPort: intstr.FromInt32(int32(GatewayProxyPort)),
 			Protocol:   corev1.ProtocolTCP,
 		},
 		{
 			Name:       "canvas",
 			Port:       int32(CanvasPort),
-			TargetPort: intstr.FromInt32(int32(CanvasPort)),
+			TargetPort: intstr.FromInt32(int32(CanvasProxyPort)),
 			Protocol:   corev1.ProtocolTCP,
 		},
 	}

@@ -456,11 +456,13 @@ Network-related configuration for the instance.
 
 When `ports` is not set, the Service exposes these default ports:
 
-| Port Name   | Port   | Description                     |
-|-------------|--------|---------------------------------|
-| `gateway`   | 18789  | OpenClaw WebSocket gateway.     |
-| `canvas`    | 18793  | OpenClaw Canvas HTTP server.    |
-| `chromium`  | 9222   | Chrome DevTools Protocol (only if Chromium sidecar is enabled). |
+| Port Name   | Port   | Target Port | Description                     |
+|-------------|--------|-------------|---------------------------------|
+| `gateway`   | 18789  | 18790       | OpenClaw WebSocket gateway (via nginx proxy sidecar). |
+| `canvas`    | 18793  | 18794       | OpenClaw Canvas HTTP server (via nginx proxy sidecar). |
+| `chromium`  | 9222   | 9222        | Chrome DevTools Protocol (only if Chromium sidecar is enabled). |
+
+The gateway and canvas ports route through an nginx reverse proxy sidecar because the gateway process binds to loopback (`127.0.0.1`). The proxy listens on dedicated ports (`0.0.0.0`) and forwards traffic to loopback. This avoids CWE-319 plaintext WebSocket security errors on non-loopback addresses.
 
 **Note:** Custom ports fully replace the defaults, including the Chromium port. If you use custom ports and have the Chromium sidecar enabled, include the Chromium port (9222) explicitly.
 

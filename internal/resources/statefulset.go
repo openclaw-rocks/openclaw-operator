@@ -28,7 +28,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/intstr"
 
 	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
 )
@@ -182,6 +181,7 @@ func buildContainerSecurityContext(instance *openclawv1alpha1.OpenClawInstance) 
 func buildContainers(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecretName string) []corev1.Container {
 	containers := []corev1.Container{
 		buildMainContainer(instance, gatewayTokenSecretName),
+		buildGatewayProxyContainer(instance),
 	}
 
 	// Add Chromium sidecar if enabled
@@ -826,6 +826,64 @@ func configMapKey(_ *openclawv1alpha1.OpenClawInstance) string {
 	return "openclaw.json"
 }
 
+// buildGatewayProxyContainer creates the nginx reverse proxy sidecar that
+// exposes the loopback-bound gateway and canvas ports for external access.
+func buildGatewayProxyContainer(_ *openclawv1alpha1.OpenClawInstance) corev1.Container {
+	return corev1.Container{
+		Name:            "gateway-proxy",
+		Image:           DefaultGatewayProxyImage,
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Ports: []corev1.ContainerPort{
+			{
+				Name:          "gw-proxy",
+				ContainerPort: GatewayProxyPort,
+				Protocol:      corev1.ProtocolTCP,
+			},
+			{
+				Name:          "canvas-proxy",
+				ContainerPort: CanvasProxyPort,
+				Protocol:      corev1.ProtocolTCP,
+			},
+		},
+		VolumeMounts: []corev1.VolumeMount{
+			{
+				Name:      "config",
+				MountPath: "/etc/nginx/nginx.conf",
+				SubPath:   NginxConfigKey,
+				ReadOnly:  true,
+			},
+			{
+				Name:      "gateway-proxy-tmp",
+				MountPath: "/tmp",
+			},
+		},
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("10m"),
+				corev1.ResourceMemory: resource.MustParse("16Mi"),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("100m"),
+				corev1.ResourceMemory: resource.MustParse("64Mi"),
+			},
+		},
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: Ptr(false),
+			ReadOnlyRootFilesystem:   Ptr(true),
+			RunAsNonRoot:             Ptr(true),
+			RunAsUser:                Ptr(int64(101)), // nginx user in alpine
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+			SeccompProfile: &corev1.SeccompProfile{
+				Type: corev1.SeccompProfileTypeRuntimeDefault,
+			},
+		},
+		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
+		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+	}
+}
+
 // buildChromiumContainer creates the Chromium sidecar container
 func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
 	repo := instance.Spec.Chromium.Image.Repository
@@ -1291,13 +1349,22 @@ func buildVolumes(instance *openclawv1alpha1.OpenClawInstance) []corev1.Volume {
 		})
 	}
 
-	// Tmp volume for main container (read-only rootfs needs a writable /tmp)
-	volumes = append(volumes, corev1.Volume{
-		Name: "tmp",
-		VolumeSource: corev1.VolumeSource{
-			EmptyDir: &corev1.EmptyDirVolumeSource{},
+	// Tmp volumes: main container (read-only rootfs needs writable /tmp)
+	// and gateway proxy (nginx pid file)
+	volumes = append(volumes,
+		corev1.Volume{
+			Name: "tmp",
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
 		},
-	})
+		corev1.Volume{
+			Name: "gateway-proxy-tmp",
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		},
+	)
 
 	// Chromium volumes
 	if instance.Spec.Chromium.Enabled {
@@ -1466,25 +1533,18 @@ func buildChromiumResourceRequirements(instance *openclawv1alpha1.OpenClawInstan
 	return req
 }
 
-// buildProbeHandler returns a TCPSocket handler by default, or an exec-based
-// handler when Tailscale serve/funnel is active. In loopback mode the gateway
-// binds to 127.0.0.1, which is unreachable from the kubelet via TCPSocket
-// probes (they connect to the pod IP). Exec probes run inside the container
-// and can reach localhost.
-func buildProbeHandler(instance *openclawv1alpha1.OpenClawInstance) corev1.ProbeHandler {
-	if IsTailscaleServeOrFunnel(instance) {
-		return corev1.ProbeHandler{
-			Exec: &corev1.ExecAction{
-				Command: []string{
-					"sh", "-c",
-					fmt.Sprintf("wget -q --spider --timeout=2 http://127.0.0.1:%d/", GatewayPort),
-				},
-			},
-		}
-	}
+// buildProbeHandler returns an exec-based probe handler that checks the
+// gateway on loopback. The gateway always binds to 127.0.0.1 (the proxy
+// sidecar handles external access), which is unreachable from the kubelet
+// via TCPSocket probes (they connect to the pod IP). Exec probes run inside
+// the container and can reach localhost.
+func buildProbeHandler(_ *openclawv1alpha1.OpenClawInstance) corev1.ProbeHandler {
 	return corev1.ProbeHandler{
-		TCPSocket: &corev1.TCPSocketAction{
-			Port: intstr.FromInt(GatewayPort),
+		Exec: &corev1.ExecAction{
+			Command: []string{
+				"sh", "-c",
+				fmt.Sprintf("wget -q --spider --timeout=2 http://127.0.0.1:%d/", GatewayPort),
+			},
 		},
 	}
 }

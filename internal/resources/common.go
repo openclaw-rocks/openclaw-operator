@@ -27,6 +27,21 @@ const (
 	// CanvasPort is the port for the OpenClaw canvas HTTP server
 	CanvasPort = 18793
 
+	// GatewayProxyPort is the port the nginx reverse proxy listens on for
+	// gateway traffic. The Service targets this port instead of GatewayPort
+	// because the gateway binds to loopback only.
+	GatewayProxyPort = 18790
+
+	// CanvasProxyPort is the port the nginx reverse proxy listens on for
+	// canvas traffic. The Service targets this port instead of CanvasPort.
+	CanvasProxyPort = 18794
+
+	// DefaultGatewayProxyImage is the default image for the gateway proxy sidecar
+	DefaultGatewayProxyImage = "nginx:1.27-alpine"
+
+	// NginxConfigKey is the ConfigMap data key for the nginx stream config
+	NginxConfigKey = "nginx.conf"
+
 	// ChromiumPort is the port declared on the container (metadata only).
 	// The browserless image actually listens on BrowserlessCDPPort.
 	ChromiumPort = 9222
@@ -78,11 +93,10 @@ const (
 	// TailscaleModeFunnel exposes the instance to the public internet via Tailscale Funnel
 	TailscaleModeFunnel = "funnel"
 
-	// GatewayBindLoopback is the bind value for loopback mode (required for Tailscale serve/funnel)
+	// GatewayBindLoopback is the bind value for loopback mode. The gateway
+	// proxy sidecar handles external access; binding to loopback prevents
+	// CWE-319 plaintext ws:// errors on non-loopback addresses.
 	GatewayBindLoopback = "loopback"
-
-	// GatewayBindLAN is the default bind value for LAN mode (pod IP, required for TCPSocket probes)
-	GatewayBindLAN = "lan"
 
 	// DefaultMetricsPort is the default port for the Prometheus metrics endpoint
 	DefaultMetricsPort int32 = 9090
@@ -196,16 +210,6 @@ func GetImage(instance *openclawv1alpha1.OpenClawInstance) string {
 		return repo + "@" + instance.Spec.Image.Digest
 	}
 	return repo + ":" + GetImageTag(instance)
-}
-
-// IsTailscaleServeOrFunnel returns true when Tailscale is enabled with serve
-// or funnel mode. Both modes require gateway.bind=loopback.
-func IsTailscaleServeOrFunnel(instance *openclawv1alpha1.OpenClawInstance) bool {
-	if !instance.Spec.Tailscale.Enabled {
-		return false
-	}
-	mode := instance.Spec.Tailscale.Mode
-	return mode == "" || mode == TailscaleModeServe || mode == TailscaleModeFunnel
 }
 
 // IsMetricsEnabled returns true if the metrics endpoint is enabled for the instance

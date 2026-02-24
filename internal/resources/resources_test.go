@@ -302,10 +302,10 @@ func TestBuildStatefulSet_Defaults(t *testing.T) {
 		t.Error("pod security context: seccomp profile should be RuntimeDefault")
 	}
 
-	// Containers
+	// Containers (main + gateway-proxy)
 	containers := sts.Spec.Template.Spec.Containers
-	if len(containers) != 1 {
-		t.Fatalf("expected 1 container, got %d", len(containers))
+	if len(containers) != 2 {
+		t.Fatalf("expected 2 containers (main + gateway-proxy), got %d", len(containers))
 	}
 
 	main := containers[0]
@@ -379,12 +379,16 @@ func TestBuildStatefulSet_Defaults(t *testing.T) {
 		t.Error("startup probe should not be nil by default")
 	}
 
-	// Liveness probe defaults
-	if main.LivenessProbe.TCPSocket == nil {
-		t.Fatal("liveness probe should use TCPSocket")
+	// Liveness probe defaults (always exec since gateway binds to loopback)
+	if main.LivenessProbe.Exec == nil {
+		t.Fatal("liveness probe should use exec handler")
 	}
-	if main.LivenessProbe.TCPSocket.Port.IntValue() != GatewayPort {
-		t.Errorf("liveness probe port = %d, want %d", main.LivenessProbe.TCPSocket.Port.IntValue(), GatewayPort)
+	cmd := strings.Join(main.LivenessProbe.Exec.Command, " ")
+	if !strings.Contains(cmd, "127.0.0.1") {
+		t.Errorf("liveness probe should target 127.0.0.1, got command: %s", cmd)
+	}
+	if !strings.Contains(cmd, fmt.Sprintf("%d", GatewayPort)) {
+		t.Errorf("liveness probe should target port %d, got command: %s", GatewayPort, cmd)
 	}
 	if main.LivenessProbe.InitialDelaySeconds != 30 {
 		t.Errorf("liveness probe initialDelaySeconds = %d, want 30", main.LivenessProbe.InitialDelaySeconds)
@@ -427,8 +431,8 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 	sts := BuildStatefulSet(instance)
 	containers := sts.Spec.Template.Spec.Containers
 
-	if len(containers) != 2 {
-		t.Fatalf("expected 2 containers with chromium enabled, got %d", len(containers))
+	if len(containers) != 3 {
+		t.Fatalf("expected 3 containers (main + gateway-proxy + chromium), got %d", len(containers))
 	}
 
 	// Find chromium container
@@ -1113,8 +1117,8 @@ func TestBuildService_Default(t *testing.T) {
 		t.Fatalf("expected 3 ports, got %d", len(svc.Spec.Ports))
 	}
 
-	assertServicePort(t, svc.Spec.Ports, "gateway", int32(GatewayPort))
-	assertServicePort(t, svc.Spec.Ports, "canvas", int32(CanvasPort))
+	assertServicePortWithTarget(t, svc.Spec.Ports, "gateway", int32(GatewayPort), int32(GatewayProxyPort))
+	assertServicePortWithTarget(t, svc.Spec.Ports, "canvas", int32(CanvasPort), int32(CanvasProxyPort))
 	assertServicePort(t, svc.Spec.Ports, "metrics", DefaultMetricsPort)
 }
 
@@ -1128,8 +1132,8 @@ func TestBuildService_WithChromium(t *testing.T) {
 		t.Fatalf("expected 4 ports with chromium, got %d", len(svc.Spec.Ports))
 	}
 
-	assertServicePort(t, svc.Spec.Ports, "gateway", int32(GatewayPort))
-	assertServicePort(t, svc.Spec.Ports, "canvas", int32(CanvasPort))
+	assertServicePortWithTarget(t, svc.Spec.Ports, "gateway", int32(GatewayPort), int32(GatewayProxyPort))
+	assertServicePortWithTarget(t, svc.Spec.Ports, "canvas", int32(CanvasPort), int32(CanvasProxyPort))
 	assertServicePort(t, svc.Spec.Ports, "chromium", int32(ChromiumPort))
 	assertServicePort(t, svc.Spec.Ports, "metrics", DefaultMetricsPort)
 }
@@ -1330,12 +1334,12 @@ func TestBuildNetworkPolicy_Default(t *testing.T) {
 		t.Errorf("ingress namespace selector = %v, want test-ns", nsSel.MatchLabels)
 	}
 
-	// Ingress ports - gateway and canvas
+	// Ingress ports - gateway proxy and canvas proxy
 	if len(firstIngress.Ports) != 2 {
 		t.Fatalf("expected 2 ingress ports, got %d", len(firstIngress.Ports))
 	}
-	assertNPPort(t, firstIngress.Ports, GatewayPort)
-	assertNPPort(t, firstIngress.Ports, CanvasPort)
+	assertNPPort(t, firstIngress.Ports, GatewayProxyPort)
+	assertNPPort(t, firstIngress.Ports, CanvasProxyPort)
 
 	// Egress rules - DNS (UDP+TCP 53) and HTTPS (443)
 	if len(np.Spec.Egress) < 2 {
@@ -1797,8 +1801,8 @@ func TestBuildConfigMap_Default(t *testing.T) {
 	if !ok {
 		t.Fatal("expected gateway key in default config")
 	}
-	if gw["bind"] != "lan" {
-		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "lan")
+	if gw["bind"] != "loopback" {
+		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "loopback")
 	}
 }
 
@@ -1852,8 +1856,8 @@ func TestBuildConfigMap_InvalidJSON_RawPreserved(t *testing.T) {
 	if !ok {
 		t.Fatal("expected gateway key after enrichment")
 	}
-	if gw["bind"] != "lan" {
-		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "lan")
+	if gw["bind"] != "loopback" {
+		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "loopback")
 	}
 }
 
@@ -1895,8 +1899,8 @@ func TestBuildConfigMapFromBytes_EnrichesExternalConfig(t *testing.T) {
 	}
 
 	// Verify gateway.bind was injected
-	if gw["bind"] != "lan" {
-		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "lan")
+	if gw["bind"] != "loopback" {
+		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "loopback")
 	}
 }
 
@@ -1943,8 +1947,8 @@ func TestBuildConfigMapFromBytes_EmptyBytes(t *testing.T) {
 	if !ok {
 		t.Fatal("expected gateway key even with empty base config")
 	}
-	if gw["bind"] != "lan" {
-		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "lan")
+	if gw["bind"] != "loopback" {
+		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "loopback")
 	}
 }
 
@@ -1983,8 +1987,8 @@ func TestEnrichConfigWithGatewayBind(t *testing.T) {
 	if !ok {
 		t.Fatal("expected gateway key")
 	}
-	if gw["bind"] != "lan" {
-		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "lan")
+	if gw["bind"] != "loopback" {
+		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "loopback")
 	}
 }
 
@@ -2021,8 +2025,8 @@ func TestEnrichConfigWithGatewayBind_PreservesOtherFields(t *testing.T) {
 	}
 
 	gw := cfg["gateway"].(map[string]interface{})
-	if gw["bind"] != "lan" {
-		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "lan")
+	if gw["bind"] != "loopback" {
+		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "loopback")
 	}
 	auth, ok := gw["auth"].(map[string]interface{})
 	if !ok {
@@ -2066,8 +2070,8 @@ func TestBuildConfigMap_RawConfig_GatewayBindInjected(t *testing.T) {
 	if !ok {
 		t.Fatal("expected gateway key injected into raw config")
 	}
-	if gw["bind"] != "lan" {
-		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "lan")
+	if gw["bind"] != "loopback" {
+		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "loopback")
 	}
 	// Original data preserved
 	if _, ok := parsed["mcpServers"]; !ok {
@@ -3001,6 +3005,25 @@ func assertServicePort(t *testing.T, ports []corev1.ServicePort, name string, ex
 			}
 			if p.TargetPort.IntValue() != int(expectedPort) {
 				t.Errorf("service target port %q = %d, want %d", name, p.TargetPort.IntValue(), expectedPort)
+			}
+			if p.Protocol != corev1.ProtocolTCP {
+				t.Errorf("service port %q protocol = %v, want TCP", name, p.Protocol)
+			}
+			return
+		}
+	}
+	t.Errorf("service port %q not found", name)
+}
+
+func assertServicePortWithTarget(t *testing.T, ports []corev1.ServicePort, name string, expectedPort, expectedTargetPort int32) {
+	t.Helper()
+	for _, p := range ports {
+		if p.Name == name {
+			if p.Port != expectedPort {
+				t.Errorf("service port %q = %d, want %d", name, p.Port, expectedPort)
+			}
+			if p.TargetPort.IntValue() != int(expectedTargetPort) {
+				t.Errorf("service target port %q = %d, want %d", name, p.TargetPort.IntValue(), expectedTargetPort)
 			}
 			if p.Protocol != corev1.ProtocolTCP {
 				t.Errorf("service port %q protocol = %v, want TCP", name, p.Protocol)
@@ -4181,9 +4204,9 @@ func TestBuildConfigMap_WithGatewayToken_NoRawConfig(t *testing.T) {
 	if auth["token"] != token {
 		t.Errorf("gateway.auth.token = %v, want %q", auth["token"], token)
 	}
-	// bind=lan should also be present
-	if gw["bind"] != "lan" {
-		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "lan")
+	// bind=loopback should also be present
+	if gw["bind"] != "loopback" {
+		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "loopback")
 	}
 }
 
@@ -4208,8 +4231,8 @@ func TestBuildConfigMap_EmptyGatewayToken(t *testing.T) {
 	if !ok {
 		t.Fatal("expected gateway key (bind is always injected)")
 	}
-	if gw["bind"] != "lan" {
-		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "lan")
+	if gw["bind"] != "loopback" {
+		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "loopback")
 	}
 	if _, ok := gw["auth"]; ok {
 		t.Error("gateway.auth should not be present when token is empty")
@@ -5594,9 +5617,9 @@ func TestBuildConfigMap_TailscaleDefaultMode_SetsLoopbackBind(t *testing.T) {
 	}
 }
 
-func TestBuildConfigMap_TailscaleDisabled_SetsLanBind(t *testing.T) {
-	instance := newTestInstance("ts-lan-disabled")
-	// Tailscale not enabled
+func TestBuildConfigMap_AlwaysSetsLoopbackBind(t *testing.T) {
+	instance := newTestInstance("always-loopback")
+	// Tailscale not enabled - should still set loopback (proxy handles external access)
 
 	cm := BuildConfigMap(instance, "")
 	content := cm.Data["openclaw.json"]
@@ -5607,8 +5630,8 @@ func TestBuildConfigMap_TailscaleDisabled_SetsLanBind(t *testing.T) {
 	}
 
 	gw := parsed["gateway"].(map[string]interface{})
-	if gw["bind"] != "lan" {
-		t.Errorf("gateway.bind = %v, want %q when Tailscale is disabled", gw["bind"], "lan")
+	if gw["bind"] != "loopback" {
+		t.Errorf("gateway.bind = %v, want %q (always loopback with proxy sidecar)", gw["bind"], "loopback")
 	}
 }
 
@@ -5678,9 +5701,9 @@ func TestBuildStatefulSet_TailscaleServe_UsesExecProbes(t *testing.T) {
 	}
 }
 
-func TestBuildStatefulSet_TailscaleDisabled_UsesTCPSocketProbes(t *testing.T) {
-	instance := newTestInstance("ts-tcp-probes")
-	// Tailscale not enabled
+func TestBuildStatefulSet_AlwaysUsesExecProbes(t *testing.T) {
+	instance := newTestInstance("always-exec-probes")
+	// Tailscale not enabled - probes should still use exec (gateway always on loopback)
 
 	sts := BuildStatefulSet(instance, "hash")
 	container := sts.Spec.Template.Spec.Containers[0]
@@ -5688,18 +5711,18 @@ func TestBuildStatefulSet_TailscaleDisabled_UsesTCPSocketProbes(t *testing.T) {
 	if container.LivenessProbe == nil {
 		t.Fatal("liveness probe should not be nil")
 	}
-	if container.LivenessProbe.TCPSocket == nil {
-		t.Fatal("liveness probe should use TCPSocket when Tailscale is disabled")
+	if container.LivenessProbe.Exec == nil {
+		t.Fatal("liveness probe should always use exec handler")
 	}
-	if container.LivenessProbe.Exec != nil {
-		t.Error("liveness probe should not use exec when Tailscale is disabled")
+	if container.LivenessProbe.TCPSocket != nil {
+		t.Error("liveness probe should not use TCPSocket")
 	}
 
-	if container.ReadinessProbe.TCPSocket == nil {
-		t.Fatal("readiness probe should use TCPSocket when Tailscale is disabled")
+	if container.ReadinessProbe.Exec == nil {
+		t.Fatal("readiness probe should always use exec handler")
 	}
-	if container.StartupProbe.TCPSocket == nil {
-		t.Fatal("startup probe should use TCPSocket when Tailscale is disabled")
+	if container.StartupProbe.Exec == nil {
+		t.Fatal("startup probe should always use exec handler")
 	}
 }
 
@@ -5876,8 +5899,8 @@ func TestBuildStatefulSet_OllamaEnabled(t *testing.T) {
 	sts := BuildStatefulSet(instance)
 	containers := sts.Spec.Template.Spec.Containers
 
-	if len(containers) != 2 {
-		t.Fatalf("expected 2 containers (main + ollama), got %d", len(containers))
+	if len(containers) != 3 {
+		t.Fatalf("expected 3 containers (main + gateway-proxy + ollama), got %d", len(containers))
 	}
 
 	var ollama *corev1.Container
@@ -6212,8 +6235,8 @@ func TestBuildStatefulSet_OllamaAndChromiumEnabled(t *testing.T) {
 	sts := BuildStatefulSet(instance)
 	containers := sts.Spec.Template.Spec.Containers
 
-	if len(containers) != 3 {
-		t.Fatalf("expected 3 containers (main + chromium + ollama), got %d", len(containers))
+	if len(containers) != 4 {
+		t.Fatalf("expected 4 containers (main + gateway-proxy + chromium + ollama), got %d", len(containers))
 	}
 
 	names := make(map[string]bool)
@@ -7351,8 +7374,8 @@ func TestBuildStatefulSet_WebTerminalEnabled(t *testing.T) {
 	sts := BuildStatefulSet(instance)
 	containers := sts.Spec.Template.Spec.Containers
 
-	if len(containers) != 2 {
-		t.Fatalf("expected 2 containers (main + web-terminal), got %d", len(containers))
+	if len(containers) != 3 {
+		t.Fatalf("expected 3 containers (main + gateway-proxy + web-terminal), got %d", len(containers))
 	}
 
 	var wt *corev1.Container
@@ -7700,10 +7723,29 @@ func TestBuildService_WithWebTerminal(t *testing.T) {
 		t.Fatalf("expected 4 ports with web terminal (gateway, canvas, web-terminal, metrics), got %d", len(svc.Spec.Ports))
 	}
 
-	assertServicePort(t, svc.Spec.Ports, "gateway", int32(GatewayPort))
-	assertServicePort(t, svc.Spec.Ports, "canvas", int32(CanvasPort))
-	assertServicePort(t, svc.Spec.Ports, "web-terminal", int32(WebTerminalPort))
-	assertServicePort(t, svc.Spec.Ports, "metrics", DefaultMetricsPort)
+	// gateway and canvas use proxy targetPorts; web-terminal and metrics are direct
+	for _, p := range svc.Spec.Ports {
+		switch p.Name {
+		case "gateway":
+			if p.Port != int32(GatewayPort) {
+				t.Errorf("gateway port = %d, want %d", p.Port, GatewayPort)
+			}
+			if p.TargetPort.IntValue() != int(GatewayProxyPort) {
+				t.Errorf("gateway targetPort = %d, want %d", p.TargetPort.IntValue(), GatewayProxyPort)
+			}
+		case "canvas":
+			if p.Port != int32(CanvasPort) {
+				t.Errorf("canvas port = %d, want %d", p.Port, CanvasPort)
+			}
+			if p.TargetPort.IntValue() != int(CanvasProxyPort) {
+				t.Errorf("canvas targetPort = %d, want %d", p.TargetPort.IntValue(), CanvasProxyPort)
+			}
+		case "web-terminal":
+			assertServicePort(t, svc.Spec.Ports, "web-terminal", int32(WebTerminalPort))
+		case "metrics":
+			assertServicePort(t, svc.Spec.Ports, "metrics", DefaultMetricsPort)
+		}
+	}
 }
 
 func TestBuildNetworkPolicy_WebTerminalIngressPort(t *testing.T) {
@@ -7759,5 +7801,192 @@ func TestBuildStatefulSet_WebTerminalReadOnlyWithCredential(t *testing.T) {
 	}
 	if !strings.Contains(wt.Command[2], `-c "${TTYD_USERNAME}:${TTYD_PASSWORD}"`) {
 		t.Errorf("command should contain credential flag, got %q", wt.Command[2])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Gateway proxy sidecar tests
+// ---------------------------------------------------------------------------
+
+func TestBuildStatefulSet_HasGatewayProxyContainer(t *testing.T) {
+	instance := newTestInstance("gw-proxy")
+	sts := BuildStatefulSet(instance)
+
+	var proxy *corev1.Container
+	for i := range sts.Spec.Template.Spec.Containers {
+		if sts.Spec.Template.Spec.Containers[i].Name == "gateway-proxy" {
+			proxy = &sts.Spec.Template.Spec.Containers[i]
+			break
+		}
+	}
+	if proxy == nil {
+		t.Fatal("gateway-proxy container not found")
+	}
+
+	// Image
+	if proxy.Image != DefaultGatewayProxyImage {
+		t.Errorf("proxy image = %q, want %q", proxy.Image, DefaultGatewayProxyImage)
+	}
+
+	// Ports
+	if len(proxy.Ports) != 2 {
+		t.Fatalf("expected 2 proxy ports, got %d", len(proxy.Ports))
+	}
+	assertContainerPort(t, proxy.Ports, "gw-proxy", GatewayProxyPort)
+	assertContainerPort(t, proxy.Ports, "canvas-proxy", CanvasProxyPort)
+
+	// Security context
+	sc := proxy.SecurityContext
+	if sc == nil {
+		t.Fatal("proxy security context is nil")
+	}
+	if sc.RunAsNonRoot == nil || !*sc.RunAsNonRoot {
+		t.Error("proxy should run as non-root")
+	}
+	if sc.RunAsUser == nil || *sc.RunAsUser != 101 {
+		t.Errorf("proxy runAsUser = %v, want 101 (nginx)", sc.RunAsUser)
+	}
+	if sc.ReadOnlyRootFilesystem == nil || !*sc.ReadOnlyRootFilesystem {
+		t.Error("proxy should have read-only rootfs")
+	}
+	if sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation {
+		t.Error("proxy should not allow privilege escalation")
+	}
+	if sc.Capabilities == nil || len(sc.Capabilities.Drop) != 1 || sc.Capabilities.Drop[0] != "ALL" {
+		t.Error("proxy should drop ALL capabilities")
+	}
+	if sc.SeccompProfile == nil || sc.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Error("proxy seccomp should be RuntimeDefault")
+	}
+
+	// Volume mounts
+	foundConfig := false
+	foundTmp := false
+	for _, vm := range proxy.VolumeMounts {
+		switch vm.Name {
+		case "config":
+			foundConfig = true
+			if vm.SubPath != NginxConfigKey {
+				t.Errorf("config mount subPath = %q, want %q", vm.SubPath, NginxConfigKey)
+			}
+			if !vm.ReadOnly {
+				t.Error("config mount should be read-only")
+			}
+		case "gateway-proxy-tmp":
+			foundTmp = true
+		}
+	}
+	if !foundConfig {
+		t.Error("proxy should mount config volume")
+	}
+	if !foundTmp {
+		t.Error("proxy should mount gateway-proxy-tmp volume")
+	}
+
+	// Resources
+	cpuReq := proxy.Resources.Requests[corev1.ResourceCPU]
+	if cpuReq.String() != "10m" {
+		t.Errorf("proxy cpu request = %v, want 10m", cpuReq.String())
+	}
+	memReq := proxy.Resources.Requests[corev1.ResourceMemory]
+	if memReq.Cmp(resource.MustParse("16Mi")) != 0 {
+		t.Errorf("proxy memory request = %v, want 16Mi", memReq.String())
+	}
+}
+
+func TestBuildStatefulSet_GatewayProxyTmpVolume(t *testing.T) {
+	instance := newTestInstance("gw-proxy-vol")
+	sts := BuildStatefulSet(instance)
+
+	found := false
+	for _, v := range sts.Spec.Template.Spec.Volumes {
+		if v.Name == "gateway-proxy-tmp" {
+			found = true
+			if v.EmptyDir == nil {
+				t.Error("gateway-proxy-tmp should be an emptyDir volume")
+			}
+			break
+		}
+	}
+	if !found {
+		t.Error("gateway-proxy-tmp volume not found")
+	}
+}
+
+func TestBuildConfigMap_ContainsNginxConfig(t *testing.T) {
+	instance := newTestInstance("nginx-cfg")
+	cm := BuildConfigMap(instance, "")
+
+	nginxConf, ok := cm.Data[NginxConfigKey]
+	if !ok {
+		t.Fatal("ConfigMap should contain nginx.conf key")
+	}
+	if !strings.Contains(nginxConf, fmt.Sprintf("%d", GatewayProxyPort)) {
+		t.Errorf("nginx config should contain proxy port %d", GatewayProxyPort)
+	}
+	if !strings.Contains(nginxConf, fmt.Sprintf("%d", CanvasProxyPort)) {
+		t.Errorf("nginx config should contain canvas proxy port %d", CanvasProxyPort)
+	}
+	if !strings.Contains(nginxConf, fmt.Sprintf("127.0.0.1:%d", GatewayPort)) {
+		t.Errorf("nginx config should proxy to 127.0.0.1:%d", GatewayPort)
+	}
+	if !strings.Contains(nginxConf, fmt.Sprintf("127.0.0.1:%d", CanvasPort)) {
+		t.Errorf("nginx config should proxy to 127.0.0.1:%d", CanvasPort)
+	}
+	if !strings.Contains(nginxConf, "pid /tmp/nginx.pid") {
+		t.Error("nginx config should use /tmp for pid file")
+	}
+}
+
+func TestBuildService_DefaultTargetsProxyPorts(t *testing.T) {
+	instance := newTestInstance("svc-proxy")
+	svc := BuildService(instance)
+
+	for _, port := range svc.Spec.Ports {
+		switch port.Name {
+		case "gateway":
+			if port.Port != int32(GatewayPort) {
+				t.Errorf("gateway service port = %d, want %d", port.Port, GatewayPort)
+			}
+			if port.TargetPort.IntValue() != int(GatewayProxyPort) {
+				t.Errorf("gateway targetPort = %d, want %d (proxy port)", port.TargetPort.IntValue(), GatewayProxyPort)
+			}
+		case "canvas":
+			if port.Port != int32(CanvasPort) {
+				t.Errorf("canvas service port = %d, want %d", port.Port, CanvasPort)
+			}
+			if port.TargetPort.IntValue() != int(CanvasProxyPort) {
+				t.Errorf("canvas targetPort = %d, want %d (proxy port)", port.TargetPort.IntValue(), CanvasProxyPort)
+			}
+		}
+	}
+}
+
+func TestBuildNetworkPolicy_DefaultUsesProxyPorts(t *testing.T) {
+	instance := newTestInstance("np-proxy")
+	np := BuildNetworkPolicy(instance)
+
+	if len(np.Spec.Ingress) == 0 {
+		t.Fatal("expected at least one ingress rule")
+	}
+
+	ports := np.Spec.Ingress[0].Ports
+	foundGW := false
+	foundCanvas := false
+	for _, p := range ports {
+		if p.Port != nil {
+			switch p.Port.IntValue() {
+			case int(GatewayProxyPort):
+				foundGW = true
+			case int(CanvasProxyPort):
+				foundCanvas = true
+			}
+		}
+	}
+	if !foundGW {
+		t.Errorf("NetworkPolicy should allow port %d (gateway proxy)", GatewayProxyPort)
+	}
+	if !foundCanvas {
+		t.Errorf("NetworkPolicy should allow port %d (canvas proxy)", CanvasProxyPort)
 	}
 }
