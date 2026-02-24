@@ -5197,10 +5197,10 @@ func TestConfigHash_ChangesWithRuntimeDeps(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Tailscale integration tests
+// Tailscale sidecar integration tests
 // ---------------------------------------------------------------------------
 
-func TestBuildConfigMap_WithTailscale(t *testing.T) {
+func TestBuildConfigMap_WithTailscale_NoTailscaleConfig(t *testing.T) {
 	instance := newTestInstance("ts-serve")
 	instance.Spec.Tailscale.Enabled = true
 	instance.Spec.Tailscale.Mode = "serve"
@@ -5216,42 +5216,81 @@ func TestBuildConfigMap_WithTailscale(t *testing.T) {
 		t.Fatalf("failed to parse config JSON: %v", err)
 	}
 
+	// Sidecar handles serve/funnel - config should NOT have gateway.tailscale
 	gw, ok := parsed["gateway"].(map[string]interface{})
-	if !ok {
-		t.Fatal("config should have gateway key")
-	}
-
-	ts, ok := gw["tailscale"].(map[string]interface{})
-	if !ok {
-		t.Fatal("gateway should have tailscale key")
-	}
-
-	if ts["mode"] != "serve" {
-		t.Errorf("expected tailscale.mode=serve, got %v", ts["mode"])
-	}
-	if ts["resetOnExit"] != true {
-		t.Errorf("expected tailscale.resetOnExit=true, got %v", ts["resetOnExit"])
+	if ok {
+		if _, hasTailscale := gw["tailscale"]; hasTailscale {
+			t.Error("gateway.tailscale should NOT be set - sidecar handles serve/funnel via TS_SERVE_CONFIG")
+		}
 	}
 }
 
-func TestBuildConfigMap_TailscaleFunnel(t *testing.T) {
-	instance := newTestInstance("ts-funnel")
+func TestBuildConfigMap_TailscaleServeConfig(t *testing.T) {
+	instance := newTestInstance("ts-serve-cfg")
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.Mode = "serve"
+
+	cm := BuildConfigMap(instance, "")
+
+	serveJSON, ok := cm.Data[TailscaleServeConfigKey]
+	if !ok {
+		t.Fatal("ConfigMap should have tailscale-serve.json key when Tailscale is enabled")
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal([]byte(serveJSON), &cfg); err != nil {
+		t.Fatalf("failed to parse tailscale serve config: %v", err)
+	}
+
+	tcp, ok := cfg["TCP"].(map[string]interface{})
+	if !ok {
+		t.Fatal("serve config should have TCP key")
+	}
+	handler, ok := tcp["443"].(map[string]interface{})
+	if !ok {
+		t.Fatal("serve config should have TCP.443")
+	}
+	if handler["HTTPS"] != true {
+		t.Errorf("TCP.443.HTTPS = %v, want true", handler["HTTPS"])
+	}
+
+	// serve mode should NOT have AllowFunnel
+	if _, hasFunnel := cfg["AllowFunnel"]; hasFunnel {
+		t.Error("AllowFunnel should not be set in serve mode")
+	}
+}
+
+func TestBuildConfigMap_TailscaleServeConfig_Funnel(t *testing.T) {
+	instance := newTestInstance("ts-funnel-cfg")
 	instance.Spec.Tailscale.Enabled = true
 	instance.Spec.Tailscale.Mode = "funnel"
 
 	cm := BuildConfigMap(instance, "")
-	content := cm.Data["openclaw.json"]
 
-	var parsed map[string]interface{}
-	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
-		t.Fatalf("failed to parse config JSON: %v", err)
+	serveJSON := cm.Data[TailscaleServeConfigKey]
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal([]byte(serveJSON), &cfg); err != nil {
+		t.Fatalf("failed to parse tailscale serve config: %v", err)
 	}
 
-	gw := parsed["gateway"].(map[string]interface{})
-	ts := gw["tailscale"].(map[string]interface{})
+	// funnel mode should have AllowFunnel
+	af, ok := cfg["AllowFunnel"].(map[string]interface{})
+	if !ok {
+		t.Fatal("AllowFunnel should be set in funnel mode")
+	}
+	if af["${TS_CERT_DOMAIN}:443"] != true {
+		t.Error("AllowFunnel should enable ${TS_CERT_DOMAIN}:443")
+	}
+}
 
-	if ts["mode"] != "funnel" {
-		t.Errorf("expected tailscale.mode=funnel, got %v", ts["mode"])
+func TestBuildConfigMap_TailscaleDisabled_NoServeConfig(t *testing.T) {
+	instance := newTestInstance("ts-disabled-cfg")
+
+	cm := BuildConfigMap(instance, "")
+
+	if _, ok := cm.Data[TailscaleServeConfigKey]; ok {
+		t.Error("tailscale-serve.json should not be present when Tailscale is disabled")
 	}
 }
 
@@ -5279,7 +5318,7 @@ func TestBuildConfigMap_TailscaleAuthSSO(t *testing.T) {
 	}
 }
 
-func TestBuildConfigMap_TailscaleUserOverride(t *testing.T) {
+func TestBuildConfigMap_TailscaleUserConfig_Preserved(t *testing.T) {
 	instance := newTestInstance("ts-override")
 	instance.Spec.Tailscale.Enabled = true
 	instance.Spec.Tailscale.Mode = "serve"
@@ -5297,6 +5336,7 @@ func TestBuildConfigMap_TailscaleUserOverride(t *testing.T) {
 		t.Fatalf("failed to parse config JSON: %v", err)
 	}
 
+	// User-set gateway.tailscale should be preserved (operator no longer injects it)
 	gw := parsed["gateway"].(map[string]interface{})
 	ts := gw["tailscale"].(map[string]interface{})
 
@@ -5308,23 +5348,53 @@ func TestBuildConfigMap_TailscaleUserOverride(t *testing.T) {
 	}
 }
 
-func TestBuildStatefulSet_TailscaleAuthKey(t *testing.T) {
-	instance := newTestInstance("ts-authkey")
+func TestBuildStatefulSet_TailscaleSidecar(t *testing.T) {
+	instance := newTestInstance("ts-sidecar")
 	instance.Spec.Tailscale.Enabled = true
 	instance.Spec.Tailscale.AuthKeySecretRef = &corev1.LocalObjectReference{Name: "ts-auth"}
 
 	sts := BuildStatefulSet(instance)
-	main := sts.Spec.Template.Spec.Containers[0]
+	containers := sts.Spec.Template.Spec.Containers
 
-	var tsAuthKey *corev1.EnvVar
-	for i := range main.Env {
-		if main.Env[i].Name == "TS_AUTHKEY" {
-			tsAuthKey = &main.Env[i]
+	// Find the tailscale sidecar
+	var tsSidecar *corev1.Container
+	for i := range containers {
+		if containers[i].Name == "tailscale" {
+			tsSidecar = &containers[i]
 			break
 		}
 	}
-	if tsAuthKey == nil {
-		t.Fatal("TS_AUTHKEY env var should be present")
+	if tsSidecar == nil {
+		t.Fatal("tailscale sidecar container should be present")
+	}
+
+	// Check image
+	if tsSidecar.Image != DefaultTailscaleImage+":"+DefaultImageTag {
+		t.Errorf("tailscale image = %q, want %q", tsSidecar.Image, DefaultTailscaleImage+":"+DefaultImageTag)
+	}
+
+	// Check env vars on sidecar
+	envMap := make(map[string]corev1.EnvVar)
+	for _, e := range tsSidecar.Env {
+		envMap[e.Name] = e
+	}
+
+	if envMap["TS_USERSPACE"].Value != "true" {
+		t.Errorf("TS_USERSPACE = %q, want %q", envMap["TS_USERSPACE"].Value, "true")
+	}
+	if envMap["TS_STATE_DIR"].Value != TailscaleStatePath {
+		t.Errorf("TS_STATE_DIR = %q, want %q", envMap["TS_STATE_DIR"].Value, TailscaleStatePath)
+	}
+	if envMap["TS_SOCKET"].Value != TailscaleSocketPath {
+		t.Errorf("TS_SOCKET = %q, want %q", envMap["TS_SOCKET"].Value, TailscaleSocketPath)
+	}
+	if envMap["TS_HOSTNAME"].Value != "ts-sidecar" {
+		t.Errorf("TS_HOSTNAME = %q, want %q", envMap["TS_HOSTNAME"].Value, "ts-sidecar")
+	}
+
+	tsAuthKey, ok := envMap["TS_AUTHKEY"]
+	if !ok {
+		t.Fatal("TS_AUTHKEY env var should be present on sidecar")
 	}
 	if tsAuthKey.ValueFrom == nil || tsAuthKey.ValueFrom.SecretKeyRef == nil {
 		t.Fatal("TS_AUTHKEY should use SecretKeyRef")
@@ -5335,27 +5405,47 @@ func TestBuildStatefulSet_TailscaleAuthKey(t *testing.T) {
 	if tsAuthKey.ValueFrom.SecretKeyRef.Key != "authkey" {
 		t.Errorf("expected secret key authkey, got %s", tsAuthKey.ValueFrom.SecretKeyRef.Key)
 	}
+
+	// Verify security context
+	sc := tsSidecar.SecurityContext
+	if sc.ReadOnlyRootFilesystem == nil || !*sc.ReadOnlyRootFilesystem {
+		t.Error("tailscale sidecar should have readOnlyRootFilesystem=true")
+	}
+	if sc.RunAsNonRoot == nil || !*sc.RunAsNonRoot {
+		t.Error("tailscale sidecar should have runAsNonRoot=true")
+	}
 }
 
-func TestBuildStatefulSet_TailscaleHostname(t *testing.T) {
-	instance := newTestInstance("ts-hostname")
+func TestBuildStatefulSet_TailscaleAuthKeyOnSidecar_NotMain(t *testing.T) {
+	instance := newTestInstance("ts-env-split")
 	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.AuthKeySecretRef = &corev1.LocalObjectReference{Name: "ts-auth"}
 
 	sts := BuildStatefulSet(instance)
 	main := sts.Spec.Template.Spec.Containers[0]
 
-	var tsHostname *corev1.EnvVar
-	for i := range main.Env {
-		if main.Env[i].Name == "TS_HOSTNAME" {
-			tsHostname = &main.Env[i]
-			break
+	// TS_AUTHKEY and TS_HOSTNAME should NOT be on the main container
+	for _, env := range main.Env {
+		if env.Name == "TS_AUTHKEY" {
+			t.Error("TS_AUTHKEY should NOT be on main container (moved to sidecar)")
+		}
+		if env.Name == "TS_HOSTNAME" {
+			t.Error("TS_HOSTNAME should NOT be on main container (moved to sidecar)")
 		}
 	}
-	if tsHostname == nil {
-		t.Fatal("TS_HOSTNAME env var should be present")
+
+	// TS_SOCKET should be on main container
+	var found bool
+	for _, env := range main.Env {
+		if env.Name == "TS_SOCKET" {
+			found = true
+			if env.Value != TailscaleSocketPath {
+				t.Errorf("TS_SOCKET = %q, want %q", env.Value, TailscaleSocketPath)
+			}
+		}
 	}
-	if tsHostname.Value != "ts-hostname" {
-		t.Errorf("expected TS_HOSTNAME=ts-hostname (instance name), got %s", tsHostname.Value)
+	if !found {
+		t.Error("TS_SOCKET env var should be present on main container")
 	}
 }
 
@@ -5365,21 +5455,28 @@ func TestBuildStatefulSet_TailscaleCustomHostname(t *testing.T) {
 	instance.Spec.Tailscale.Hostname = "my-custom-host"
 
 	sts := BuildStatefulSet(instance)
-	main := sts.Spec.Template.Spec.Containers[0]
 
-	var tsHostname *corev1.EnvVar
-	for i := range main.Env {
-		if main.Env[i].Name == "TS_HOSTNAME" {
-			tsHostname = &main.Env[i]
+	// Find sidecar
+	var tsSidecar *corev1.Container
+	for i := range sts.Spec.Template.Spec.Containers {
+		if sts.Spec.Template.Spec.Containers[i].Name == "tailscale" {
+			tsSidecar = &sts.Spec.Template.Spec.Containers[i]
 			break
 		}
 	}
-	if tsHostname == nil {
-		t.Fatal("TS_HOSTNAME env var should be present")
+	if tsSidecar == nil {
+		t.Fatal("tailscale sidecar container should be present")
 	}
-	if tsHostname.Value != "my-custom-host" {
-		t.Errorf("expected TS_HOSTNAME=my-custom-host, got %s", tsHostname.Value)
+
+	for _, env := range tsSidecar.Env {
+		if env.Name == "TS_HOSTNAME" {
+			if env.Value != "my-custom-host" {
+				t.Errorf("expected TS_HOSTNAME=my-custom-host, got %s", env.Value)
+			}
+			return
+		}
 	}
+	t.Fatal("TS_HOSTNAME env var should be present on sidecar")
 }
 
 func TestBuildStatefulSet_TailscaleCustomSecretKey(t *testing.T) {
@@ -5389,21 +5486,28 @@ func TestBuildStatefulSet_TailscaleCustomSecretKey(t *testing.T) {
 	instance.Spec.Tailscale.AuthKeySecretKey = "my-key"
 
 	sts := BuildStatefulSet(instance)
-	main := sts.Spec.Template.Spec.Containers[0]
 
-	var tsAuthKey *corev1.EnvVar
-	for i := range main.Env {
-		if main.Env[i].Name == "TS_AUTHKEY" {
-			tsAuthKey = &main.Env[i]
+	// Find sidecar
+	var tsSidecar *corev1.Container
+	for i := range sts.Spec.Template.Spec.Containers {
+		if sts.Spec.Template.Spec.Containers[i].Name == "tailscale" {
+			tsSidecar = &sts.Spec.Template.Spec.Containers[i]
 			break
 		}
 	}
-	if tsAuthKey == nil {
-		t.Fatal("TS_AUTHKEY env var should be present")
+	if tsSidecar == nil {
+		t.Fatal("tailscale sidecar container should be present")
 	}
-	if tsAuthKey.ValueFrom.SecretKeyRef.Key != "my-key" {
-		t.Errorf("expected custom secret key my-key, got %s", tsAuthKey.ValueFrom.SecretKeyRef.Key)
+
+	for _, env := range tsSidecar.Env {
+		if env.Name == "TS_AUTHKEY" {
+			if env.ValueFrom.SecretKeyRef.Key != "my-key" {
+				t.Errorf("expected custom secret key my-key, got %s", env.ValueFrom.SecretKeyRef.Key)
+			}
+			return
+		}
 	}
+	t.Fatal("TS_AUTHKEY env var should be present on sidecar")
 }
 
 func TestBuildStatefulSet_TailscaleDisabled(t *testing.T) {
@@ -5413,9 +5517,192 @@ func TestBuildStatefulSet_TailscaleDisabled(t *testing.T) {
 	main := sts.Spec.Template.Spec.Containers[0]
 
 	for _, env := range main.Env {
-		if env.Name == "TS_AUTHKEY" || env.Name == "TS_HOSTNAME" {
+		if env.Name == "TS_AUTHKEY" || env.Name == "TS_HOSTNAME" || env.Name == "TS_SOCKET" {
 			t.Errorf("unexpected Tailscale env var %s when Tailscale is disabled", env.Name)
 		}
+	}
+
+	// No tailscale sidecar should exist
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		if c.Name == "tailscale" {
+			t.Error("tailscale sidecar should not be present when Tailscale is disabled")
+		}
+	}
+
+	// No tailscale init container
+	for _, c := range sts.Spec.Template.Spec.InitContainers {
+		if c.Name == "init-tailscale-bin" {
+			t.Error("init-tailscale-bin should not be present when Tailscale is disabled")
+		}
+	}
+}
+
+func TestBuildStatefulSet_TailscaleInitContainer(t *testing.T) {
+	instance := newTestInstance("ts-init")
+	instance.Spec.Tailscale.Enabled = true
+
+	sts := BuildStatefulSet(instance)
+
+	var initContainer *corev1.Container
+	for i := range sts.Spec.Template.Spec.InitContainers {
+		if sts.Spec.Template.Spec.InitContainers[i].Name == "init-tailscale-bin" {
+			initContainer = &sts.Spec.Template.Spec.InitContainers[i]
+			break
+		}
+	}
+	if initContainer == nil {
+		t.Fatal("init-tailscale-bin init container should be present")
+	}
+	if initContainer.Image != DefaultTailscaleImage+":"+DefaultImageTag {
+		t.Errorf("init container image = %q, want %q", initContainer.Image, DefaultTailscaleImage+":"+DefaultImageTag)
+	}
+	assertVolumeMount(t, initContainer.VolumeMounts, "tailscale-bin", TailscaleBinPath)
+}
+
+func TestBuildStatefulSet_TailscaleVolumes(t *testing.T) {
+	instance := newTestInstance("ts-vols")
+	instance.Spec.Tailscale.Enabled = true
+
+	sts := BuildStatefulSet(instance)
+	volumes := sts.Spec.Template.Spec.Volumes
+
+	for _, name := range []string{"tailscale-state", "tailscale-socket", "tailscale-bin", "tailscale-tmp"} {
+		v := findVolume(volumes, name)
+		if v == nil {
+			t.Errorf("volume %q not found", name)
+			continue
+		}
+		if v.EmptyDir == nil {
+			t.Errorf("volume %q should be emptyDir", name)
+		}
+	}
+}
+
+func TestBuildStatefulSet_TailscaleMainContainerMounts(t *testing.T) {
+	instance := newTestInstance("ts-mounts")
+	instance.Spec.Tailscale.Enabled = true
+
+	sts := BuildStatefulSet(instance)
+	main := sts.Spec.Template.Spec.Containers[0]
+
+	assertVolumeMount(t, main.VolumeMounts, "tailscale-socket", TailscaleSocketDir)
+	assertVolumeMount(t, main.VolumeMounts, "tailscale-bin", TailscaleBinPath)
+
+	// Verify read-only
+	for _, m := range main.VolumeMounts {
+		if m.Name == "tailscale-socket" && !m.ReadOnly {
+			t.Error("tailscale-socket mount should be read-only on main container")
+		}
+		if m.Name == "tailscale-bin" && !m.ReadOnly {
+			t.Error("tailscale-bin mount should be read-only on main container")
+		}
+	}
+}
+
+func TestBuildStatefulSet_TailscalePATH(t *testing.T) {
+	instance := newTestInstance("ts-path")
+	instance.Spec.Tailscale.Enabled = true
+
+	sts := BuildStatefulSet(instance)
+	main := sts.Spec.Template.Spec.Containers[0]
+
+	var pathVar *corev1.EnvVar
+	for i := range main.Env {
+		if main.Env[i].Name == "PATH" {
+			pathVar = &main.Env[i]
+			break
+		}
+	}
+	if pathVar == nil {
+		t.Fatal("PATH env var should be set when Tailscale is enabled")
+	}
+	if !strings.Contains(pathVar.Value, TailscaleBinPath) {
+		t.Errorf("PATH should contain %q, got %q", TailscaleBinPath, pathVar.Value)
+	}
+}
+
+func TestBuildStatefulSet_TailscalePATH_WithRuntimeDeps(t *testing.T) {
+	instance := newTestInstance("ts-path-rd")
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.RuntimeDeps.Pnpm = true
+
+	sts := BuildStatefulSet(instance)
+	main := sts.Spec.Template.Spec.Containers[0]
+
+	var pathVar *corev1.EnvVar
+	for i := range main.Env {
+		if main.Env[i].Name == "PATH" {
+			pathVar = &main.Env[i]
+			break
+		}
+	}
+	if pathVar == nil {
+		t.Fatal("PATH env var should be set")
+	}
+	// Both tailscale-bin and runtime deps should be in PATH
+	if !strings.Contains(pathVar.Value, TailscaleBinPath) {
+		t.Errorf("PATH should contain %q, got %q", TailscaleBinPath, pathVar.Value)
+	}
+	if !strings.Contains(pathVar.Value, RuntimeDepsLocalBin) {
+		t.Errorf("PATH should contain %q, got %q", RuntimeDepsLocalBin, pathVar.Value)
+	}
+}
+
+func TestBuildStatefulSet_TailscaleCustomImage(t *testing.T) {
+	instance := newTestInstance("ts-custom-img")
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.Image.Repository = "my-registry/tailscale"
+	instance.Spec.Tailscale.Image.Tag = "v1.60.0"
+
+	sts := BuildStatefulSet(instance)
+
+	// Check sidecar
+	var tsSidecar *corev1.Container
+	for i := range sts.Spec.Template.Spec.Containers {
+		if sts.Spec.Template.Spec.Containers[i].Name == "tailscale" {
+			tsSidecar = &sts.Spec.Template.Spec.Containers[i]
+			break
+		}
+	}
+	if tsSidecar == nil {
+		t.Fatal("tailscale sidecar should be present")
+	}
+	if tsSidecar.Image != "my-registry/tailscale:v1.60.0" {
+		t.Errorf("sidecar image = %q, want %q", tsSidecar.Image, "my-registry/tailscale:v1.60.0")
+	}
+
+	// Check init container uses same image
+	for _, c := range sts.Spec.Template.Spec.InitContainers {
+		if c.Name == "init-tailscale-bin" {
+			if c.Image != "my-registry/tailscale:v1.60.0" {
+				t.Errorf("init container image = %q, want %q", c.Image, "my-registry/tailscale:v1.60.0")
+			}
+			return
+		}
+	}
+	t.Fatal("init-tailscale-bin should be present")
+}
+
+func TestBuildStatefulSet_TailscaleImageDigest(t *testing.T) {
+	instance := newTestInstance("ts-digest")
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.Image.Digest = "sha256:abc123"
+
+	sts := BuildStatefulSet(instance)
+
+	var tsSidecar *corev1.Container
+	for i := range sts.Spec.Template.Spec.Containers {
+		if sts.Spec.Template.Spec.Containers[i].Name == "tailscale" {
+			tsSidecar = &sts.Spec.Template.Spec.Containers[i]
+			break
+		}
+	}
+	if tsSidecar == nil {
+		t.Fatal("tailscale sidecar should be present")
+	}
+	expected := DefaultTailscaleImage + "@sha256:abc123"
+	if tsSidecar.Image != expected {
+		t.Errorf("sidecar image = %q, want %q", tsSidecar.Image, expected)
 	}
 }
 
@@ -5514,24 +5801,22 @@ func TestConfigHash_ChangesWithTailscale(t *testing.T) {
 	}
 }
 
-func TestBuildConfigMap_TailscaleDefaultMode(t *testing.T) {
+func TestBuildConfigMap_TailscaleDefaultMode_ServeConfig(t *testing.T) {
 	instance := newTestInstance("ts-default-mode")
 	instance.Spec.Tailscale.Enabled = true
-	// Mode is empty - should default to "serve"
+	// Mode is empty - should default to "serve" in serve config
 
 	cm := BuildConfigMap(instance, "")
-	content := cm.Data["openclaw.json"]
+	serveJSON := cm.Data[TailscaleServeConfigKey]
 
-	var parsed map[string]interface{}
-	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
-		t.Fatalf("failed to parse config JSON: %v", err)
+	var cfg map[string]interface{}
+	if err := json.Unmarshal([]byte(serveJSON), &cfg); err != nil {
+		t.Fatalf("failed to parse serve config JSON: %v", err)
 	}
 
-	gw := parsed["gateway"].(map[string]interface{})
-	ts := gw["tailscale"].(map[string]interface{})
-
-	if ts["mode"] != "serve" {
-		t.Errorf("expected default mode=serve, got %v", ts["mode"])
+	// Default mode is serve - should NOT have AllowFunnel
+	if _, hasFunnel := cfg["AllowFunnel"]; hasFunnel {
+		t.Error("AllowFunnel should not be set when mode defaults to serve")
 	}
 }
 
@@ -5548,10 +5833,12 @@ func TestBuildConfigMap_TailscaleNoAuthSSO(t *testing.T) {
 		t.Fatalf("failed to parse config JSON: %v", err)
 	}
 
-	gw := parsed["gateway"].(map[string]interface{})
-	if auth, ok := gw["auth"].(map[string]interface{}); ok {
-		if _, hasAllowTS := auth["allowTailscale"]; hasAllowTS {
-			t.Error("auth.allowTailscale should not be set when AuthSSO is disabled")
+	// gateway.bind=loopback should still be set (always), but no auth.allowTailscale
+	if gw, ok := parsed["gateway"].(map[string]interface{}); ok {
+		if auth, ok := gw["auth"].(map[string]interface{}); ok {
+			if _, hasAllowTS := auth["allowTailscale"]; hasAllowTS {
+				t.Error("auth.allowTailscale should not be set when AuthSSO is disabled")
+			}
 		}
 	}
 }

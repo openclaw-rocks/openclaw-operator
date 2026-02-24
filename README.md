@@ -334,9 +334,21 @@ spec:
       name: tailscale-auth
     authSSO: true        # allow passwordless login for tailnet members
     hostname: my-agent   # defaults to instance name
+    image:
+      repository: ghcr.io/tailscale/tailscale  # default
+      tag: latest
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
 ```
 
-The operator merges Tailscale gateway settings into the OpenClaw config and injects the auth key from the referenced Secret. Use ephemeral+reusable auth keys from the [Tailscale admin console](https://login.tailscale.com/admin/settings/keys). When `authSSO` is enabled, tailnet members can authenticate without a gateway token.
+When enabled, the operator runs a **Tailscale sidecar** (`tailscaled`) that handles serve/funnel declaratively via `TS_SERVE_CONFIG`. An **init container** copies the `tailscale` CLI binary to a shared volume so the main container can call `tailscale whois` for SSO authentication. The sidecar runs in userspace mode (`TS_USERSPACE=true`) - no `NET_ADMIN` capability needed.
+
+Use ephemeral+reusable auth keys from the [Tailscale admin console](https://login.tailscale.com/admin/settings/keys). When `authSSO` is enabled, tailnet members can authenticate without a gateway token.
 
 ### Config merge mode
 
@@ -533,7 +545,7 @@ These behaviors are always applied - no configuration needed:
 | Gateway auth token | Auto-generated Secret per instance; injected into config and env |
 | `OPENCLAW_DISABLE_BONJOUR=1` | Always set (mDNS does not work in Kubernetes) |
 | Browser profiles | When Chromium is enabled, `"default"` and `"chrome"` profiles are auto-configured with the sidecar's CDP endpoint |
-| Tailscale config | When Tailscale is enabled, gateway.tailscale settings are merged into config |
+| Tailscale serve config | When Tailscale is enabled, a `tailscale-serve.json` key is added to the ConfigMap for the sidecar's `TS_SERVE_CONFIG` |
 | Config hash rollouts | Config changes trigger rolling updates via SHA-256 hash annotation |
 | Config restoration | The init container restores config on every pod restart (overwrite or merge mode) |
 

@@ -907,7 +907,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			_ = k8sClient.Delete(ctx, ns)
 		})
 
-		It("Should inject Tailscale config, env vars, and NetworkPolicy egress", func() {
+		It("Should create Tailscale sidecar, init container, serve config, and NetworkPolicy egress", func() {
 			instanceName := "ts-e2e-instance"
 
 			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
@@ -952,7 +952,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
 
-			// Verify ConfigMap contains tailscale config
+			// Verify ConfigMap
 			cm := &corev1.ConfigMap{}
 			Eventually(func() error {
 				return k8sClient.Get(ctx, types.NamespacedName{
@@ -961,27 +961,32 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				}, cm)
 			}, timeout, interval).Should(Succeed())
 
+			// Verify tailscale-serve.json key exists
+			serveJSON, ok := cm.Data[resources.TailscaleServeConfigKey]
+			Expect(ok).To(BeTrue(), "ConfigMap should have tailscale-serve.json key")
+			var serveCfg map[string]interface{}
+			Expect(json.Unmarshal([]byte(serveJSON), &serveCfg)).To(Succeed())
+			Expect(serveCfg).To(HaveKey("TCP"), "serve config should have TCP key")
+
+			// Verify config does NOT have gateway.tailscale.mode/resetOnExit (sidecar handles it)
 			configContent, ok := cm.Data["openclaw.json"]
 			Expect(ok).To(BeTrue(), "ConfigMap should have openclaw.json key")
-
 			var parsed map[string]interface{}
 			Expect(json.Unmarshal([]byte(configContent), &parsed)).To(Succeed())
 			gw, ok := parsed["gateway"].(map[string]interface{})
 			Expect(ok).To(BeTrue(), "config should have gateway key")
-			ts, ok := gw["tailscale"].(map[string]interface{})
-			Expect(ok).To(BeTrue(), "gateway should have tailscale key")
-			Expect(ts["mode"]).To(Equal("serve"), "tailscale mode should be serve")
-			Expect(ts["resetOnExit"]).To(BeTrue(), "tailscale resetOnExit should be true")
+			_, hasTailscaleKey := gw["tailscale"]
+			Expect(hasTailscaleKey).To(BeFalse(), "gateway.tailscale should NOT be set - sidecar handles serve/funnel")
 
 			// Verify AuthSSO sets gateway.auth.allowTailscale
 			auth, ok := gw["auth"].(map[string]interface{})
 			Expect(ok).To(BeTrue(), "gateway should have auth key when AuthSSO is enabled")
 			Expect(auth["allowTailscale"]).To(BeTrue(), "auth.allowTailscale should be true")
 
-			// Verify gateway.bind=loopback for Tailscale serve mode
-			Expect(gw["bind"]).To(Equal("loopback"), "gateway.bind should be loopback when Tailscale serve is enabled")
+			// Verify gateway.bind=loopback
+			Expect(gw["bind"]).To(Equal("loopback"), "gateway.bind should be loopback")
 
-			// Verify StatefulSet env vars
+			// Verify StatefulSet
 			statefulSet := &appsv1.StatefulSet{}
 			Eventually(func() error {
 				return k8sClient.Get(ctx, types.NamespacedName{
@@ -990,32 +995,69 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				}, statefulSet)
 			}, timeout, interval).Should(Succeed())
 
-			mainContainer := statefulSet.Spec.Template.Spec.Containers[0]
-			var foundAuthKey, foundHostname bool
-			for _, env := range mainContainer.Env {
+			// Verify tailscale sidecar container exists with correct env vars
+			var tsSidecar *corev1.Container
+			for i := range statefulSet.Spec.Template.Spec.Containers {
+				if statefulSet.Spec.Template.Spec.Containers[i].Name == "tailscale" {
+					tsSidecar = &statefulSet.Spec.Template.Spec.Containers[i]
+					break
+				}
+			}
+			Expect(tsSidecar).NotTo(BeNil(), "tailscale sidecar container should be present")
+
+			var foundSidecarAuthKey, foundSidecarHostname bool
+			for _, env := range tsSidecar.Env {
 				if env.Name == "TS_AUTHKEY" {
-					foundAuthKey = true
+					foundSidecarAuthKey = true
 					Expect(env.ValueFrom).NotTo(BeNil(), "TS_AUTHKEY should use ValueFrom")
 					Expect(env.ValueFrom.SecretKeyRef).NotTo(BeNil(), "TS_AUTHKEY should use SecretKeyRef")
 					Expect(env.ValueFrom.SecretKeyRef.Name).To(Equal("ts-auth"))
 					Expect(env.ValueFrom.SecretKeyRef.Key).To(Equal("authkey"))
 				}
 				if env.Name == "TS_HOSTNAME" {
-					foundHostname = true
+					foundSidecarHostname = true
 					Expect(env.Value).To(Equal(instanceName), "TS_HOSTNAME should default to instance name")
 				}
 			}
-			Expect(foundAuthKey).To(BeTrue(), "TS_AUTHKEY env var should be present")
-			Expect(foundHostname).To(BeTrue(), "TS_HOSTNAME env var should be present")
+			Expect(foundSidecarAuthKey).To(BeTrue(), "TS_AUTHKEY should be on sidecar")
+			Expect(foundSidecarHostname).To(BeTrue(), "TS_HOSTNAME should be on sidecar")
+
+			// Verify main container does NOT have TS_AUTHKEY/TS_HOSTNAME, but has TS_SOCKET and PATH
+			mainContainer := statefulSet.Spec.Template.Spec.Containers[0]
+			var foundTSSocket, foundPATH bool
+			for _, env := range mainContainer.Env {
+				Expect(env.Name).NotTo(Equal("TS_AUTHKEY"), "TS_AUTHKEY should NOT be on main container")
+				Expect(env.Name).NotTo(Equal("TS_HOSTNAME"), "TS_HOSTNAME should NOT be on main container")
+				if env.Name == "TS_SOCKET" {
+					foundTSSocket = true
+					Expect(env.Value).To(Equal(resources.TailscaleSocketPath))
+				}
+				if env.Name == "PATH" {
+					foundPATH = true
+					Expect(env.Value).To(ContainSubstring(resources.TailscaleBinPath))
+				}
+			}
+			Expect(foundTSSocket).To(BeTrue(), "TS_SOCKET should be on main container")
+			Expect(foundPATH).To(BeTrue(), "PATH with tailscale-bin should be on main container")
+
+			// Verify init-tailscale-bin init container exists
+			var foundTSInit bool
+			for _, c := range statefulSet.Spec.Template.Spec.InitContainers {
+				if c.Name == "init-tailscale-bin" {
+					foundTSInit = true
+					break
+				}
+			}
+			Expect(foundTSInit).To(BeTrue(), "init-tailscale-bin init container should be present")
 
 			// Verify probes use exec (not TCPSocket) for loopback-bound gateway
 			Expect(mainContainer.LivenessProbe).NotTo(BeNil(), "liveness probe should be set")
-			Expect(mainContainer.LivenessProbe.Exec).NotTo(BeNil(), "liveness probe should use exec for Tailscale serve")
-			Expect(mainContainer.LivenessProbe.TCPSocket).To(BeNil(), "liveness probe should not use TCPSocket for Tailscale serve")
+			Expect(mainContainer.LivenessProbe.Exec).NotTo(BeNil(), "liveness probe should use exec")
+			Expect(mainContainer.LivenessProbe.TCPSocket).To(BeNil(), "liveness probe should not use TCPSocket")
 			Expect(mainContainer.ReadinessProbe).NotTo(BeNil(), "readiness probe should be set")
-			Expect(mainContainer.ReadinessProbe.Exec).NotTo(BeNil(), "readiness probe should use exec for Tailscale serve")
+			Expect(mainContainer.ReadinessProbe.Exec).NotTo(BeNil(), "readiness probe should use exec")
 			Expect(mainContainer.StartupProbe).NotTo(BeNil(), "startup probe should be set")
-			Expect(mainContainer.StartupProbe.Exec).NotTo(BeNil(), "startup probe should use exec for Tailscale serve")
+			Expect(mainContainer.StartupProbe.Exec).NotTo(BeNil(), "startup probe should use exec")
 
 			// Verify NetworkPolicy has STUN and WireGuard egress
 			np := &networkingv1.NetworkPolicy{}

@@ -87,6 +87,24 @@ const (
 	// DefaultTailscaleAuthKeySecretKey is the default key in the Tailscale auth key Secret
 	DefaultTailscaleAuthKeySecretKey = "authkey"
 
+	// DefaultTailscaleImage is the default image for the Tailscale sidecar
+	DefaultTailscaleImage = "ghcr.io/tailscale/tailscale"
+
+	// TailscaleServeConfigKey is the ConfigMap data key for the Tailscale serve config JSON
+	TailscaleServeConfigKey = "tailscale-serve.json"
+
+	// TailscaleStatePath is the path for Tailscale state storage inside the sidecar
+	TailscaleStatePath = "/var/lib/tailscale"
+
+	// TailscaleSocketDir is the directory containing the tailscaled Unix socket
+	TailscaleSocketDir = "/var/run/tailscale"
+
+	// TailscaleSocketPath is the full path to the tailscaled Unix socket
+	TailscaleSocketPath = "/var/run/tailscale/tailscaled.sock"
+
+	// TailscaleBinPath is the shared volume path where the tailscale CLI binary is copied
+	TailscaleBinPath = "/tailscale-bin"
+
 	// TailscaleModeServe is the default Tailscale mode (tailnet-only access)
 	TailscaleModeServe = "serve"
 
@@ -210,6 +228,24 @@ func GetImage(instance *openclawv1alpha1.OpenClawInstance) string {
 		return repo + "@" + instance.Spec.Image.Digest
 	}
 	return repo + ":" + GetImageTag(instance)
+}
+
+// GetTailscaleImage returns the full Tailscale sidecar image reference
+func GetTailscaleImage(instance *openclawv1alpha1.OpenClawInstance) string {
+	repo := instance.Spec.Tailscale.Image.Repository
+	if repo == "" {
+		repo = DefaultTailscaleImage
+	}
+
+	if instance.Spec.Tailscale.Image.Digest != "" {
+		return repo + "@" + instance.Spec.Tailscale.Image.Digest
+	}
+
+	tag := instance.Spec.Tailscale.Image.Tag
+	if tag == "" {
+		tag = DefaultImageTag
+	}
+	return repo + ":" + tag
 }
 
 // IsMetricsEnabled returns true if the metrics endpoint is enabled for the instance

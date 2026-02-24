@@ -469,8 +469,10 @@ type ChromiumImageSpec struct {
 }
 
 // TailscaleSpec configures Tailscale integration for secure tailnet access.
-// When enabled, the operator merges gateway.tailscale settings into the
-// OpenClaw config and injects the auth key.
+// When enabled, a Tailscale sidecar container runs tailscaled and handles
+// serve/funnel via TS_SERVE_CONFIG. An init container copies the tailscale
+// CLI binary to a shared volume so the main container can call
+// "tailscale whois" for SSO authentication.
 type TailscaleSpec struct {
 	// Enabled enables Tailscale integration
 	// +kubebuilder:default=false
@@ -484,6 +486,12 @@ type TailscaleSpec struct {
 	// +kubebuilder:default="serve"
 	// +optional
 	Mode string `json:"mode,omitempty"`
+
+	// Image configures the Tailscale sidecar container image.
+	// The same image is used for the sidecar and the init container that
+	// copies the tailscale CLI binary.
+	// +optional
+	Image TailscaleImageSpec `json:"image,omitempty"`
 
 	// AuthKeySecretRef references a Secret containing the Tailscale auth key.
 	// The Secret must have a key matching AuthKeySecretKey (default: "authkey").
@@ -505,6 +513,27 @@ type TailscaleSpec struct {
 	// +kubebuilder:default=false
 	// +optional
 	AuthSSO bool `json:"authSSO,omitempty"`
+
+	// Resources specifies compute resources for the Tailscale sidecar container.
+	// +optional
+	Resources ResourcesSpec `json:"resources,omitempty"`
+}
+
+// TailscaleImageSpec defines the Tailscale sidecar container image
+type TailscaleImageSpec struct {
+	// Repository is the container image repository
+	// +kubebuilder:default="ghcr.io/tailscale/tailscale"
+	// +optional
+	Repository string `json:"repository,omitempty"`
+
+	// Tag is the container image tag
+	// +kubebuilder:default="latest"
+	// +optional
+	Tag string `json:"tag,omitempty"`
+
+	// Digest is the container image digest for supply chain security
+	// +optional
+	Digest string `json:"digest,omitempty"`
 }
 
 // OllamaSpec defines the Ollama sidecar configuration

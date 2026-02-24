@@ -240,22 +240,33 @@ When Chromium is enabled, the operator also auto-configures browser profiles in 
 
 ### spec.tailscale
 
-Optional Tailscale integration for secure tailnet access without Ingress or LoadBalancer.
+Optional Tailscale integration for secure tailnet access without Ingress or LoadBalancer. Runs a Tailscale sidecar (`tailscaled`) that handles serve/funnel declaratively.
 
-| Field                | Type                     | Default          | Description                                                                |
-|----------------------|--------------------------|------------------|----------------------------------------------------------------------------|
-| `enabled`            | `bool`                   | `false`          | Enable Tailscale integration.                                              |
-| `mode`               | `string`                 | `serve`          | Tailscale mode. `serve` exposes to tailnet members only. `funnel` exposes to the public internet via Tailscale Funnel. |
-| `authKeySecretRef`   | `*LocalObjectReference`  | --               | Reference to a Secret containing the Tailscale auth key. Use ephemeral+reusable keys from the Tailscale admin console. |
-| `authKeySecretKey`   | `string`                 | `authkey`        | Key in the referenced Secret containing the auth key.                      |
-| `hostname`           | `string`                 | (instance name)  | Tailscale device name. Defaults to the OpenClawInstance name.              |
-| `authSSO`            | `bool`                   | `false`          | Enable passwordless login for tailnet members. Sets `gateway.auth.allowTailscale=true` in the OpenClaw config. |
+| Field                | Type                     | Default                            | Description                                                                |
+|----------------------|--------------------------|------------------------------------|----------------------------------------------------------------------------|
+| `enabled`            | `bool`                   | `false`                            | Enable Tailscale integration (adds sidecar + init container).              |
+| `mode`               | `string`                 | `serve`                            | Tailscale mode. `serve` exposes to tailnet members only. `funnel` exposes to the public internet via Tailscale Funnel. |
+| `image.repository`   | `string`                 | `ghcr.io/tailscale/tailscale`      | Tailscale sidecar container image repository.                              |
+| `image.tag`          | `string`                 | `latest`                           | Tailscale sidecar container image tag.                                     |
+| `image.digest`       | `string`                 | --                                 | Container image digest for supply chain security (overrides tag).          |
+| `authKeySecretRef`   | `*LocalObjectReference`  | --                                 | Reference to a Secret containing the Tailscale auth key. Use ephemeral+reusable keys from the Tailscale admin console. |
+| `authKeySecretKey`   | `string`                 | `authkey`                          | Key in the referenced Secret containing the auth key.                      |
+| `hostname`           | `string`                 | (instance name)                    | Tailscale device name. Defaults to the OpenClawInstance name.              |
+| `authSSO`            | `bool`                   | `false`                            | Enable passwordless login for tailnet members. Sets `gateway.auth.allowTailscale=true` in the OpenClaw config. |
+| `resources.requests.cpu` | `string`             | `50m`                              | CPU request for the Tailscale sidecar.                                     |
+| `resources.requests.memory` | `string`          | `64Mi`                             | Memory request for the Tailscale sidecar.                                  |
+| `resources.limits.cpu` | `string`               | `200m`                             | CPU limit for the Tailscale sidecar.                                       |
+| `resources.limits.memory` | `string`            | `256Mi`                            | Memory limit for the Tailscale sidecar.                                    |
 
 When enabled, the operator:
 
-- Merges `gateway.tailscale` settings (mode, hostname) into the OpenClaw config.
-- Injects the auth key from the referenced Secret.
+- Adds a **Tailscale sidecar** running `tailscaled` in userspace mode (`TS_USERSPACE=true`). The sidecar handles serve/funnel declaratively via `TS_SERVE_CONFIG`.
+- Adds an **init container** (`init-tailscale-bin`) that copies the `tailscale` CLI binary to a shared volume (`/tailscale-bin`), making it available to the main container for `tailscale whois` (SSO auth).
+- Sets `TS_SOCKET` on the main container pointing to the sidecar's Unix socket.
+- Prepends `/tailscale-bin` to the main container's `PATH`.
+- Adds `tailscale-serve.json` to the ConfigMap with the serve/funnel configuration.
 - When `authSSO` is true, sets `gateway.auth.allowTailscale=true` so tailnet members can authenticate without a gateway token.
+- Adds STUN (UDP 3478) and WireGuard (UDP 41641) egress rules to the NetworkPolicy.
 
 ### spec.ollama
 

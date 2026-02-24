@@ -8820,6 +8820,25 @@ spec:
                     description: Hostname sets the Tailscale device name (defaults
                       to instance name).
                     type: string
+                  image:
+                    description: |-
+                      Image configures the Tailscale sidecar container image.
+                      The same image is used for the sidecar and the init container that
+                      copies the tailscale CLI binary.
+                    properties:
+                      digest:
+                        description: Digest is the container image digest for supply
+                          chain security
+                        type: string
+                      repository:
+                        default: ghcr.io/tailscale/tailscale
+                        description: Repository is the container image repository
+                        type: string
+                      tag:
+                        default: latest
+                        description: Tag is the container image tag
+                        type: string
+                    type: object
                   mode:
                     default: serve
                     description: |-
@@ -8830,6 +8849,33 @@ spec:
                     - serve
                     - funnel
                     type: string
+                  resources:
+                    description: Resources specifies compute resources for the Tailscale
+                      sidecar container.
+                    properties:
+                      limits:
+                        description: Limits describes the maximum amount of compute
+                          resources allowed
+                        properties:
+                          cpu:
+                            description: CPU resource (e.g., "500m", "2")
+                            type: string
+                          memory:
+                            description: Memory resource (e.g., "512Mi", "2Gi")
+                            type: string
+                        type: object
+                      requests:
+                        description: Requests describes the minimum amount of compute
+                          resources required
+                        properties:
+                          cpu:
+                            description: CPU resource (e.g., "500m", "2")
+                            type: string
+                          memory:
+                            description: Memory resource (e.g., "512Mi", "2Gi")
+                            type: string
+                        type: object
+                    type: object
                 type: object
               webTerminal:
                 description: WebTerminal enables a browser-based terminal (ttyd) sidecar

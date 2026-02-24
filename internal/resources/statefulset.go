@@ -184,6 +184,11 @@ func buildContainers(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSe
 		buildGatewayProxyContainer(instance),
 	}
 
+	// Add Tailscale sidecar if enabled
+	if instance.Spec.Tailscale.Enabled {
+		containers = append(containers, buildTailscaleContainer(instance))
+	}
+
 	// Add Chromium sidecar if enabled
 	if instance.Spec.Chromium.Enabled {
 		containers = append(containers, buildChromiumContainer(instance))
@@ -275,6 +280,22 @@ func buildMainContainer(instance *openclawv1alpha1.OpenClawInstance, gatewayToke
 		})
 	}
 
+	// Add Tailscale volume mounts (socket for tailscale whois, bin for CLI binary)
+	if instance.Spec.Tailscale.Enabled {
+		container.VolumeMounts = append(container.VolumeMounts,
+			corev1.VolumeMount{
+				Name:      "tailscale-socket",
+				MountPath: TailscaleSocketDir,
+				ReadOnly:  true,
+			},
+			corev1.VolumeMount{
+				Name:      "tailscale-bin",
+				MountPath: TailscaleBinPath,
+				ReadOnly:  true,
+			},
+		)
+	}
+
 	// Add extra volume mounts from spec
 	container.VolumeMounts = append(container.VolumeMounts, instance.Spec.ExtraVolumeMounts...)
 
@@ -344,32 +365,12 @@ func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecre
 		})
 	}
 
-	// Tailscale auth key injection
-	if instance.Spec.Tailscale.Enabled && instance.Spec.Tailscale.AuthKeySecretRef != nil {
-		secretKey := instance.Spec.Tailscale.AuthKeySecretKey
-		if secretKey == "" {
-			secretKey = DefaultTailscaleAuthKeySecretKey
-		}
-		env = append(env, corev1.EnvVar{
-			Name: "TS_AUTHKEY",
-			ValueFrom: &corev1.EnvVarSource{
-				SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: *instance.Spec.Tailscale.AuthKeySecretRef,
-					Key:                  secretKey,
-				},
-			},
-		})
-	}
-
-	// Tailscale hostname
+	// Tailscale socket path - main container uses this to talk to the sidecar's
+	// tailscaled (e.g. "tailscale whois" for SSO auth)
 	if instance.Spec.Tailscale.Enabled {
-		hostname := instance.Spec.Tailscale.Hostname
-		if hostname == "" {
-			hostname = instance.Name
-		}
 		env = append(env, corev1.EnvVar{
-			Name:  "TS_HOSTNAME",
-			Value: hostname,
+			Name:  "TS_SOCKET",
+			Value: TailscaleSocketPath,
 		})
 	}
 
@@ -381,11 +382,21 @@ func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecre
 		)
 	}
 
-	// Prepend runtime deps bin directory to PATH so pnpm/python are discoverable
-	if instance.Spec.RuntimeDeps.Pnpm || instance.Spec.RuntimeDeps.Python {
+	// Build custom PATH with optional prefixes for runtime deps and Tailscale CLI
+	hasRuntimeDeps := instance.Spec.RuntimeDeps.Pnpm || instance.Spec.RuntimeDeps.Python
+	hasTailscale := instance.Spec.Tailscale.Enabled
+	if hasRuntimeDeps || hasTailscale {
+		basePath := "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+		var prefixes []string
+		if hasTailscale {
+			prefixes = append(prefixes, TailscaleBinPath)
+		}
+		if hasRuntimeDeps {
+			prefixes = append(prefixes, RuntimeDepsLocalBin)
+		}
 		env = append(env, corev1.EnvVar{
 			Name:  "PATH",
-			Value: RuntimeDepsLocalBin + ":/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+			Value: strings.Join(append(prefixes, basePath), ":"),
 		})
 	}
 
@@ -473,6 +484,11 @@ func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance) []corev1.C
 			},
 			VolumeMounts: mounts,
 		})
+	}
+
+	// Tailscale binary init container (copies tailscale CLI to shared volume)
+	if instance.Spec.Tailscale.Enabled {
+		initContainers = append(initContainers, buildTailscaleBinInitContainer(instance))
 	}
 
 	// Runtime dependency init containers (run before skills so skills can use pnpm/python)
@@ -824,6 +840,152 @@ func hasWorkspaceFiles(instance *openclawv1alpha1.OpenClawInstance) bool {
 // enriched result into the operator-managed CM under "openclaw.json".
 func configMapKey(_ *openclawv1alpha1.OpenClawInstance) string {
 	return "openclaw.json"
+}
+
+// buildTailscaleContainer creates the Tailscale sidecar that runs tailscaled.
+// It handles serve/funnel declaratively via TS_SERVE_CONFIG and exposes a Unix
+// socket so the main container can call "tailscale whois" for SSO auth.
+func buildTailscaleContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
+	image := GetTailscaleImage(instance)
+
+	hostname := instance.Spec.Tailscale.Hostname
+	if hostname == "" {
+		hostname = instance.Name
+	}
+
+	env := []corev1.EnvVar{
+		{Name: "TS_USERSPACE", Value: "true"},
+		{Name: "TS_STATE_DIR", Value: TailscaleStatePath},
+		{Name: "TS_SOCKET", Value: TailscaleSocketPath},
+		{Name: "TS_SERVE_CONFIG", Value: "/etc/tailscale/serve/" + TailscaleServeConfigKey},
+		{Name: "TS_HOSTNAME", Value: hostname},
+	}
+
+	// Inject TS_AUTHKEY from Secret
+	if instance.Spec.Tailscale.AuthKeySecretRef != nil {
+		secretKey := instance.Spec.Tailscale.AuthKeySecretKey
+		if secretKey == "" {
+			secretKey = DefaultTailscaleAuthKeySecretKey
+		}
+		env = append(env, corev1.EnvVar{
+			Name: "TS_AUTHKEY",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: *instance.Spec.Tailscale.AuthKeySecretRef,
+					Key:                  secretKey,
+				},
+			},
+		})
+	}
+
+	return corev1.Container{
+		Name:            "tailscale",
+		Image:           image,
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Env:             env,
+		VolumeMounts: []corev1.VolumeMount{
+			{
+				Name:      "tailscale-state",
+				MountPath: TailscaleStatePath,
+			},
+			{
+				Name:      "tailscale-socket",
+				MountPath: TailscaleSocketDir,
+			},
+			{
+				Name:      "config",
+				MountPath: "/etc/tailscale/serve/" + TailscaleServeConfigKey,
+				SubPath:   TailscaleServeConfigKey,
+				ReadOnly:  true,
+			},
+			{
+				Name:      "tailscale-tmp",
+				MountPath: "/tmp",
+			},
+		},
+		Resources: buildTailscaleResourceRequirements(instance),
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: Ptr(false),
+			ReadOnlyRootFilesystem:   Ptr(true),
+			RunAsNonRoot:             Ptr(true),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+			SeccompProfile: &corev1.SeccompProfile{
+				Type: corev1.SeccompProfileTypeRuntimeDefault,
+			},
+		},
+		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
+		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+	}
+}
+
+// buildTailscaleResourceRequirements creates resource requirements for the Tailscale sidecar
+func buildTailscaleResourceRequirements(instance *openclawv1alpha1.OpenClawInstance) corev1.ResourceRequirements {
+	req := corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{},
+		Limits:   corev1.ResourceList{},
+	}
+
+	cpuReq := instance.Spec.Tailscale.Resources.Requests.CPU
+	if cpuReq == "" {
+		cpuReq = "50m"
+	}
+	req.Requests[corev1.ResourceCPU] = resource.MustParse(cpuReq)
+
+	memReq := instance.Spec.Tailscale.Resources.Requests.Memory
+	if memReq == "" {
+		memReq = "64Mi"
+	}
+	req.Requests[corev1.ResourceMemory] = resource.MustParse(memReq)
+
+	cpuLim := instance.Spec.Tailscale.Resources.Limits.CPU
+	if cpuLim == "" {
+		cpuLim = "200m"
+	}
+	req.Limits[corev1.ResourceCPU] = resource.MustParse(cpuLim)
+
+	memLim := instance.Spec.Tailscale.Resources.Limits.Memory
+	if memLim == "" {
+		memLim = "256Mi"
+	}
+	req.Limits[corev1.ResourceMemory] = resource.MustParse(memLim)
+
+	return req
+}
+
+// buildTailscaleBinInitContainer creates the init container that copies the
+// tailscale CLI binary from the Tailscale image to a shared emptyDir volume.
+// The main container mounts this volume at TailscaleBinPath so OpenClaw can
+// find the "tailscale" binary via PATH (e.g. for "tailscale whois").
+func buildTailscaleBinInitContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
+	image := GetTailscaleImage(instance)
+
+	return corev1.Container{
+		Name:            "init-tailscale-bin",
+		Image:           image,
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Command:         []string{"sh", "-c", "cp /usr/local/bin/tailscale " + TailscaleBinPath + "/tailscale"},
+		VolumeMounts: []corev1.VolumeMount{
+			{
+				Name:      "tailscale-bin",
+				MountPath: TailscaleBinPath,
+			},
+		},
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: Ptr(false),
+			ReadOnlyRootFilesystem:   Ptr(true),
+			RunAsNonRoot:             Ptr(true),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+			SeccompProfile: &corev1.SeccompProfile{
+				Type: corev1.SeccompProfileTypeRuntimeDefault,
+			},
+		},
+		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
+		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+	}
 }
 
 // buildGatewayProxyContainer creates the nginx reverse proxy sidecar that
@@ -1365,6 +1527,36 @@ func buildVolumes(instance *openclawv1alpha1.OpenClawInstance) []corev1.Volume {
 			},
 		},
 	)
+
+	// Tailscale volumes
+	if instance.Spec.Tailscale.Enabled {
+		volumes = append(volumes,
+			corev1.Volume{
+				Name: "tailscale-state",
+				VolumeSource: corev1.VolumeSource{
+					EmptyDir: &corev1.EmptyDirVolumeSource{},
+				},
+			},
+			corev1.Volume{
+				Name: "tailscale-socket",
+				VolumeSource: corev1.VolumeSource{
+					EmptyDir: &corev1.EmptyDirVolumeSource{},
+				},
+			},
+			corev1.Volume{
+				Name: "tailscale-bin",
+				VolumeSource: corev1.VolumeSource{
+					EmptyDir: &corev1.EmptyDirVolumeSource{},
+				},
+			},
+			corev1.Volume{
+				Name: "tailscale-tmp",
+				VolumeSource: corev1.VolumeSource{
+					EmptyDir: &corev1.EmptyDirVolumeSource{},
+				},
+			},
+		)
+	}
 
 	// Chromium volumes
 	if instance.Spec.Chromium.Enabled {

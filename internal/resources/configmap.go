@@ -84,16 +84,23 @@ func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseCo
 		}
 	}
 
+	data := map[string]string{
+		"openclaw.json": configContent,
+		NginxConfigKey:  nginxStreamConfig(),
+	}
+
+	// Add Tailscale serve config when enabled (sidecar reads this via TS_SERVE_CONFIG)
+	if instance.Spec.Tailscale.Enabled {
+		data[TailscaleServeConfigKey] = BuildTailscaleServeConfig(instance)
+	}
+
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ConfigMapName(instance),
 			Namespace: instance.Namespace,
 			Labels:    labels,
 		},
-		Data: map[string]string{
-			"openclaw.json": configContent,
-			NginxConfigKey:  nginxStreamConfig(),
-		},
+		Data: data,
 	}
 }
 
@@ -129,11 +136,18 @@ func enrichConfigWithGatewayAuth(configJSON []byte, token string) ([]byte, error
 	return json.Marshal(config)
 }
 
-// enrichConfigWithTailscale injects gateway.tailscale settings into the config JSON.
-// Sets gateway.tailscale.mode and gateway.tailscale.resetOnExit.
-// If authSSO is enabled, also sets gateway.auth.allowTailscale=true.
+// enrichConfigWithTailscale injects Tailscale-related settings into the config JSON.
+// The Tailscale sidecar handles serve/funnel declaratively via TS_SERVE_CONFIG,
+// so we no longer set gateway.tailscale.mode or gateway.tailscale.resetOnExit.
+// If authSSO is enabled, sets gateway.auth.allowTailscale=true so the main
+// container accepts tailnet-authenticated requests.
 // Does not override user-set values.
 func enrichConfigWithTailscale(configJSON []byte, instance *openclawv1alpha1.OpenClawInstance) ([]byte, error) {
+	// Only need to inject config when AuthSSO is enabled
+	if !instance.Spec.Tailscale.AuthSSO {
+		return configJSON, nil
+	}
+
 	var config map[string]interface{}
 	if err := json.Unmarshal(configJSON, &config); err != nil {
 		return configJSON, nil
@@ -144,37 +158,72 @@ func enrichConfigWithTailscale(configJSON []byte, instance *openclawv1alpha1.Ope
 		gw = make(map[string]interface{})
 	}
 
-	// Set tailscale config (respect user overrides)
-	ts, _ := gw["tailscale"].(map[string]interface{})
-	if ts == nil {
-		ts = make(map[string]interface{})
-	}
-	if _, ok := ts["mode"]; !ok {
-		mode := instance.Spec.Tailscale.Mode
-		if mode == "" {
-			mode = TailscaleModeServe
-		}
-		ts["mode"] = mode
-	}
-	if _, ok := ts["resetOnExit"]; !ok {
-		ts["resetOnExit"] = true
-	}
-	gw["tailscale"] = ts
-
 	// Set gateway.auth.allowTailscale when AuthSSO is enabled
-	if instance.Spec.Tailscale.AuthSSO {
-		auth, _ := gw["auth"].(map[string]interface{})
-		if auth == nil {
-			auth = make(map[string]interface{})
-		}
-		if _, ok := auth["allowTailscale"]; !ok {
-			auth["allowTailscale"] = true
-		}
-		gw["auth"] = auth
+	auth, _ := gw["auth"].(map[string]interface{})
+	if auth == nil {
+		auth = make(map[string]interface{})
 	}
+	if _, ok := auth["allowTailscale"]; !ok {
+		auth["allowTailscale"] = true
+	}
+	gw["auth"] = auth
 
 	config["gateway"] = gw
 	return json.Marshal(config)
+}
+
+// tailscaleServeConfig is the JSON structure for TS_SERVE_CONFIG.
+// The sidecar reads this to declaratively configure serve or funnel.
+type tailscaleServeConfig struct {
+	TCP map[string]*tailscaleTCPHandler `json:"TCP"`
+	Web map[string]*tailscaleWebConfig  `json:"Web,omitempty"`
+	// AllowFunnel controls whether Tailscale Funnel (public internet) is enabled
+	AllowFunnel map[string]bool `json:"AllowFunnel,omitempty"`
+}
+
+type tailscaleTCPHandler struct {
+	HTTPS bool `json:"HTTPS"`
+}
+
+type tailscaleWebConfig struct {
+	Handlers map[string]*tailscaleWebHandler `json:"Handlers"`
+}
+
+type tailscaleWebHandler struct {
+	Proxy string `json:"Proxy"`
+}
+
+// BuildTailscaleServeConfig generates the TS_SERVE_CONFIG JSON for the sidecar.
+// It proxies HTTPS traffic to the gateway on 127.0.0.1:GatewayPort.
+// In funnel mode, AllowFunnel is set to expose the instance publicly.
+func BuildTailscaleServeConfig(instance *openclawv1alpha1.OpenClawInstance) string {
+	proxy := fmt.Sprintf("http://127.0.0.1:%d", GatewayPort)
+
+	cfg := tailscaleServeConfig{
+		TCP: map[string]*tailscaleTCPHandler{
+			"443": {HTTPS: true},
+		},
+		Web: map[string]*tailscaleWebConfig{
+			"${TS_CERT_DOMAIN}:443": {
+				Handlers: map[string]*tailscaleWebHandler{
+					"/": {Proxy: proxy},
+				},
+			},
+		},
+	}
+
+	mode := instance.Spec.Tailscale.Mode
+	if mode == "" {
+		mode = TailscaleModeServe
+	}
+	if mode == TailscaleModeFunnel {
+		cfg.AllowFunnel = map[string]bool{
+			"${TS_CERT_DOMAIN}:443": true,
+		}
+	}
+
+	data, _ := json.Marshal(cfg)
+	return string(data)
 }
 
 // enrichConfigWithBrowser injects browser config into the config JSON so the

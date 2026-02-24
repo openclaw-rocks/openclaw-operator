@@ -45,6 +45,7 @@ var protectedEnvVars = map[string]bool{
 	"OLLAMA_HOST":               true,
 	"TS_AUTHKEY":                true,
 	"TS_HOSTNAME":               true,
+	"TS_SOCKET":                 true,
 	"NODE_EXTRA_CA_CERTS":       true,
 	"NPM_CONFIG_CACHE":          true,
 	"NPM_CONFIG_IGNORE_SCRIPTS": true,
