@@ -321,7 +321,10 @@ func nginxStreamConfig() string {
 	return fmt.Sprintf(`worker_processes 1;
 pid /tmp/nginx.pid;
 error_log /dev/stderr warn;
-events {}
+
+events {
+    worker_connections 128;
+}
 
 stream {
     server {

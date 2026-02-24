@@ -5391,6 +5391,12 @@ func TestBuildStatefulSet_TailscaleSidecar(t *testing.T) {
 	if envMap["TS_HOSTNAME"].Value != "ts-sidecar" {
 		t.Errorf("TS_HOSTNAME = %q, want %q", envMap["TS_HOSTNAME"].Value, "ts-sidecar")
 	}
+	if envMap["TS_KUBE_SECRET"].Value != "" {
+		t.Errorf("TS_KUBE_SECRET = %q, want empty string", envMap["TS_KUBE_SECRET"].Value)
+	}
+	if envMap["KUBERNETES_SERVICE_HOST"].Value != "" {
+		t.Errorf("KUBERNETES_SERVICE_HOST = %q, want empty string", envMap["KUBERNETES_SERVICE_HOST"].Value)
+	}
 
 	tsAuthKey, ok := envMap["TS_AUTHKEY"]
 	if !ok {
@@ -5566,7 +5572,7 @@ func TestBuildStatefulSet_TailscaleVolumes(t *testing.T) {
 	sts := BuildStatefulSet(instance)
 	volumes := sts.Spec.Template.Spec.Volumes
 
-	for _, name := range []string{"tailscale-state", "tailscale-socket", "tailscale-bin", "tailscale-tmp"} {
+	for _, name := range []string{"tailscale-socket", "tailscale-bin", "tailscale-tmp"} {
 		v := findVolume(volumes, name)
 		if v == nil {
 			t.Errorf("volume %q not found", name)
@@ -8222,6 +8228,9 @@ func TestBuildConfigMap_ContainsNginxConfig(t *testing.T) {
 	}
 	if !strings.Contains(nginxConf, "pid /tmp/nginx.pid") {
 		t.Error("nginx config should use /tmp for pid file")
+	}
+	if !strings.Contains(nginxConf, "events {") {
+		t.Error("nginx config must contain an events block")
 	}
 }
 

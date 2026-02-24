@@ -859,6 +859,14 @@ func buildTailscaleContainer(instance *openclawv1alpha1.OpenClawInstance) corev1
 		{Name: "TS_SOCKET", Value: TailscaleSocketPath},
 		{Name: "TS_SERVE_CONFIG", Value: "/etc/tailscale/serve/" + TailscaleServeConfigKey},
 		{Name: "TS_HOSTNAME", Value: hostname},
+		// Disable Kubernetes Secret-based state storage so containerboot
+		// does not try to create a kube client (which requires a service
+		// account token the pod intentionally does not mount).
+		{Name: "TS_KUBE_SECRET", Value: ""},
+		// Override the auto-injected KUBERNETES_SERVICE_HOST so containerboot
+		// does not attempt kube client init (tailscale/tailscale#8188).
+		// State is persisted to TS_STATE_DIR on the emptyDir volume instead.
+		{Name: "KUBERNETES_SERVICE_HOST", Value: ""},
 	}
 
 	// Inject TS_AUTHKEY from Secret
@@ -885,10 +893,6 @@ func buildTailscaleContainer(instance *openclawv1alpha1.OpenClawInstance) corev1
 		Env:             env,
 		VolumeMounts: []corev1.VolumeMount{
 			{
-				Name:      "tailscale-state",
-				MountPath: TailscaleStatePath,
-			},
-			{
 				Name:      "tailscale-socket",
 				MountPath: TailscaleSocketDir,
 			},
@@ -899,6 +903,7 @@ func buildTailscaleContainer(instance *openclawv1alpha1.OpenClawInstance) corev1
 				ReadOnly:  true,
 			},
 			{
+				// State dir (/tmp/tailscale) is created by tailscaled under /tmp.
 				Name:      "tailscale-tmp",
 				MountPath: "/tmp",
 			},
@@ -1528,15 +1533,9 @@ func buildVolumes(instance *openclawv1alpha1.OpenClawInstance) []corev1.Volume {
 		},
 	)
 
-	// Tailscale volumes
+	// Tailscale volumes (state lives under /tmp so no separate state volume)
 	if instance.Spec.Tailscale.Enabled {
 		volumes = append(volumes,
-			corev1.Volume{
-				Name: "tailscale-state",
-				VolumeSource: corev1.VolumeSource{
-					EmptyDir: &corev1.EmptyDirVolumeSource{},
-				},
-			},
 			corev1.Volume{
 				Name: "tailscale-socket",
 				VolumeSource: corev1.VolumeSource{

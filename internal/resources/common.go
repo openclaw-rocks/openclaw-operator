@@ -93,8 +93,10 @@ const (
 	// TailscaleServeConfigKey is the ConfigMap data key for the Tailscale serve config JSON
 	TailscaleServeConfigKey = "tailscale-serve.json"
 
-	// TailscaleStatePath is the path for Tailscale state storage inside the sidecar
-	TailscaleStatePath = "/var/lib/tailscale"
+	// TailscaleStatePath is the path for Tailscale state storage inside the sidecar.
+	// Placed under /tmp (an emptyDir) so that tailscaled creates and owns the
+	// directory, avoiding a chmod failure on a kubelet-owned mount point.
+	TailscaleStatePath = "/tmp/tailscale"
 
 	// TailscaleSocketDir is the directory containing the tailscaled Unix socket
 	TailscaleSocketDir = "/var/run/tailscale"
