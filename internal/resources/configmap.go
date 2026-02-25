@@ -278,6 +278,12 @@ func enrichConfigWithBrowser(configJSON []byte) ([]byte, error) {
 			}
 		}
 
+		// Explicitly mark as attach-only so OpenClaw never tries to
+		// launch or manage a local browser process for this profile.
+		if _, ok := profile["attachOnly"]; !ok {
+			profile["attachOnly"] = true
+		}
+
 		// color is required by OpenClaw's config validation
 		if _, hasColor := profile["color"]; !hasColor {
 			profile["color"] = "#4285F4"
