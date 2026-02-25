@@ -61,6 +61,10 @@ test-e2e: ## Run end-to-end tests.
 scorecard: operator-sdk ## Run operator-sdk scorecard tests.
 	$(OPERATOR_SDK) scorecard bundle --wait-time 120s
 
+.PHONY: bench
+bench: ## Run benchmarks for resource builders.
+	go test ./internal/resources/ -bench=. -benchmem -run=^$$ -count=1
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter.
 	$(GOLANGCI_LINT) run
