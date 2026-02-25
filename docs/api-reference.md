@@ -218,16 +218,18 @@ Persistent storage configuration.
 
 Optional Chromium sidecar for browser automation.
 
-| Field                   | Type     | Default                          | Description                                         |
-|-------------------------|----------|----------------------------------|-----------------------------------------------------|
-| `enabled`               | `bool`   | `false`                          | Enable the Chromium sidecar container.              |
-| `image.repository`      | `string` | `ghcr.io/browserless/chromium`   | Chromium container image repository.                |
-| `image.tag`             | `string` | `latest`                         | Chromium image tag.                                 |
-| `image.digest`          | `string` | --                               | Chromium image digest for supply chain security.    |
-| `resources.requests.cpu`   | `string` | `250m`                        | Chromium minimum CPU.                               |
-| `resources.requests.memory`| `string` | `512Mi`                       | Chromium minimum memory.                            |
-| `resources.limits.cpu`     | `string` | `1000m`                       | Chromium maximum CPU.                               |
-| `resources.limits.memory`  | `string` | `2Gi`                         | Chromium maximum memory.                            |
+| Field                      | Type              | Default                        | Description                                                                                                          |
+|----------------------------|-------------------|--------------------------------|----------------------------------------------------------------------------------------------------------------------|
+| `enabled`                  | `bool`            | `false`                        | Enable the Chromium sidecar container.                                                                               |
+| `image.repository`         | `string`          | `ghcr.io/browserless/chromium` | Chromium container image repository.                                                                                 |
+| `image.tag`                | `string`          | `latest`                       | Chromium image tag.                                                                                                  |
+| `image.digest`             | `string`          | --                             | Chromium image digest for supply chain security.                                                                     |
+| `resources.requests.cpu`   | `string`          | `250m`                         | Chromium minimum CPU.                                                                                                |
+| `resources.requests.memory`| `string`          | `512Mi`                        | Chromium minimum memory.                                                                                             |
+| `resources.limits.cpu`     | `string`          | `1000m`                        | Chromium maximum CPU.                                                                                                |
+| `resources.limits.memory`  | `string`          | `2Gi`                          | Chromium maximum memory.                                                                                             |
+| `extraArgs`                | `[]string`        | --                             | Additional command-line arguments passed to the Chromium process (appended to defaults). Browserless forwards unrecognised flags to the underlying Chromium binary. |
+| `extraEnv`                 | `[]EnvVar`        | --                             | Additional environment variables for the Chromium sidecar container, merged with operator-managed variables.         |
 
 When enabled, the sidecar:
 

@@ -1122,6 +1122,9 @@ func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.
 		})
 	}
 
+	// Append user-supplied extra env vars
+	chromiumEnv = append(chromiumEnv, instance.Spec.Chromium.ExtraEnv...)
+
 	return corev1.Container{
 		Name:                     "chromium",
 		Image:                    image,
@@ -1147,6 +1150,7 @@ func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.
 				Protocol:      corev1.ProtocolTCP,
 			},
 		},
+		Args:         instance.Spec.Chromium.ExtraArgs,
 		Resources:    buildChromiumResourceRequirements(instance),
 		Env:          chromiumEnv,
 		VolumeMounts: chromiumMounts,

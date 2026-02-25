@@ -449,6 +449,17 @@ type ChromiumSpec struct {
 	// Resources specifies compute resources for the Chromium container
 	// +optional
 	Resources ResourcesSpec `json:"resources,omitempty"`
+
+	// ExtraArgs specifies additional command-line arguments passed to the
+	// Chromium process. These are appended to the default arguments.
+	// Example: ["--disable-blink-features=AutomationControlled", "--user-agent=Mozilla/5.0 ..."]
+	// +optional
+	ExtraArgs []string `json:"extraArgs,omitempty"`
+
+	// ExtraEnv specifies additional environment variables for the Chromium
+	// sidecar container, merged with the operator-managed variables.
+	// +optional
+	ExtraEnv []corev1.EnvVar `json:"extraEnv,omitempty"`
 }
 
 // ChromiumImageSpec defines the Chromium container image

@@ -255,6 +255,14 @@ spec:
       limits:
         cpu: "1000m"
         memory: "2Gi"
+    # Pass extra flags to the Chromium process (useful for anti-bot evasion)
+    extraArgs:
+      - "--disable-blink-features=AutomationControlled"
+      - "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    # Inject extra environment variables into the sidecar
+    extraEnv:
+      - name: DEFAULT_STEALTH
+        value: "true"
 ```
 
 When enabled, the operator automatically:

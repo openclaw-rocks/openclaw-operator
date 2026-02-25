@@ -559,6 +559,113 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 	}
 }
 
+func TestBuildStatefulSet_ChromiumExtraArgs(t *testing.T) {
+	instance := newTestInstance("chromium-extraargs")
+	instance.Spec.Chromium.Enabled = true
+	instance.Spec.Chromium.ExtraArgs = []string{
+		"--disable-blink-features=AutomationControlled",
+		"--window-size=1920,1080",
+	}
+
+	sts := BuildStatefulSet(instance)
+
+	var chromium *corev1.Container
+	for i := range sts.Spec.Template.Spec.Containers {
+		if sts.Spec.Template.Spec.Containers[i].Name == "chromium" {
+			chromium = &sts.Spec.Template.Spec.Containers[i]
+			break
+		}
+	}
+	if chromium == nil {
+		t.Fatal("chromium container not found")
+	}
+
+	if len(chromium.Args) != 2 {
+		t.Fatalf("expected 2 Args, got %d: %v", len(chromium.Args), chromium.Args)
+	}
+	if chromium.Args[0] != "--disable-blink-features=AutomationControlled" {
+		t.Errorf("Args[0] = %q, want --disable-blink-features=AutomationControlled", chromium.Args[0])
+	}
+	if chromium.Args[1] != "--window-size=1920,1080" {
+		t.Errorf("Args[1] = %q, want --window-size=1920,1080", chromium.Args[1])
+	}
+}
+
+func TestBuildStatefulSet_ChromiumExtraEnv(t *testing.T) {
+	instance := newTestInstance("chromium-extraenv")
+	instance.Spec.Chromium.Enabled = true
+	instance.Spec.Chromium.ExtraEnv = []corev1.EnvVar{
+		{Name: "DEFAULT_STEALTH", Value: "true"},
+		{Name: "CUSTOM_VAR", Value: "hello"},
+	}
+
+	sts := BuildStatefulSet(instance)
+
+	var chromium *corev1.Container
+	for i := range sts.Spec.Template.Spec.Containers {
+		if sts.Spec.Template.Spec.Containers[i].Name == "chromium" {
+			chromium = &sts.Spec.Template.Spec.Containers[i]
+			break
+		}
+	}
+	if chromium == nil {
+		t.Fatal("chromium container not found")
+	}
+
+	// Operator-managed PORT env must still be present
+	foundPort := false
+	for _, env := range chromium.Env {
+		if env.Name == "PORT" {
+			foundPort = true
+			break
+		}
+	}
+	if !foundPort {
+		t.Error("chromium container should still have operator-managed PORT env var")
+	}
+
+	// Extra env vars should be appended
+	foundStealth := false
+	foundCustom := false
+	for _, env := range chromium.Env {
+		if env.Name == "DEFAULT_STEALTH" && env.Value == "true" {
+			foundStealth = true
+		}
+		if env.Name == "CUSTOM_VAR" && env.Value == "hello" {
+			foundCustom = true
+		}
+	}
+	if !foundStealth {
+		t.Error("chromium container should have DEFAULT_STEALTH env var from ExtraEnv")
+	}
+	if !foundCustom {
+		t.Error("chromium container should have CUSTOM_VAR env var from ExtraEnv")
+	}
+}
+
+func TestBuildStatefulSet_ChromiumNoExtraArgs(t *testing.T) {
+	instance := newTestInstance("chromium-no-args")
+	instance.Spec.Chromium.Enabled = true
+	// ExtraArgs not set - Args should be nil/empty
+
+	sts := BuildStatefulSet(instance)
+
+	var chromium *corev1.Container
+	for i := range sts.Spec.Template.Spec.Containers {
+		if sts.Spec.Template.Spec.Containers[i].Name == "chromium" {
+			chromium = &sts.Spec.Template.Spec.Containers[i]
+			break
+		}
+	}
+	if chromium == nil {
+		t.Fatal("chromium container not found")
+	}
+
+	if len(chromium.Args) != 0 {
+		t.Errorf("expected no Args when ExtraArgs not set, got %v", chromium.Args)
+	}
+}
+
 func TestBuildStatefulSet_CustomResources(t *testing.T) {
 	instance := newTestInstance("res-test")
 	instance.Spec.Resources = openclawv1alpha1.ResourcesSpec{
