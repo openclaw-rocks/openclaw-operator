@@ -57,6 +57,10 @@ test: manifests generate fmt vet envtest ## Run tests.
 test-e2e: ## Run end-to-end tests.
 	go test ./test/e2e/... -v -count=1
 
+.PHONY: scorecard
+scorecard: operator-sdk ## Run operator-sdk scorecard tests.
+	$(OPERATOR_SDK) scorecard bundle --wait-time 120s
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter.
 	$(GOLANGCI_LINT) run
@@ -124,12 +128,14 @@ KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
+OPERATOR_SDK ?= $(LOCALBIN)/operator-sdk
 
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v5.3.0
 CONTROLLER_TOOLS_VERSION ?= v0.17.2
 ENVTEST_VERSION ?= release-0.19
 GOLANGCI_LINT_VERSION ?= v1.64.5
+OPERATOR_SDK_VERSION ?= v1.38.0
 
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
@@ -150,6 +156,17 @@ $(ENVTEST): $(LOCALBIN)
 golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
 $(GOLANGCI_LINT): $(LOCALBIN)
 	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
+
+.PHONY: operator-sdk
+operator-sdk: $(OPERATOR_SDK) ## Download operator-sdk locally if necessary.
+$(OPERATOR_SDK): $(LOCALBIN)
+	@[ -f $(OPERATOR_SDK) ] || { \
+	set -e; \
+	OS=$$(go env GOOS); ARCH=$$(go env GOARCH); \
+	echo "Downloading operator-sdk $(OPERATOR_SDK_VERSION)"; \
+	curl -sSLo $(OPERATOR_SDK) "https://github.com/operator-framework/operator-sdk/releases/download/$(OPERATOR_SDK_VERSION)/operator-sdk_$${OS}_$${ARCH}"; \
+	chmod +x $(OPERATOR_SDK); \
+	}
 
 # go-install-tool will 'go install' any package with custom target and target version.
 define go-install-tool

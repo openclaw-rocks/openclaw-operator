@@ -213,6 +213,17 @@ jobs:
       - name: Run E2E tests
         run: make test-e2e
 
+      - name: Install operator-sdk
+        run: |
+          export ARCH=$(case $(uname -m) in x86_64) echo -n amd64 ;; aarch64) echo -n arm64 ;; *) echo -n $(uname -m) ;; esac)
+          export OS=$(uname | awk '{print tolower($0)}')
+          curl -sSLo /usr/local/bin/operator-sdk "https://github.com/operator-framework/operator-sdk/releases/download/v1.38.0/operator-sdk_${OS}_${ARCH}"
+          chmod +x /usr/local/bin/operator-sdk
+          operator-sdk version
+
+      - name: Run scorecard tests
+        run: operator-sdk scorecard bundle --wait-time 120s || true
+
       - name: Dump operator logs
         if: failure()
         run: |
