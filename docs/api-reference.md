@@ -681,6 +681,7 @@ High availability and scheduling configuration.
 | `nodeSelector`                    | `map[string]string` | --      | Node labels for pod scheduling.                          |
 | `tolerations`                     | `[]Toleration`      | --      | Tolerations for pod scheduling.                          |
 | `affinity`                        | `*Affinity`         | --      | Affinity and anti-affinity rules.                        |
+| `topologySpreadConstraints`       | `[]TopologySpreadConstraint` | --      | Topology spread constraints for pod scheduling.          |
 | `autoScaling.enabled`             | `*bool`             | `false` | Create a HorizontalPodAutoscaler.                        |
 | `autoScaling.minReplicas`         | `*int32`            | `1`     | Minimum number of replicas.                              |
 | `autoScaling.maxReplicas`         | `*int32`            | `5`     | Maximum number of replicas.                              |

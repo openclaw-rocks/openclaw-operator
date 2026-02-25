@@ -1191,6 +1191,50 @@ func TestBuildStatefulSet_NodeSelectorAndTolerations(t *testing.T) {
 	}
 }
 
+func TestBuildStatefulSet_TopologySpreadConstraints(t *testing.T) {
+	instance := newTestInstance("tsc-test")
+	instance.Spec.Availability.TopologySpreadConstraints = []corev1.TopologySpreadConstraint{
+		{
+			MaxSkew:           1,
+			TopologyKey:       "topology.kubernetes.io/zone",
+			WhenUnsatisfiable: corev1.DoNotSchedule,
+			LabelSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"app.kubernetes.io/instance": "tsc-test",
+				},
+			},
+		},
+	}
+
+	sts := BuildStatefulSet(instance)
+	podSpec := sts.Spec.Template.Spec
+
+	if len(podSpec.TopologySpreadConstraints) != 1 {
+		t.Fatalf("expected 1 topology spread constraint, got %d", len(podSpec.TopologySpreadConstraints))
+	}
+	tsc := podSpec.TopologySpreadConstraints[0]
+	if tsc.TopologyKey != "topology.kubernetes.io/zone" {
+		t.Errorf("topologyKey = %q, want %q", tsc.TopologyKey, "topology.kubernetes.io/zone")
+	}
+	if tsc.MaxSkew != 1 {
+		t.Errorf("maxSkew = %d, want 1", tsc.MaxSkew)
+	}
+	if tsc.WhenUnsatisfiable != corev1.DoNotSchedule {
+		t.Errorf("whenUnsatisfiable = %v, want DoNotSchedule", tsc.WhenUnsatisfiable)
+	}
+}
+
+func TestBuildStatefulSet_TopologySpreadConstraints_Empty(t *testing.T) {
+	instance := newTestInstance("tsc-empty")
+
+	sts := BuildStatefulSet(instance)
+	podSpec := sts.Spec.Template.Spec
+
+	if podSpec.TopologySpreadConstraints != nil {
+		t.Errorf("expected nil topology spread constraints, got %v", podSpec.TopologySpreadConstraints)
+	}
+}
+
 func TestBuildStatefulSet_EnvAndEnvFrom(t *testing.T) {
 	instance := newTestInstance("env-test")
 	instance.Spec.Env = []corev1.EnvVar{

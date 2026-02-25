@@ -461,6 +461,62 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			// Clean up via owner-reference garbage collection
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})
+
+		It("Should apply topology spread constraints", func() {
+			instanceName := "tsc-instance"
+
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					Availability: openclawv1alpha1.AvailabilitySpec{
+						TopologySpreadConstraints: []corev1.TopologySpreadConstraint{
+							{
+								MaxSkew:           1,
+								TopologyKey:       "topology.kubernetes.io/zone",
+								WhenUnsatisfiable: corev1.DoNotSchedule,
+								LabelSelector: &metav1.LabelSelector{
+									MatchLabels: map[string]string{
+										"app.kubernetes.io/instance": "tsc-instance",
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			statefulSet := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName,
+					Namespace: namespace,
+				}, statefulSet)
+			}, timeout, interval).Should(Succeed())
+
+			Expect(statefulSet.Spec.Template.Spec.TopologySpreadConstraints).To(HaveLen(1))
+			tsc := statefulSet.Spec.Template.Spec.TopologySpreadConstraints[0]
+			Expect(tsc.TopologyKey).To(Equal("topology.kubernetes.io/zone"))
+			Expect(tsc.MaxSkew).To(Equal(int32(1)))
+			Expect(tsc.WhenUnsatisfiable).To(Equal(corev1.DoNotSchedule))
+
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
 	})
 
 	Context("When deleting an OpenClawInstance without S3 backup credentials", func() {

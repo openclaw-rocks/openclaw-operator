@@ -1011,6 +1011,10 @@ type AvailabilitySpec struct {
 	// Affinity specifies affinity scheduling rules
 	// +optional
 	Affinity *corev1.Affinity `json:"affinity,omitempty"`
+
+	// TopologySpreadConstraints describes how pods should spread across topology domains
+	// +optional
+	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
 }
 
 // AutoScalingSpec configures horizontal pod auto-scaling via HPA
