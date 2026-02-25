@@ -42,13 +42,11 @@ const (
 	// NginxConfigKey is the ConfigMap data key for the nginx stream config
 	NginxConfigKey = "nginx.conf"
 
-	// ChromiumPort is the port declared on the container (metadata only).
-	// The browserless image actually listens on BrowserlessCDPPort.
+	// ChromiumPort is the port the chromium sidecar listens on.
+	// The browserless image defaults to 3000, but we override it to 9222
+	// via the PORT env var to avoid conflicting with the OpenClaw gateway's
+	// built-in browser control service on port 3000.
 	ChromiumPort = 9222
-
-	// BrowserlessCDPPort is the actual port the ghcr.io/browserless/chromium
-	// image listens on for CDP and HTTP API requests.
-	BrowserlessCDPPort = 3000
 
 	// OllamaPort is the port for the Ollama API
 	OllamaPort = 11434

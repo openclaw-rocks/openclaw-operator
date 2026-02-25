@@ -28,6 +28,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
 )
@@ -339,10 +340,24 @@ func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecre
 	}
 
 	if instance.Spec.Chromium.Enabled {
-		env = append(env, corev1.EnvVar{
-			Name:  "CHROMIUM_URL",
-			Value: fmt.Sprintf("http://localhost:%d", BrowserlessCDPPort),
-		})
+		// Inject the pod IP via Downward API so the config can reference
+		// ${OPENCLAW_CHROMIUM_CDP} with a non-loopback address. The OpenClaw
+		// browser control service treats 127.x.x.x as "local/managed" and
+		// only activates remote/attach-only mode for non-loopback addresses.
+		env = append(env,
+			corev1.EnvVar{
+				Name: "POD_IP",
+				ValueFrom: &corev1.EnvVarSource{
+					FieldRef: &corev1.ObjectFieldSelector{
+						FieldPath: "status.podIP",
+					},
+				},
+			},
+			corev1.EnvVar{
+				Name:  "OPENCLAW_CHROMIUM_CDP",
+				Value: fmt.Sprintf("http://$(POD_IP):%d", ChromiumPort),
+			},
+		)
 	}
 
 	if instance.Spec.Ollama.Enabled {
@@ -1079,7 +1094,15 @@ func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.
 		},
 	}
 
-	var chromiumEnv []corev1.EnvVar
+	// Override the default listening port (3000) to avoid conflicting with
+	// the OpenClaw gateway's built-in browser control service on port 3000.
+	// The sidecar listens on 0.0.0.0 so it's reachable via the pod IP.
+	// The cdpUrl in the config uses ${OPENCLAW_CHROMIUM_CDP} which resolves
+	// to the pod IP at runtime, triggering the remote/attach-only code path
+	// in the browser control service (any non-loopback address is "remote").
+	chromiumEnv := []corev1.EnvVar{
+		{Name: "PORT", Value: fmt.Sprintf("%d", ChromiumPort)},
+	}
 
 	// Add CA bundle mount and env if configured
 	if cab := instance.Spec.Security.CABundle; cab != nil {
@@ -1127,6 +1150,23 @@ func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.
 		Resources:    buildChromiumResourceRequirements(instance),
 		Env:          chromiumEnv,
 		VolumeMounts: chromiumMounts,
+		// Startup probe ensures browserless is ready to accept CDP connections
+		// before the pod is marked Ready. Without this, the first browser tool
+		// call from the main container may time out because browserless has not
+		// finished starting yet.
+		StartupProbe: &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				HTTPGet: &corev1.HTTPGetAction{
+					Path: "/json/version",
+					Port: intstr.FromInt32(ChromiumPort),
+				},
+			},
+			InitialDelaySeconds: 1,
+			PeriodSeconds:       2,
+			FailureThreshold:    15,
+			SuccessThreshold:    1,
+			TimeoutSeconds:      2,
+		},
 	}
 }
 
@@ -1742,7 +1782,10 @@ func buildProbeHandler(_ *openclawv1alpha1.OpenClawInstance) corev1.ProbeHandler
 
 // buildLivenessProbe creates the liveness probe
 func buildLivenessProbe(instance *openclawv1alpha1.OpenClawInstance) *corev1.Probe {
-	spec := instance.Spec.Probes.Liveness
+	var spec *openclawv1alpha1.ProbeSpec
+	if instance.Spec.Probes != nil {
+		spec = instance.Spec.Probes.Liveness
+	}
 	if spec != nil && spec.Enabled != nil && !*spec.Enabled {
 		return nil
 	}
@@ -1776,7 +1819,10 @@ func buildLivenessProbe(instance *openclawv1alpha1.OpenClawInstance) *corev1.Pro
 
 // buildReadinessProbe creates the readiness probe
 func buildReadinessProbe(instance *openclawv1alpha1.OpenClawInstance) *corev1.Probe {
-	spec := instance.Spec.Probes.Readiness
+	var spec *openclawv1alpha1.ProbeSpec
+	if instance.Spec.Probes != nil {
+		spec = instance.Spec.Probes.Readiness
+	}
 	if spec != nil && spec.Enabled != nil && !*spec.Enabled {
 		return nil
 	}
@@ -1810,7 +1856,10 @@ func buildReadinessProbe(instance *openclawv1alpha1.OpenClawInstance) *corev1.Pr
 
 // buildStartupProbe creates the startup probe
 func buildStartupProbe(instance *openclawv1alpha1.OpenClawInstance) *corev1.Probe {
-	spec := instance.Spec.Probes.Startup
+	var spec *openclawv1alpha1.ProbeSpec
+	if instance.Spec.Probes != nil {
+		spec = instance.Spec.Probes.Startup
+	}
 	if spec != nil && spec.Enabled != nil && !*spec.Enabled {
 		return nil
 	}

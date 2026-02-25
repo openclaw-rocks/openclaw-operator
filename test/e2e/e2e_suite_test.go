@@ -19,6 +19,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"testing"
@@ -1188,6 +1189,136 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			// Clean up
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})
+
+		It("Should create chromium sidecar on port 9222 to avoid port 3000 conflict", func() {
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instanceName := "chromium-test"
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					Chromium: openclawv1alpha1.ChromiumSpec{
+						Enabled: true,
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			// Verify StatefulSet has chromium sidecar container
+			statefulSet := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName,
+					Namespace: namespace,
+				}, statefulSet)
+			}, timeout, interval).Should(Succeed())
+
+			// Verify chromium container exists with correct port
+			var chromiumContainer *corev1.Container
+			for i := range statefulSet.Spec.Template.Spec.Containers {
+				if statefulSet.Spec.Template.Spec.Containers[i].Name == "chromium" {
+					chromiumContainer = &statefulSet.Spec.Template.Spec.Containers[i]
+					break
+				}
+			}
+			Expect(chromiumContainer).NotTo(BeNil(), "chromium sidecar container should exist")
+			Expect(chromiumContainer.Image).To(Equal("ghcr.io/browserless/chromium:latest"))
+			Expect(chromiumContainer.Ports).To(HaveLen(1))
+			Expect(chromiumContainer.Ports[0].ContainerPort).To(Equal(int32(resources.ChromiumPort)))
+
+			// Verify chromium container has PORT env var to override default (3000)
+			var foundPortEnv bool
+			for _, env := range chromiumContainer.Env {
+				if env.Name == "PORT" {
+					foundPortEnv = true
+					Expect(env.Value).To(Equal(fmt.Sprintf("%d", resources.ChromiumPort)),
+						"PORT env should override browserless default to avoid conflict with OpenClaw browser control service")
+					break
+				}
+			}
+			Expect(foundPortEnv).To(BeTrue(), "chromium container should have PORT env var")
+
+			// Verify main container has POD_IP and OPENCLAW_CHROMIUM_CDP env vars
+			mainContainer := statefulSet.Spec.Template.Spec.Containers[0]
+			var foundPodIP, foundChromiumCDP bool
+			for _, env := range mainContainer.Env {
+				if env.Name == "POD_IP" {
+					foundPodIP = true
+					Expect(env.ValueFrom).NotTo(BeNil(), "POD_IP should use valueFrom")
+					Expect(env.ValueFrom.FieldRef).NotTo(BeNil(), "POD_IP should use fieldRef")
+					Expect(env.ValueFrom.FieldRef.FieldPath).To(Equal("status.podIP"))
+				}
+				if env.Name == "OPENCLAW_CHROMIUM_CDP" {
+					foundChromiumCDP = true
+					Expect(env.Value).To(Equal(fmt.Sprintf("http://$(POD_IP):%d", resources.ChromiumPort)))
+				}
+			}
+			Expect(foundPodIP).To(BeTrue(), "POD_IP env var should be set via Downward API")
+			Expect(foundChromiumCDP).To(BeTrue(), "OPENCLAW_CHROMIUM_CDP env var should be set")
+
+			// Verify ConfigMap has browser profiles with cdpUrl on port 9222
+			configMap := &corev1.ConfigMap{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.ConfigMapName(instance),
+					Namespace: namespace,
+				}, configMap)
+			}, timeout, interval).Should(Succeed())
+
+			var parsed map[string]interface{}
+			Expect(json.Unmarshal([]byte(configMap.Data["openclaw.json"]), &parsed)).Should(Succeed())
+
+			browser, ok := parsed["browser"].(map[string]interface{})
+			Expect(ok).To(BeTrue(), "config should have browser key")
+
+			profiles, ok := browser["profiles"].(map[string]interface{})
+			Expect(ok).To(BeTrue(), "browser should have profiles key")
+
+			// cdpUrl uses env var reference resolved at runtime to pod IP
+			expectedCDP := "${OPENCLAW_CHROMIUM_CDP}"
+			for _, profileName := range []string{"default", "chrome"} {
+				profile, ok := profiles[profileName].(map[string]interface{})
+				Expect(ok).To(BeTrue(), "profiles should have %s key", profileName)
+				Expect(profile["cdpUrl"]).To(Equal(expectedCDP),
+					"browser.profiles.%s.cdpUrl should use env var reference for pod IP", profileName)
+			}
+
+			// Verify Service has chromium port
+			service := &corev1.Service{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName,
+					Namespace: namespace,
+				}, service)
+			}, timeout, interval).Should(Succeed())
+
+			var foundChromiumPort bool
+			for _, port := range service.Spec.Ports {
+				if port.Name == "chromium" {
+					foundChromiumPort = true
+					Expect(port.Port).To(Equal(int32(resources.ChromiumPort)))
+					break
+				}
+			}
+			Expect(foundChromiumPort).To(BeTrue(), "Service should have chromium port")
+
+			// Clean up
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
 	})
 
 	Context("When creating an OpenClawInstance with WebTerminal", func() {
@@ -1407,7 +1538,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
-					Probes: openclawv1alpha1.ProbesSpec{
+					Probes: &openclawv1alpha1.ProbesSpec{
 						Liveness:  &openclawv1alpha1.ProbeSpec{Enabled: &falseVal},
 						Readiness: &openclawv1alpha1.ProbeSpec{Enabled: &falseVal},
 						Startup:   &openclawv1alpha1.ProbeSpec{Enabled: &falseVal},

@@ -255,7 +255,12 @@ func enrichConfigWithBrowser(configJSON []byte) ([]byte, error) {
 		profiles = make(map[string]interface{})
 	}
 
-	cdpURL := fmt.Sprintf("http://localhost:%d", BrowserlessCDPPort)
+	// Use ${OPENCLAW_CHROMIUM_CDP} env var (resolved at runtime by OpenClaw)
+	// which contains the pod IP. The browser control service treats any
+	// 127.x.x.x address as "local/managed" and tries to bind the port.
+	// A non-loopback pod IP activates remote/attach-only mode so the
+	// service just connects to the existing chromium sidecar.
+	cdpURL := "${OPENCLAW_CHROMIUM_CDP}"
 
 	// Configure both "default" and "chrome" profiles to point at the sidecar.
 	// LLMs often explicitly pass profile="chrome", so we redirect it to the

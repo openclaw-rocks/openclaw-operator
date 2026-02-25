@@ -447,20 +447,45 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 		t.Fatal("chromium container not found")
 	}
 
-	// Main container should have CHROMIUM_URL env var
+	// Main container should have POD_IP (Downward API) and OPENCLAW_CHROMIUM_CDP env vars
 	mainContainer := containers[0]
-	foundChromiumURL := false
+	foundPodIP := false
+	foundChromiumCDP := false
 	for _, env := range mainContainer.Env {
-		if env.Name == "CHROMIUM_URL" {
-			foundChromiumURL = true
-			if env.Value != "http://localhost:3000" {
-				t.Errorf("CHROMIUM_URL = %q, want %q", env.Value, "http://localhost:3000")
+		if env.Name == "POD_IP" {
+			foundPodIP = true
+			if env.ValueFrom == nil || env.ValueFrom.FieldRef == nil || env.ValueFrom.FieldRef.FieldPath != "status.podIP" {
+				t.Error("POD_IP should use Downward API fieldRef to status.podIP")
+			}
+		}
+		if env.Name == "OPENCLAW_CHROMIUM_CDP" {
+			foundChromiumCDP = true
+			expected := fmt.Sprintf("http://$(POD_IP):%d", ChromiumPort)
+			if env.Value != expected {
+				t.Errorf("OPENCLAW_CHROMIUM_CDP = %q, want %q", env.Value, expected)
+			}
+		}
+	}
+	if !foundPodIP {
+		t.Error("main container should have POD_IP env var (Downward API) when chromium is enabled")
+	}
+	if !foundChromiumCDP {
+		t.Error("main container should have OPENCLAW_CHROMIUM_CDP env var when chromium is enabled")
+	}
+
+	// Chromium PORT env var overrides the default listening port (3000)
+	foundPortEnv := false
+	for _, env := range chromium.Env {
+		if env.Name == "PORT" {
+			foundPortEnv = true
+			if env.Value != fmt.Sprintf("%d", ChromiumPort) {
+				t.Errorf("chromium PORT env = %q, want %q", env.Value, fmt.Sprintf("%d", ChromiumPort))
 			}
 			break
 		}
 	}
-	if !foundChromiumURL {
-		t.Error("main container should have CHROMIUM_URL env var when chromium is enabled")
+	if !foundPortEnv {
+		t.Error("chromium container should have PORT env var to override default listening port")
 	}
 
 	// Chromium image defaults
@@ -587,7 +612,7 @@ func TestBuildStatefulSet_ImageDigest(t *testing.T) {
 
 func TestBuildStatefulSet_ProbesDisabled(t *testing.T) {
 	instance := newTestInstance("probes-disabled")
-	instance.Spec.Probes = openclawv1alpha1.ProbesSpec{
+	instance.Spec.Probes = &openclawv1alpha1.ProbesSpec{
 		Liveness: &openclawv1alpha1.ProbeSpec{
 			Enabled: Ptr(false),
 		},
@@ -615,7 +640,7 @@ func TestBuildStatefulSet_ProbesDisabled(t *testing.T) {
 
 func TestBuildStatefulSet_CustomProbeValues(t *testing.T) {
 	instance := newTestInstance("probes-custom")
-	instance.Spec.Probes = openclawv1alpha1.ProbesSpec{
+	instance.Spec.Probes = &openclawv1alpha1.ProbesSpec{
 		Liveness: &openclawv1alpha1.ProbeSpec{
 			InitialDelaySeconds: Ptr(int32(60)),
 			PeriodSeconds:       Ptr(int32(20)),
@@ -6068,15 +6093,17 @@ func TestBuildConfigMap_ChromiumBrowserConfig(t *testing.T) {
 		t.Fatal("expected browser.profiles key")
 	}
 
-	// Both "default" and "chrome" profiles must point at the sidecar.
-	// LLMs often explicitly pass profile="chrome", so we redirect it.
+	// Both "default" and "chrome" profiles must use the env var reference.
+	// ${OPENCLAW_CHROMIUM_CDP} resolves at runtime to the pod IP, which is
+	// non-loopback and triggers the remote/attach-only code path.
 	for _, name := range []string{"default", "chrome"} {
 		p, ok := profiles[name].(map[string]interface{})
 		if !ok {
 			t.Fatalf("expected browser.profiles.%s key", name)
 		}
-		if p["cdpUrl"] != "http://localhost:3000" {
-			t.Errorf("browser.profiles.%s.cdpUrl = %v, want %q", name, p["cdpUrl"], "http://localhost:3000")
+		expectedCDP := "${OPENCLAW_CHROMIUM_CDP}"
+		if p["cdpUrl"] != expectedCDP {
+			t.Errorf("browser.profiles.%s.cdpUrl = %v, want %q", name, p["cdpUrl"], expectedCDP)
 		}
 		if p["color"] != "#4285F4" {
 			t.Errorf("browser.profiles.%s.color = %v, want %q", name, p["color"], "#4285F4")
@@ -6548,18 +6575,18 @@ func TestBuildStatefulSet_OllamaAndChromiumEnabled(t *testing.T) {
 
 	// Both env vars should be present on main container
 	mainContainer := containers[0]
-	foundChromiumURL := false
+	foundChromiumCDP := false
 	foundOllamaHost := false
 	for _, env := range mainContainer.Env {
-		if env.Name == "CHROMIUM_URL" {
-			foundChromiumURL = true
+		if env.Name == "OPENCLAW_CHROMIUM_CDP" {
+			foundChromiumCDP = true
 		}
 		if env.Name == "OLLAMA_HOST" {
 			foundOllamaHost = true
 		}
 	}
-	if !foundChromiumURL {
-		t.Error("main container should have CHROMIUM_URL")
+	if !foundChromiumCDP {
+		t.Error("main container should have OPENCLAW_CHROMIUM_CDP")
 	}
 	if !foundOllamaHost {
 		t.Error("main container should have OLLAMA_HOST")
