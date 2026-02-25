@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.7](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.6...v0.10.7) (2026-02-25)
+
+
+### Bug Fixes
+
+* resolve chromium sidecar port conflict and unreachable CDP ([#183](https://github.com/openclaw-rocks/k8s-operator/issues/183)) ([2d3d212](https://github.com/openclaw-rocks/k8s-operator/commit/2d3d2127e6f2ee2566e748e993b5aceae22c80a4)), closes [#180](https://github.com/openclaw-rocks/k8s-operator/issues/180)
+
 ## [0.10.6](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.5...v0.10.6) (2026-02-24)
 
 
