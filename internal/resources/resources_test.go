@@ -8577,3 +8577,213 @@ func TestBuildIngress_BasicAuth_Traefik(t *testing.T) {
 		t.Errorf("nginx auth-type should be empty for Traefik, got %q", anns["nginx.ingress.kubernetes.io/auth-type"])
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Idempotency tests - verify all builders produce identical output on
+// repeated calls with the same input. Essential for CreateOrUpdate.
+// ---------------------------------------------------------------------------
+
+func TestBuildService_Idempotent(t *testing.T) {
+	instance := newTestInstance("idem-svc")
+	s1 := BuildService(instance)
+	s2 := BuildService(instance)
+	b1, _ := json.Marshal(s1.Spec)
+	b2, _ := json.Marshal(s2.Spec)
+	if !bytes.Equal(b1, b2) {
+		t.Error("BuildService is not idempotent")
+	}
+}
+
+func TestBuildConfigMap_Idempotent(t *testing.T) {
+	instance := newTestInstance("idem-cm")
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{Raw: []byte(`{"key":"val"}`)},
+	}
+	c1 := BuildConfigMap(instance, "token123")
+	c2 := BuildConfigMap(instance, "token123")
+	b1, _ := json.Marshal(c1.Data)
+	b2, _ := json.Marshal(c2.Data)
+	if !bytes.Equal(b1, b2) {
+		t.Error("BuildConfigMap is not idempotent")
+	}
+}
+
+func TestBuildNetworkPolicy_Idempotent(t *testing.T) {
+	instance := newTestInstance("idem-np")
+	n1 := BuildNetworkPolicy(instance)
+	n2 := BuildNetworkPolicy(instance)
+	b1, _ := json.Marshal(n1.Spec)
+	b2, _ := json.Marshal(n2.Spec)
+	if !bytes.Equal(b1, b2) {
+		t.Error("BuildNetworkPolicy is not idempotent")
+	}
+}
+
+func TestBuildIngress_Idempotent(t *testing.T) {
+	instance := newTestInstance("idem-ing")
+	instance.Spec.Networking.Ingress.Enabled = true
+	instance.Spec.Networking.Ingress.Hosts = []openclawv1alpha1.IngressHost{
+		{Host: "test.example.com"},
+	}
+	i1 := BuildIngress(instance)
+	i2 := BuildIngress(instance)
+	b1, _ := json.Marshal(i1.Spec)
+	b2, _ := json.Marshal(i2.Spec)
+	if !bytes.Equal(b1, b2) {
+		t.Error("BuildIngress is not idempotent")
+	}
+}
+
+func TestBuildPDB_Idempotent(t *testing.T) {
+	instance := newTestInstance("idem-pdb")
+	p1 := BuildPDB(instance)
+	p2 := BuildPDB(instance)
+	b1, _ := json.Marshal(p1.Spec)
+	b2, _ := json.Marshal(p2.Spec)
+	if !bytes.Equal(b1, b2) {
+		t.Error("BuildPDB is not idempotent")
+	}
+}
+
+func TestBuildHPA_Idempotent(t *testing.T) {
+	instance := newTestInstance("idem-hpa")
+	instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+		Enabled:              Ptr(true),
+		MinReplicas:          Ptr(int32(1)),
+		MaxReplicas:          Ptr(int32(5)),
+		TargetCPUUtilization: Ptr(int32(80)),
+	}
+	h1 := BuildHPA(instance)
+	h2 := BuildHPA(instance)
+	b1, _ := json.Marshal(h1.Spec)
+	b2, _ := json.Marshal(h2.Spec)
+	if !bytes.Equal(b1, b2) {
+		t.Error("BuildHPA is not idempotent")
+	}
+}
+
+func TestBuildPVC_Idempotent(t *testing.T) {
+	instance := newTestInstance("idem-pvc")
+	p1 := BuildPVC(instance)
+	p2 := BuildPVC(instance)
+	b1, _ := json.Marshal(p1.Spec)
+	b2, _ := json.Marshal(p2.Spec)
+	if !bytes.Equal(b1, b2) {
+		t.Error("BuildPVC is not idempotent")
+	}
+}
+
+func TestBuildWorkspaceConfigMap_Idempotent(t *testing.T) {
+	instance := newTestInstance("idem-ws")
+	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+		InitialFiles: map[string]string{
+			"SOUL.md": "# Personality\nBe helpful.",
+		},
+	}
+	w1 := BuildWorkspaceConfigMap(instance)
+	w2 := BuildWorkspaceConfigMap(instance)
+	b1, _ := json.Marshal(w1.Data)
+	b2, _ := json.Marshal(w2.Data)
+	if !bytes.Equal(b1, b2) {
+		t.Error("BuildWorkspaceConfigMap is not idempotent")
+	}
+}
+
+func TestBuildRBAC_Idempotent(t *testing.T) {
+	instance := newTestInstance("idem-rbac")
+
+	sa1 := BuildServiceAccount(instance)
+	sa2 := BuildServiceAccount(instance)
+	b1, _ := json.Marshal(sa1)
+	b2, _ := json.Marshal(sa2)
+	if !bytes.Equal(b1, b2) {
+		t.Error("BuildServiceAccount is not idempotent")
+	}
+
+	r1 := BuildRole(instance)
+	r2 := BuildRole(instance)
+	b1, _ = json.Marshal(r1.Rules)
+	b2, _ = json.Marshal(r2.Rules)
+	if !bytes.Equal(b1, b2) {
+		t.Error("BuildRole is not idempotent")
+	}
+
+	rb1 := BuildRoleBinding(instance)
+	rb2 := BuildRoleBinding(instance)
+	b1, _ = json.Marshal(rb1)
+	b2, _ = json.Marshal(rb2)
+	if !bytes.Equal(b1, b2) {
+		t.Error("BuildRoleBinding is not idempotent")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Negative / edge case tests
+// ---------------------------------------------------------------------------
+
+func TestBuildStatefulSet_NilAvailability(t *testing.T) {
+	instance := newTestInstance("nil-avail")
+	// Zero-value AvailabilitySpec - should not panic
+	sts := BuildStatefulSet(instance)
+	if sts == nil {
+		t.Fatal("BuildStatefulSet returned nil for zero-value availability")
+	}
+	podSpec := sts.Spec.Template.Spec
+	if podSpec.NodeSelector != nil {
+		t.Error("expected nil NodeSelector")
+	}
+	if podSpec.Tolerations != nil {
+		t.Error("expected nil Tolerations")
+	}
+	if podSpec.Affinity != nil {
+		t.Error("expected nil Affinity")
+	}
+	if podSpec.TopologySpreadConstraints != nil {
+		t.Error("expected nil TopologySpreadConstraints")
+	}
+}
+
+func TestBuildConfigMap_EmptyConfig(t *testing.T) {
+	instance := newTestInstance("empty-cfg")
+	// No raw config, no configMapRef
+	cm := BuildConfigMap(instance, "")
+	if cm == nil {
+		t.Fatal("BuildConfigMap returned nil for empty config")
+	}
+	if _, ok := cm.Data["openclaw.json"]; !ok {
+		t.Error("ConfigMap should always have openclaw.json key")
+	}
+}
+
+func TestBuildNetworkPolicy_Disabled(t *testing.T) {
+	instance := newTestInstance("np-disabled")
+	instance.Spec.Security.NetworkPolicy.Enabled = Ptr(false)
+	np := BuildNetworkPolicy(instance)
+	// BuildNetworkPolicy still returns a NetworkPolicy object - the controller
+	// decides whether to create it based on the Enabled flag
+	if np == nil {
+		t.Fatal("BuildNetworkPolicy returned nil even with enabled=false")
+	}
+}
+
+func TestBuildIngress_NoHosts_ReturnsEmpty(t *testing.T) {
+	instance := newTestInstance("ing-no-hosts")
+	instance.Spec.Networking.Ingress.Enabled = true
+	// No hosts set
+	ing := BuildIngress(instance)
+	if ing == nil {
+		t.Fatal("BuildIngress returned nil with no hosts")
+	}
+	if len(ing.Spec.Rules) != 0 {
+		t.Errorf("expected 0 rules, got %d", len(ing.Spec.Rules))
+	}
+}
+
+func TestBuildWorkspaceConfigMap_NilWorkspace(t *testing.T) {
+	instance := newTestInstance("ws-nil")
+	instance.Spec.Workspace = nil
+	cm := BuildWorkspaceConfigMap(instance)
+	if cm != nil {
+		t.Error("expected nil ConfigMap when workspace is nil")
+	}
+}

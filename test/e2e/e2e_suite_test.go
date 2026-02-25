@@ -1977,6 +1977,100 @@ var _ = Describe("OpenClawInstance Controller", func() {
 		})
 	})
 
+	Context("When updating an OpenClawInstance spec", func() {
+		var namespace string
+
+		BeforeEach(func() {
+			namespace = "test-update-" + time.Now().Format("20060102150405")
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+			Expect(k8sClient.Create(ctx, ns)).Should(Succeed())
+		})
+
+		AfterEach(func() {
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+			_ = k8sClient.Delete(ctx, ns)
+		})
+
+		It("Should reflect spec changes in StatefulSet without drift", func() {
+			instanceName := "update-drift"
+
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			// Wait for StatefulSet to be created
+			statefulSet := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName,
+					Namespace: namespace,
+				}, statefulSet)
+			}, timeout, interval).Should(Succeed())
+
+			// Update the spec - add an env var
+			Eventually(func() error {
+				if err := k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName,
+					Namespace: namespace,
+				}, instance); err != nil {
+					return err
+				}
+				instance.Spec.Env = []corev1.EnvVar{
+					{Name: "CONFORMANCE_TEST", Value: "true"},
+				}
+				return k8sClient.Update(ctx, instance)
+			}, timeout, interval).Should(Succeed())
+
+			// Wait for the StatefulSet to reflect the change
+			Eventually(func() bool {
+				if err := k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName,
+					Namespace: namespace,
+				}, statefulSet); err != nil {
+					return false
+				}
+				for _, env := range statefulSet.Spec.Template.Spec.Containers[0].Env {
+					if env.Name == "CONFORMANCE_TEST" && env.Value == "true" {
+						return true
+					}
+				}
+				return false
+			}, timeout, interval).Should(BeTrue(), "StatefulSet should reflect updated env var")
+
+			// Verify ObservedGeneration matches instance generation
+			updatedInstance := &openclawv1alpha1.OpenClawInstance{}
+			Eventually(func() bool {
+				if err := k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName,
+					Namespace: namespace,
+				}, updatedInstance); err != nil {
+					return false
+				}
+				return updatedInstance.Status.ObservedGeneration == updatedInstance.Generation
+			}, timeout, interval).Should(BeTrue(), "ObservedGeneration should match Generation")
+
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+	})
+
 	Context("When the operator is running", func() {
 		It("Should have the controller manager deployment available", func() {
 			deployment := &appsv1.Deployment{}
