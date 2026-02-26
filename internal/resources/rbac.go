@@ -23,11 +23,11 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 )
 
 // BuildServiceAccount creates a ServiceAccount for the OpenClawInstance
-func BuildServiceAccount(instance *openclawv1alpha1.OpenClawInstance) *corev1.ServiceAccount {
+func BuildServiceAccount(instance *openclawv1.OpenClawInstance) *corev1.ServiceAccount {
 	labels := Labels(instance)
 
 	return &corev1.ServiceAccount{
@@ -43,7 +43,7 @@ func BuildServiceAccount(instance *openclawv1alpha1.OpenClawInstance) *corev1.Se
 
 // BuildRole creates a Role for the OpenClawInstance
 // This implements the principle of least privilege - only granting what's needed
-func BuildRole(instance *openclawv1alpha1.OpenClawInstance) *rbacv1.Role {
+func BuildRole(instance *openclawv1.OpenClawInstance) *rbacv1.Role {
 	labels := Labels(instance)
 
 	// Base rules - minimal permissions needed by OpenClaw
@@ -105,7 +105,7 @@ func BuildRole(instance *openclawv1alpha1.OpenClawInstance) *rbacv1.Role {
 }
 
 // selfConfigSecretNames collects all secret names referenced by the instance (deduplicated).
-func selfConfigSecretNames(instance *openclawv1alpha1.OpenClawInstance) []string {
+func selfConfigSecretNames(instance *openclawv1.OpenClawInstance) []string {
 	seen := make(map[string]bool)
 
 	// Gateway token secret (auto-generated)
@@ -136,7 +136,7 @@ func selfConfigSecretNames(instance *openclawv1alpha1.OpenClawInstance) []string
 }
 
 // BuildRoleBinding creates a RoleBinding for the OpenClawInstance
-func BuildRoleBinding(instance *openclawv1alpha1.OpenClawInstance) *rbacv1.RoleBinding {
+func BuildRoleBinding(instance *openclawv1.OpenClawInstance) *rbacv1.RoleBinding {
 	labels := Labels(instance)
 
 	return &rbacv1.RoleBinding{

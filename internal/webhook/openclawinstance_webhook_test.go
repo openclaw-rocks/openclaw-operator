@@ -25,7 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 )
 
 // ptr returns a pointer to the given value.
@@ -36,20 +36,20 @@ func ptr[T any](v T) *T {
 // newTestInstance returns a well-configured OpenClawInstance that passes
 // validation with zero warnings and zero errors. Individual tests mutate
 // this baseline to trigger specific validation paths.
-func newTestInstance() *openclawv1alpha1.OpenClawInstance {
-	return &openclawv1alpha1.OpenClawInstance{
+func newTestInstance() *openclawv1.OpenClawInstance {
+	return &openclawv1.OpenClawInstance{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test",
 			Namespace: "default",
 		},
-		Spec: openclawv1alpha1.OpenClawInstanceSpec{
+		Spec: openclawv1.OpenClawInstanceSpec{
 			EnvFrom: []corev1.EnvFromSource{
 				{SecretRef: &corev1.SecretEnvSource{
 					LocalObjectReference: corev1.LocalObjectReference{Name: "test-secret"},
 				}},
 			},
-			Resources: openclawv1alpha1.ResourcesSpec{
-				Limits: openclawv1alpha1.ResourceList{
+			Resources: openclawv1.ResourcesSpec{
+				Limits: openclawv1.ResourceList{
 					CPU:    "2",
 					Memory: "4Gi",
 				},
@@ -88,7 +88,7 @@ func TestValidateCreate_ValidInstance(t *testing.T) {
 func TestValidateCreate_BlocksRootUser(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
-	instance.Spec.Security.PodSecurityContext = &openclawv1alpha1.PodSecurityContextSpec{
+	instance.Spec.Security.PodSecurityContext = &openclawv1.PodSecurityContextSpec{
 		RunAsUser: ptr(int64(0)),
 	}
 
@@ -108,7 +108,7 @@ func TestValidateCreate_BlocksRootUser(t *testing.T) {
 func TestValidateCreate_AllowsNonRootUser(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
-	instance.Spec.Security.PodSecurityContext = &openclawv1alpha1.PodSecurityContextSpec{
+	instance.Spec.Security.PodSecurityContext = &openclawv1.PodSecurityContextSpec{
 		RunAsUser: ptr(int64(1000)),
 	}
 
@@ -121,7 +121,7 @@ func TestValidateCreate_AllowsNonRootUser(t *testing.T) {
 func TestValidateCreate_WarnsRunAsNonRootFalse(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
-	instance.Spec.Security.PodSecurityContext = &openclawv1alpha1.PodSecurityContextSpec{
+	instance.Spec.Security.PodSecurityContext = &openclawv1.PodSecurityContextSpec{
 		RunAsNonRoot: ptr(false),
 	}
 
@@ -137,7 +137,7 @@ func TestValidateCreate_WarnsRunAsNonRootFalse(t *testing.T) {
 func TestValidateCreate_NoWarnRunAsNonRootTrue(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
-	instance.Spec.Security.PodSecurityContext = &openclawv1alpha1.PodSecurityContextSpec{
+	instance.Spec.Security.PodSecurityContext = &openclawv1.PodSecurityContextSpec{
 		RunAsNonRoot: ptr(true),
 	}
 
@@ -197,7 +197,7 @@ func TestValidateCreate_NoWarnIngressWithTLS(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
 	instance.Spec.Networking.Ingress.Enabled = true
-	instance.Spec.Networking.Ingress.TLS = []openclawv1alpha1.IngressTLS{
+	instance.Spec.Networking.Ingress.TLS = []openclawv1.IngressTLS{
 		{Hosts: []string{"example.com"}, SecretName: "tls-secret"},
 	}
 
@@ -228,7 +228,7 @@ func TestValidateCreate_WarnsIngressForceHTTPSDisabled(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
 	instance.Spec.Networking.Ingress.Enabled = true
-	instance.Spec.Networking.Ingress.TLS = []openclawv1alpha1.IngressTLS{
+	instance.Spec.Networking.Ingress.TLS = []openclawv1.IngressTLS{
 		{Hosts: []string{"example.com"}, SecretName: "tls-secret"},
 	}
 	instance.Spec.Networking.Ingress.Security.ForceHTTPS = ptr(false)
@@ -350,7 +350,7 @@ func TestValidateCreate_NoWarnWithEnv(t *testing.T) {
 func TestValidateCreate_WarnsPrivilegeEscalation(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
-	instance.Spec.Security.ContainerSecurityContext = &openclawv1alpha1.ContainerSecurityContextSpec{
+	instance.Spec.Security.ContainerSecurityContext = &openclawv1.ContainerSecurityContextSpec{
 		AllowPrivilegeEscalation: ptr(true),
 	}
 
@@ -366,7 +366,7 @@ func TestValidateCreate_WarnsPrivilegeEscalation(t *testing.T) {
 func TestValidateCreate_NoWarnPrivilegeEscalationFalse(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
-	instance.Spec.Security.ContainerSecurityContext = &openclawv1alpha1.ContainerSecurityContextSpec{
+	instance.Spec.Security.ContainerSecurityContext = &openclawv1.ContainerSecurityContextSpec{
 		AllowPrivilegeEscalation: ptr(false),
 	}
 
@@ -382,7 +382,7 @@ func TestValidateCreate_NoWarnPrivilegeEscalationFalse(t *testing.T) {
 func TestValidateCreate_WarnsNoResourceLimits(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
-	instance.Spec.Resources.Limits = openclawv1alpha1.ResourceList{} // empty
+	instance.Spec.Resources.Limits = openclawv1.ResourceList{} // empty
 
 	warnings, err := v.ValidateCreate(context.Background(), instance)
 	if err != nil {
@@ -396,7 +396,7 @@ func TestValidateCreate_WarnsNoResourceLimits(t *testing.T) {
 func TestValidateCreate_WarnsPartialResourceLimits_MissingCPU(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
-	instance.Spec.Resources.Limits = openclawv1alpha1.ResourceList{
+	instance.Spec.Resources.Limits = openclawv1.ResourceList{
 		Memory: "4Gi",
 	}
 
@@ -412,7 +412,7 @@ func TestValidateCreate_WarnsPartialResourceLimits_MissingCPU(t *testing.T) {
 func TestValidateCreate_WarnsPartialResourceLimits_MissingMemory(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
-	instance.Spec.Resources.Limits = openclawv1alpha1.ResourceList{
+	instance.Spec.Resources.Limits = openclawv1.ResourceList{
 		CPU: "2",
 	}
 
@@ -474,7 +474,7 @@ func TestValidateCreate_MultipleWarnings(t *testing.T) {
 
 	// Trigger multiple warnings at once:
 	// 1. runAsNonRoot=false
-	instance.Spec.Security.PodSecurityContext = &openclawv1alpha1.PodSecurityContextSpec{
+	instance.Spec.Security.PodSecurityContext = &openclawv1.PodSecurityContextSpec{
 		RunAsNonRoot: ptr(false),
 	}
 	// 2. NetworkPolicy disabled
@@ -489,11 +489,11 @@ func TestValidateCreate_MultipleWarnings(t *testing.T) {
 	instance.Spec.EnvFrom = nil
 	instance.Spec.Env = nil
 	// 7. AllowPrivilegeEscalation=true
-	instance.Spec.Security.ContainerSecurityContext = &openclawv1alpha1.ContainerSecurityContextSpec{
+	instance.Spec.Security.ContainerSecurityContext = &openclawv1.ContainerSecurityContextSpec{
 		AllowPrivilegeEscalation: ptr(true),
 	}
 	// 8. No resource limits
-	instance.Spec.Resources.Limits = openclawv1alpha1.ResourceList{}
+	instance.Spec.Resources.Limits = openclawv1.ResourceList{}
 	// 9. Latest image tag
 	instance.Spec.Image.Tag = "latest"
 	instance.Spec.Image.Digest = ""
@@ -624,7 +624,7 @@ func TestValidateUpdate_RunsValidationAfterImmutabilityCheck(t *testing.T) {
 	oldInstance := newTestInstance()
 	newInstance := newTestInstance()
 	// Trigger a validation warning (root user would be blocked).
-	newInstance.Spec.Security.PodSecurityContext = &openclawv1alpha1.PodSecurityContextSpec{
+	newInstance.Spec.Security.PodSecurityContext = &openclawv1.PodSecurityContextSpec{
 		RunAsUser: ptr(int64(0)),
 	}
 
@@ -676,7 +676,7 @@ func TestValidateDelete_AllowsEvenWithInvalidSpec(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	// Instance that would fail create/update validation.
 	instance := newTestInstance()
-	instance.Spec.Security.PodSecurityContext = &openclawv1alpha1.PodSecurityContextSpec{
+	instance.Spec.Security.PodSecurityContext = &openclawv1.PodSecurityContextSpec{
 		RunAsUser: ptr(int64(0)),
 	}
 
@@ -733,7 +733,7 @@ func TestValidateCreate_NilForceHTTPS(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
 	instance.Spec.Networking.Ingress.Enabled = true
-	instance.Spec.Networking.Ingress.TLS = []openclawv1alpha1.IngressTLS{
+	instance.Spec.Networking.Ingress.TLS = []openclawv1.IngressTLS{
 		{Hosts: []string{"example.com"}, SecretName: "tls-secret"},
 	}
 	instance.Spec.Networking.Ingress.Security.ForceHTTPS = nil
@@ -750,7 +750,7 @@ func TestValidateCreate_NilForceHTTPS(t *testing.T) {
 func TestValidateCreate_NilRunAsUser(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
-	instance.Spec.Security.PodSecurityContext = &openclawv1alpha1.PodSecurityContextSpec{
+	instance.Spec.Security.PodSecurityContext = &openclawv1.PodSecurityContextSpec{
 		RunAsUser: nil,
 	}
 
@@ -763,7 +763,7 @@ func TestValidateCreate_NilRunAsUser(t *testing.T) {
 func TestValidateCreate_NilAllowPrivilegeEscalation(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
-	instance.Spec.Security.ContainerSecurityContext = &openclawv1alpha1.ContainerSecurityContextSpec{
+	instance.Spec.Security.ContainerSecurityContext = &openclawv1.ContainerSecurityContextSpec{
 		AllowPrivilegeEscalation: nil,
 	}
 
@@ -783,7 +783,7 @@ func TestValidateCreate_NilAllowPrivilegeEscalation(t *testing.T) {
 func TestValidateCreate_ValidWorkspace(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
-	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+	instance.Spec.Workspace = &openclawv1.WorkspaceSpec{
 		InitialFiles: map[string]string{
 			"SOUL.md":      "personality content",
 			"AGENTS.md":    "agents config",
@@ -813,7 +813,7 @@ func TestValidateCreate_WorkspaceNil(t *testing.T) {
 func TestValidateCreate_WorkspaceFileSlash(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
-	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+	instance.Spec.Workspace = &openclawv1.WorkspaceSpec{
 		InitialFiles: map[string]string{"sub/file.md": "content"},
 	}
 
@@ -829,7 +829,7 @@ func TestValidateCreate_WorkspaceFileSlash(t *testing.T) {
 func TestValidateCreate_WorkspaceFileBackslash(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
-	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+	instance.Spec.Workspace = &openclawv1.WorkspaceSpec{
 		InitialFiles: map[string]string{"file\\name.md": "content"},
 	}
 
@@ -842,7 +842,7 @@ func TestValidateCreate_WorkspaceFileBackslash(t *testing.T) {
 func TestValidateCreate_WorkspaceFileDotDot(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
-	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+	instance.Spec.Workspace = &openclawv1.WorkspaceSpec{
 		InitialFiles: map[string]string{"..bad": "content"},
 	}
 
@@ -855,7 +855,7 @@ func TestValidateCreate_WorkspaceFileDotDot(t *testing.T) {
 func TestValidateCreate_WorkspaceFileDotPrefix(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
-	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+	instance.Spec.Workspace = &openclawv1.WorkspaceSpec{
 		InitialFiles: map[string]string{".hidden": "content"},
 	}
 
@@ -868,7 +868,7 @@ func TestValidateCreate_WorkspaceFileDotPrefix(t *testing.T) {
 func TestValidateCreate_WorkspaceFileReservedName(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
-	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+	instance.Spec.Workspace = &openclawv1.WorkspaceSpec{
 		InitialFiles: map[string]string{"openclaw.json": "content"},
 	}
 
@@ -884,7 +884,7 @@ func TestValidateCreate_WorkspaceFileReservedName(t *testing.T) {
 func TestValidateCreate_WorkspaceDirDotDot(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
-	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+	instance.Spec.Workspace = &openclawv1.WorkspaceSpec{
 		InitialDirectories: []string{"../escape"},
 	}
 
@@ -897,7 +897,7 @@ func TestValidateCreate_WorkspaceDirDotDot(t *testing.T) {
 func TestValidateCreate_WorkspaceDirBackslash(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
-	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+	instance.Spec.Workspace = &openclawv1.WorkspaceSpec{
 		InitialDirectories: []string{"dir\\sub"},
 	}
 
@@ -910,7 +910,7 @@ func TestValidateCreate_WorkspaceDirBackslash(t *testing.T) {
 func TestValidateCreate_WorkspaceDirAbsolutePath(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
-	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+	instance.Spec.Workspace = &openclawv1.WorkspaceSpec{
 		InitialDirectories: []string{"/etc/shadow"},
 	}
 
@@ -926,7 +926,7 @@ func TestValidateCreate_WorkspaceDirAbsolutePath(t *testing.T) {
 func TestValidateCreate_WorkspaceNestedDirAllowed(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
-	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+	instance.Spec.Workspace = &openclawv1.WorkspaceSpec{
 		InitialDirectories: []string{"tools/scripts", "memory"},
 	}
 
@@ -943,7 +943,7 @@ func TestValidateCreate_WorkspaceNestedDirAllowed(t *testing.T) {
 func TestValidateCreate_CABundle_BothSources(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
-	instance.Spec.Security.CABundle = &openclawv1alpha1.CABundleSpec{
+	instance.Spec.Security.CABundle = &openclawv1.CABundleSpec{
 		ConfigMapName: "my-cm",
 		SecretName:    "my-secret",
 	}
@@ -960,7 +960,7 @@ func TestValidateCreate_CABundle_BothSources(t *testing.T) {
 func TestValidateCreate_CABundle_NoSource(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
-	instance.Spec.Security.CABundle = &openclawv1alpha1.CABundleSpec{}
+	instance.Spec.Security.CABundle = &openclawv1.CABundleSpec{}
 
 	_, err := v.ValidateCreate(context.Background(), instance)
 	if err == nil {
@@ -974,7 +974,7 @@ func TestValidateCreate_CABundle_NoSource(t *testing.T) {
 func TestValidateCreate_CABundle_ConfigMapOnly(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
-	instance.Spec.Security.CABundle = &openclawv1alpha1.CABundleSpec{
+	instance.Spec.Security.CABundle = &openclawv1.CABundleSpec{
 		ConfigMapName: "my-ca",
 	}
 
@@ -987,7 +987,7 @@ func TestValidateCreate_CABundle_ConfigMapOnly(t *testing.T) {
 func TestValidateCreate_CABundle_SecretOnly(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
-	instance.Spec.Security.CABundle = &openclawv1alpha1.CABundleSpec{
+	instance.Spec.Security.CABundle = &openclawv1.CABundleSpec{
 		SecretName: "my-ca-secret",
 	}
 
@@ -1121,7 +1121,7 @@ func TestValidateCreate_ConfigSchema_Nil(t *testing.T) {
 func TestValidateCreate_ConfigSchema_ValidKeys(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: k8sruntime.RawExtension{
 			Raw: []byte(`{"mcpServers":{},"llmConfig":{},"settings":{}}`),
 		},
@@ -1139,7 +1139,7 @@ func TestValidateCreate_ConfigSchema_ValidKeys(t *testing.T) {
 func TestValidateCreate_ConfigSchema_UnknownKey(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: k8sruntime.RawExtension{
 			Raw: []byte(`{"mcpServers":{},"foobar":"baz"}`),
 		},
@@ -1259,7 +1259,7 @@ func TestValidateCreate_JSON5_WithRaw(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
 	instance.Spec.Config.Format = "json5"
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: k8sruntime.RawExtension{Raw: []byte(`{}`)},
 	}
 
@@ -1277,7 +1277,7 @@ func TestValidateCreate_JSON5_WithMerge(t *testing.T) {
 	instance := newTestInstance()
 	instance.Spec.Config.Format = "json5"
 	instance.Spec.Config.MergeMode = "merge"
-	instance.Spec.Config.ConfigMapRef = &openclawv1alpha1.ConfigMapKeySelector{
+	instance.Spec.Config.ConfigMapRef = &openclawv1.ConfigMapKeySelector{
 		Name: "my-config",
 	}
 
@@ -1342,7 +1342,7 @@ func TestValidateCreate_JSON5_WithConfigMapRef(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
 	instance.Spec.Config.Format = "json5"
-	instance.Spec.Config.ConfigMapRef = &openclawv1alpha1.ConfigMapKeySelector{
+	instance.Spec.Config.ConfigMapRef = &openclawv1.ConfigMapKeySelector{
 		Name: "my-config",
 		Key:  "config.json5",
 	}
@@ -1357,7 +1357,7 @@ func TestValidateCreate_JSON5_SkipsConfigSchemaValidation(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
 	instance.Spec.Config.Format = "json5"
-	instance.Spec.Config.ConfigMapRef = &openclawv1alpha1.ConfigMapKeySelector{
+	instance.Spec.Config.ConfigMapRef = &openclawv1.ConfigMapKeySelector{
 		Name: "my-config",
 	}
 	// No raw config — schema validation should be skipped entirely for json5

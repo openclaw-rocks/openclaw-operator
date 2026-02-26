@@ -40,6 +40,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
 	"github.com/openclawrocks/k8s-operator/internal/controller"
 	"github.com/openclawrocks/k8s-operator/internal/registry"
@@ -52,6 +53,7 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(openclawv1.AddToScheme(scheme))
 	utilruntime.Must(openclawv1alpha1.AddToScheme(scheme))
 }
 

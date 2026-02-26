@@ -27,7 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 	"github.com/openclawrocks/k8s-operator/internal/resources"
 )
 
@@ -60,7 +60,7 @@ type s3Credentials struct {
 }
 
 // getTenantID extracts the tenant ID from the instance label or falls back to namespace
-func getTenantID(instance *openclawv1alpha1.OpenClawInstance) string {
+func getTenantID(instance *openclawv1.OpenClawInstance) string {
 	if tenant, ok := instance.Labels[LabelTenant]; ok && tenant != "" {
 		return tenant
 	}
@@ -203,17 +203,17 @@ func int64Ptr(v int64) *int64 {
 }
 
 // backupJobName returns a deterministic name for the backup Job
-func backupJobName(instance *openclawv1alpha1.OpenClawInstance) string {
+func backupJobName(instance *openclawv1.OpenClawInstance) string {
 	return instance.Name + "-backup"
 }
 
 // restoreJobName returns a deterministic name for the restore Job
-func restoreJobName(instance *openclawv1alpha1.OpenClawInstance) string {
+func restoreJobName(instance *openclawv1.OpenClawInstance) string {
 	return instance.Name + "-restore"
 }
 
 // backupLabels returns labels for a backup/restore Job
-func backupLabels(instance *openclawv1alpha1.OpenClawInstance, jobType string) map[string]string {
+func backupLabels(instance *openclawv1.OpenClawInstance, jobType string) map[string]string {
 	return map[string]string{
 		LabelManagedBy:            "openclaw-operator",
 		LabelTenant:               getTenantID(instance),
@@ -233,7 +233,7 @@ func isJobFinished(job *batchv1.Job) (bool, batchv1.JobConditionType) {
 }
 
 // pvcName returns the PVC name for the instance (delegates to resources package)
-func pvcNameForInstance(instance *openclawv1alpha1.OpenClawInstance) string {
+func pvcNameForInstance(instance *openclawv1.OpenClawInstance) string {
 	return resources.PVCName(instance)
 }
 

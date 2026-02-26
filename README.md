@@ -21,7 +21,7 @@ OpenClaw is an AI agent platform that acts on your behalf across Telegram, Disco
 Deploying AI agents to Kubernetes involves more than a Deployment and a Service. You need network isolation, secret management, persistent storage, health monitoring, optional browser automation, and config rollouts, all wired correctly. This operator encodes those concerns into a single `OpenClawInstance` custom resource so you can go from zero to production in minutes:
 
 ```yaml
-apiVersion: openclaw.rocks/v1alpha1
+apiVersion: openclaw.rocks/v1
 kind: OpenClawInstance
 metadata:
   name: my-agent
@@ -51,7 +51,7 @@ spec:
 
 ```yaml
 # 2. The agent creates this to install a skill at runtime
-apiVersion: openclaw.rocks/v1alpha1
+apiVersion: openclaw.rocks/v1
 kind: OpenClawSelfConfig
 metadata:
   name: add-fetch-skill
@@ -170,7 +170,7 @@ stringData:
 ### 3. Deploy an OpenClaw instance
 
 ```yaml
-apiVersion: openclaw.rocks/v1alpha1
+apiVersion: openclaw.rocks/v1
 kind: OpenClawInstance
 metadata:
   name: my-agent
@@ -410,7 +410,7 @@ When enabled, the operator:
 The agent creates a request like:
 
 ```yaml
-apiVersion: openclaw.rocks/v1alpha1
+apiVersion: openclaw.rocks/v1
 kind: OpenClawSelfConfig
 metadata:
   name: add-fetch-skill
@@ -655,7 +655,7 @@ These behaviors are always applied - no configuration needed:
 | Config hash rollouts | Config changes trigger rolling updates via SHA-256 hash annotation |
 | Config restoration | The init container restores config on every pod restart (overwrite or merge mode) |
 
-For the full list of configuration options, see the [API reference](docs/api-reference.md) and the [full sample YAML](config/samples/openclaw_v1alpha1_openclawinstance_full.yaml).
+For the full list of configuration options, see the [API reference](docs/api-reference.md) and the [full sample YAML](config/samples/openclaw_v1_openclawinstance_full.yaml).
 
 ## Security
 

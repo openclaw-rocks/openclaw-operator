@@ -11,7 +11,7 @@ The `llmConfig` section in `openclaw.json` accepts an ordered list of provider c
 ## Example CR
 
 ```yaml
-apiVersion: openclaw.rocks/v1alpha1
+apiVersion: openclaw.rocks/v1
 kind: OpenClawInstance
 metadata:
   name: my-assistant

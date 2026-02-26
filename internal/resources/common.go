@@ -17,7 +17,7 @@ limitations under the License.
 package resources
 
 import (
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 )
 
 const (
@@ -121,7 +121,7 @@ const (
 )
 
 // Labels returns the standard labels for an OpenClawInstance
-func Labels(instance *openclawv1alpha1.OpenClawInstance) map[string]string {
+func Labels(instance *openclawv1.OpenClawInstance) map[string]string {
 	return map[string]string{
 		"app.kubernetes.io/name":       AppName,
 		"app.kubernetes.io/instance":   instance.Name,
@@ -130,7 +130,7 @@ func Labels(instance *openclawv1alpha1.OpenClawInstance) map[string]string {
 }
 
 // SelectorLabels returns the labels used for selecting pods
-func SelectorLabels(instance *openclawv1alpha1.OpenClawInstance) map[string]string {
+func SelectorLabels(instance *openclawv1.OpenClawInstance) map[string]string {
 	return map[string]string{
 		"app.kubernetes.io/name":     AppName,
 		"app.kubernetes.io/instance": instance.Name,
@@ -138,22 +138,22 @@ func SelectorLabels(instance *openclawv1alpha1.OpenClawInstance) map[string]stri
 }
 
 // StatefulSetName returns the name of the StatefulSet
-func StatefulSetName(instance *openclawv1alpha1.OpenClawInstance) string {
+func StatefulSetName(instance *openclawv1.OpenClawInstance) string {
 	return instance.Name
 }
 
 // DeploymentName returns the name of the legacy Deployment (used during migration)
-func DeploymentName(instance *openclawv1alpha1.OpenClawInstance) string {
+func DeploymentName(instance *openclawv1.OpenClawInstance) string {
 	return instance.Name
 }
 
 // ServiceName returns the name of the Service
-func ServiceName(instance *openclawv1alpha1.OpenClawInstance) string {
+func ServiceName(instance *openclawv1.OpenClawInstance) string {
 	return instance.Name
 }
 
 // ServiceAccountName returns the name of the ServiceAccount
-func ServiceAccountName(instance *openclawv1alpha1.OpenClawInstance) string {
+func ServiceAccountName(instance *openclawv1.OpenClawInstance) string {
 	if instance.Spec.Security.RBAC.ServiceAccountName != "" {
 		return instance.Spec.Security.RBAC.ServiceAccountName
 	}
@@ -161,57 +161,57 @@ func ServiceAccountName(instance *openclawv1alpha1.OpenClawInstance) string {
 }
 
 // RoleName returns the name of the Role
-func RoleName(instance *openclawv1alpha1.OpenClawInstance) string {
+func RoleName(instance *openclawv1.OpenClawInstance) string {
 	return instance.Name
 }
 
 // RoleBindingName returns the name of the RoleBinding
-func RoleBindingName(instance *openclawv1alpha1.OpenClawInstance) string {
+func RoleBindingName(instance *openclawv1.OpenClawInstance) string {
 	return instance.Name
 }
 
 // ConfigMapName returns the name of the ConfigMap
-func ConfigMapName(instance *openclawv1alpha1.OpenClawInstance) string {
+func ConfigMapName(instance *openclawv1.OpenClawInstance) string {
 	return instance.Name + "-config"
 }
 
 // WorkspaceConfigMapName returns the name of the workspace ConfigMap
-func WorkspaceConfigMapName(instance *openclawv1alpha1.OpenClawInstance) string {
+func WorkspaceConfigMapName(instance *openclawv1.OpenClawInstance) string {
 	return instance.Name + "-workspace"
 }
 
 // PVCName returns the name of the PVC
-func PVCName(instance *openclawv1alpha1.OpenClawInstance) string {
+func PVCName(instance *openclawv1.OpenClawInstance) string {
 	return instance.Name + "-data"
 }
 
 // NetworkPolicyName returns the name of the NetworkPolicy
-func NetworkPolicyName(instance *openclawv1alpha1.OpenClawInstance) string {
+func NetworkPolicyName(instance *openclawv1.OpenClawInstance) string {
 	return instance.Name
 }
 
 // PDBName returns the name of the PodDisruptionBudget
-func PDBName(instance *openclawv1alpha1.OpenClawInstance) string {
+func PDBName(instance *openclawv1.OpenClawInstance) string {
 	return instance.Name
 }
 
 // IngressName returns the name of the Ingress
-func IngressName(instance *openclawv1alpha1.OpenClawInstance) string {
+func IngressName(instance *openclawv1.OpenClawInstance) string {
 	return instance.Name
 }
 
 // GatewayTokenSecretName returns the name of the auto-generated gateway token Secret
-func GatewayTokenSecretName(instance *openclawv1alpha1.OpenClawInstance) string {
+func GatewayTokenSecretName(instance *openclawv1.OpenClawInstance) string {
 	return instance.Name + "-gateway-token"
 }
 
 // BasicAuthSecretName returns the name of the auto-generated Ingress Basic Auth Secret
-func BasicAuthSecretName(instance *openclawv1alpha1.OpenClawInstance) string {
+func BasicAuthSecretName(instance *openclawv1.OpenClawInstance) string {
 	return instance.Name + "-basic-auth"
 }
 
 // GetImageRepository returns the image repository with defaults
-func GetImageRepository(instance *openclawv1alpha1.OpenClawInstance) string {
+func GetImageRepository(instance *openclawv1.OpenClawInstance) string {
 	if instance.Spec.Image.Repository != "" {
 		return instance.Spec.Image.Repository
 	}
@@ -219,7 +219,7 @@ func GetImageRepository(instance *openclawv1alpha1.OpenClawInstance) string {
 }
 
 // GetImageTag returns the image tag with defaults
-func GetImageTag(instance *openclawv1alpha1.OpenClawInstance) string {
+func GetImageTag(instance *openclawv1.OpenClawInstance) string {
 	if instance.Spec.Image.Tag != "" {
 		return instance.Spec.Image.Tag
 	}
@@ -227,7 +227,7 @@ func GetImageTag(instance *openclawv1alpha1.OpenClawInstance) string {
 }
 
 // GetImage returns the full image reference
-func GetImage(instance *openclawv1alpha1.OpenClawInstance) string {
+func GetImage(instance *openclawv1.OpenClawInstance) string {
 	repo := GetImageRepository(instance)
 	if instance.Spec.Image.Digest != "" {
 		return repo + "@" + instance.Spec.Image.Digest
@@ -236,7 +236,7 @@ func GetImage(instance *openclawv1alpha1.OpenClawInstance) string {
 }
 
 // GetTailscaleImage returns the full Tailscale sidecar image reference
-func GetTailscaleImage(instance *openclawv1alpha1.OpenClawInstance) string {
+func GetTailscaleImage(instance *openclawv1.OpenClawInstance) string {
 	repo := instance.Spec.Tailscale.Image.Repository
 	if repo == "" {
 		repo = DefaultTailscaleImage
@@ -254,12 +254,12 @@ func GetTailscaleImage(instance *openclawv1alpha1.OpenClawInstance) string {
 }
 
 // IsMetricsEnabled returns true if the metrics endpoint is enabled for the instance
-func IsMetricsEnabled(instance *openclawv1alpha1.OpenClawInstance) bool {
+func IsMetricsEnabled(instance *openclawv1.OpenClawInstance) bool {
 	return instance.Spec.Observability.Metrics.Enabled == nil || *instance.Spec.Observability.Metrics.Enabled
 }
 
 // MetricsPort returns the configured metrics port or the default
-func MetricsPort(instance *openclawv1alpha1.OpenClawInstance) int32 {
+func MetricsPort(instance *openclawv1.OpenClawInstance) int32 {
 	if instance.Spec.Observability.Metrics.Port != nil {
 		return *instance.Spec.Observability.Metrics.Port
 	}

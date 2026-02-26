@@ -21,11 +21,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 )
 
 // BuildService creates a Service for the OpenClawInstance
-func BuildService(instance *openclawv1alpha1.OpenClawInstance) *corev1.Service {
+func BuildService(instance *openclawv1.OpenClawInstance) *corev1.Service {
 	labels := Labels(instance)
 	selectorLabels := SelectorLabels(instance)
 
@@ -53,7 +53,7 @@ func BuildService(instance *openclawv1alpha1.OpenClawInstance) *corev1.Service {
 }
 
 // buildServicePorts returns custom ports if specified, otherwise default ports.
-func buildServicePorts(instance *openclawv1alpha1.OpenClawInstance) []corev1.ServicePort {
+func buildServicePorts(instance *openclawv1.OpenClawInstance) []corev1.ServicePort {
 	if len(instance.Spec.Networking.Service.Ports) > 0 {
 		ports := make([]corev1.ServicePort, 0, len(instance.Spec.Networking.Service.Ports))
 		for _, p := range instance.Spec.Networking.Service.Ports {

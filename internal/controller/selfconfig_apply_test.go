@@ -24,26 +24,26 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 )
 
-func newTestInstance() *openclawv1alpha1.OpenClawInstance {
-	return &openclawv1alpha1.OpenClawInstance{
+func newTestInstance() *openclawv1.OpenClawInstance {
+	return &openclawv1.OpenClawInstance{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "inst1",
 			Namespace: "test-ns",
 		},
-		Spec: openclawv1alpha1.OpenClawInstanceSpec{},
+		Spec: openclawv1.OpenClawInstanceSpec{},
 	}
 }
 
-func newTestSelfConfig() *openclawv1alpha1.OpenClawSelfConfig {
-	return &openclawv1alpha1.OpenClawSelfConfig{
+func newTestSelfConfig() *openclawv1.OpenClawSelfConfig {
+	return &openclawv1.OpenClawSelfConfig{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "sc1",
 			Namespace: "test-ns",
 		},
-		Spec: openclawv1alpha1.OpenClawSelfConfigSpec{
+		Spec: openclawv1.OpenClawSelfConfigSpec{
 			InstanceRef: "inst1",
 		},
 	}
@@ -54,7 +54,7 @@ func TestDetermineActions_Skills(t *testing.T) {
 	sc.Spec.AddSkills = []string{"@anthropic/mcp-server-fetch"}
 
 	actions := determineActions(sc)
-	if len(actions) != 1 || actions[0] != openclawv1alpha1.SelfConfigActionSkills {
+	if len(actions) != 1 || actions[0] != openclawv1.SelfConfigActionSkills {
 		t.Errorf("expected [skills], got %v", actions)
 	}
 }
@@ -80,14 +80,14 @@ func TestDetermineActions_Empty(t *testing.T) {
 }
 
 func TestCheckAllowedActions_AllAllowed(t *testing.T) {
-	requested := []openclawv1alpha1.SelfConfigAction{
-		openclawv1alpha1.SelfConfigActionSkills,
-		openclawv1alpha1.SelfConfigActionConfig,
+	requested := []openclawv1.SelfConfigAction{
+		openclawv1.SelfConfigActionSkills,
+		openclawv1.SelfConfigActionConfig,
 	}
-	allowed := []openclawv1alpha1.SelfConfigAction{
-		openclawv1alpha1.SelfConfigActionSkills,
-		openclawv1alpha1.SelfConfigActionConfig,
-		openclawv1alpha1.SelfConfigActionEnvVars,
+	allowed := []openclawv1.SelfConfigAction{
+		openclawv1.SelfConfigActionSkills,
+		openclawv1.SelfConfigActionConfig,
+		openclawv1.SelfConfigActionEnvVars,
 	}
 
 	denied := checkAllowedActions(requested, allowed)
@@ -97,23 +97,23 @@ func TestCheckAllowedActions_AllAllowed(t *testing.T) {
 }
 
 func TestCheckAllowedActions_SomeDenied(t *testing.T) {
-	requested := []openclawv1alpha1.SelfConfigAction{
-		openclawv1alpha1.SelfConfigActionSkills,
-		openclawv1alpha1.SelfConfigActionEnvVars,
+	requested := []openclawv1.SelfConfigAction{
+		openclawv1.SelfConfigActionSkills,
+		openclawv1.SelfConfigActionEnvVars,
 	}
-	allowed := []openclawv1alpha1.SelfConfigAction{
-		openclawv1alpha1.SelfConfigActionSkills,
+	allowed := []openclawv1.SelfConfigAction{
+		openclawv1.SelfConfigActionSkills,
 	}
 
 	denied := checkAllowedActions(requested, allowed)
-	if len(denied) != 1 || denied[0] != openclawv1alpha1.SelfConfigActionEnvVars {
+	if len(denied) != 1 || denied[0] != openclawv1.SelfConfigActionEnvVars {
 		t.Errorf("expected [envVars] denied, got %v", denied)
 	}
 }
 
 func TestCheckAllowedActions_EmptyAllowed(t *testing.T) {
-	requested := []openclawv1alpha1.SelfConfigAction{
-		openclawv1alpha1.SelfConfigActionSkills,
+	requested := []openclawv1.SelfConfigAction{
+		openclawv1.SelfConfigActionSkills,
 	}
 	denied := checkAllowedActions(requested, nil)
 	if len(denied) != 1 {
@@ -173,12 +173,12 @@ func TestApplySkillChanges_Remove(t *testing.T) {
 
 func TestApplyConfigPatch_Merge(t *testing.T) {
 	instance := newTestInstance()
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{"mcpServers":{"existing":{"command":"node"}},"key":"value"}`)},
 	}
 
 	sc := newTestSelfConfig()
-	sc.Spec.ConfigPatch = &openclawv1alpha1.RawConfig{
+	sc.Spec.ConfigPatch = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{"mcpServers":{"new":{"command":"python"}},"newKey":"newValue"}`)},
 	}
 
@@ -215,7 +215,7 @@ func TestApplyConfigPatch_Merge(t *testing.T) {
 func TestApplyConfigPatch_ProtectedKey(t *testing.T) {
 	instance := newTestInstance()
 	sc := newTestSelfConfig()
-	sc.Spec.ConfigPatch = &openclawv1alpha1.RawConfig{
+	sc.Spec.ConfigPatch = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{"gateway":{"auth":{"token":"hacked"}}}`)},
 	}
 
@@ -230,7 +230,7 @@ func TestApplyConfigPatch_EmptyBase(t *testing.T) {
 	// No existing config
 
 	sc := newTestSelfConfig()
-	sc.Spec.ConfigPatch = &openclawv1alpha1.RawConfig{
+	sc.Spec.ConfigPatch = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{"key":"value"}`)},
 	}
 
@@ -267,7 +267,7 @@ func TestApplyWorkspaceFileChanges_Add(t *testing.T) {
 
 func TestApplyWorkspaceFileChanges_Remove(t *testing.T) {
 	instance := newTestInstance()
-	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+	instance.Spec.Workspace = &openclawv1.WorkspaceSpec{
 		InitialFiles: map[string]string{
 			"keep.md":   "keep",
 			"remove.md": "remove",
@@ -294,7 +294,7 @@ func TestApplyEnvVarChanges_Add(t *testing.T) {
 	}
 
 	sc := newTestSelfConfig()
-	sc.Spec.AddEnvVars = []openclawv1alpha1.SelfConfigEnvVar{
+	sc.Spec.AddEnvVars = []openclawv1.SelfConfigEnvVar{
 		{Name: "NEW_VAR", Value: "new_value"},
 	}
 
@@ -314,7 +314,7 @@ func TestApplyEnvVarChanges_Replace(t *testing.T) {
 	}
 
 	sc := newTestSelfConfig()
-	sc.Spec.AddEnvVars = []openclawv1alpha1.SelfConfigEnvVar{
+	sc.Spec.AddEnvVars = []openclawv1.SelfConfigEnvVar{
 		{Name: "MY_VAR", Value: "new"},
 	}
 
@@ -353,7 +353,7 @@ func TestApplyEnvVarChanges_ProtectedAdd(t *testing.T) {
 	instance := newTestInstance()
 
 	sc := newTestSelfConfig()
-	sc.Spec.AddEnvVars = []openclawv1alpha1.SelfConfigEnvVar{
+	sc.Spec.AddEnvVars = []openclawv1.SelfConfigEnvVar{
 		{Name: "HOME", Value: "/hacked"},
 	}
 

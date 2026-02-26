@@ -21,23 +21,23 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 )
 
 // HPAName returns the name of the HorizontalPodAutoscaler
-func HPAName(instance *openclawv1alpha1.OpenClawInstance) string {
+func HPAName(instance *openclawv1.OpenClawInstance) string {
 	return instance.Name
 }
 
 // IsHPAEnabled returns true if auto-scaling is enabled for the instance
-func IsHPAEnabled(instance *openclawv1alpha1.OpenClawInstance) bool {
+func IsHPAEnabled(instance *openclawv1.OpenClawInstance) bool {
 	return instance.Spec.Availability.AutoScaling != nil &&
 		instance.Spec.Availability.AutoScaling.Enabled != nil &&
 		*instance.Spec.Availability.AutoScaling.Enabled
 }
 
 // BuildHPA creates a HorizontalPodAutoscaler for the OpenClawInstance
-func BuildHPA(instance *openclawv1alpha1.OpenClawInstance) *autoscalingv2.HorizontalPodAutoscaler {
+func BuildHPA(instance *openclawv1.OpenClawInstance) *autoscalingv2.HorizontalPodAutoscaler {
 	labels := Labels(instance)
 	as := instance.Spec.Availability.AutoScaling
 

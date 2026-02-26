@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Go-based Kubernetes operator for managing OpenClaw instances, built with controller-runtime (kubebuilder). CRD API group is `openclaw.rocks`, version `v1alpha1`.
+Go-based Kubernetes operator for managing OpenClaw instances, built with controller-runtime (kubebuilder). CRD API group is `openclaw.rocks`, version `v1` (with `v1alpha1` spoke for backward compatibility).
 
 - **Module:** `github.com/openclawrocks/k8s-operator`
 - **Go version:** 1.24
@@ -25,7 +25,8 @@ go vet ./...       # Go vet check
 ## Architecture
 
 ```
-api/v1alpha1/          → CRD types (OpenClawInstance)
+api/v1/                → CRD types - hub/storage version (OpenClawInstance, OpenClawSelfConfig)
+api/v1alpha1/          → CRD types - spoke version (backward compat, auto-converts to v1)
 internal/controller/   → Reconciliation logic (single controller)
 internal/resources/    → Pure resource builder functions (Deployment, Service, etc.)
 config/crd/bases/      → Generated CRD YAML (committed to git)
@@ -134,7 +135,7 @@ git worktree remove ../k8s-operator-<suffix>
 ```
 
 ### CRD API changes
-After modifying types in `api/v1alpha1/openclawinstance_types.go`:
+After modifying types in `api/v1/openclawinstance_types.go` (and the corresponding `api/v1alpha1/` spoke types):
 1. Run `make generate` (regenerates `zz_generated.deepcopy.go`)
 2. Run `make manifests` (regenerates CRD YAML in `config/crd/bases/`)
 3. Commit the generated files
@@ -146,7 +147,7 @@ After modifying types in `api/v1alpha1/openclawinstance_types.go`:
 - **Always add e2e tests when feasible** -- any new feature or bug fix that changes the behavior of managed Kubernetes resources should include an e2e test verifying the resources are created correctly on a real cluster
 - The `RawConfig` type embeds `runtime.RawExtension` -- in tests use:
   ```go
-  instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+  instance.Spec.Config.Raw = &openclawv1.RawConfig{
       RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
   }
   ```
@@ -156,7 +157,7 @@ When adding or changing CRD fields, features, or behavior, **always** update bot
 - `README.md` -- user-facing overview, examples, and feature table
 - `docs/api-reference.md` -- exhaustive field-level reference for every spec and status field
 
-Both files must stay in sync with the types in `api/v1alpha1/openclawinstance_types.go`.
+Both files must stay in sync with the types in `api/v1/openclawinstance_types.go`.
 
 ## CI Pipeline
 

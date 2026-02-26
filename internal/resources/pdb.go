@@ -21,11 +21,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 )
 
 // BuildPDB creates a PodDisruptionBudget for the OpenClawInstance
-func BuildPDB(instance *openclawv1alpha1.OpenClawInstance) *policyv1.PodDisruptionBudget {
+func BuildPDB(instance *openclawv1.OpenClawInstance) *policyv1.PodDisruptionBudget {
 	labels := Labels(instance)
 	selectorLabels := SelectorLabels(instance)
 

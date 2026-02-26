@@ -31,7 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 	"github.com/openclawrocks/k8s-operator/internal/resources"
 )
 
@@ -90,7 +90,7 @@ var _ = Describe("Observability - Deep Insights", func() {
 			instanceName := "prom-rule-test"
 			trueVal := true
 
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
@@ -98,14 +98,14 @@ var _ = Describe("Observability - Deep Insights", func() {
 						"openclaw.rocks/skip-backup": "true",
 					},
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Image: openclawv1alpha1.ImageSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Image: openclawv1.ImageSpec{
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
-					Observability: openclawv1alpha1.ObservabilitySpec{
-						Metrics: openclawv1alpha1.MetricsSpec{
-							PrometheusRule: &openclawv1alpha1.PrometheusRuleSpec{
+					Observability: openclawv1.ObservabilitySpec{
+						Metrics: openclawv1.MetricsSpec{
+							PrometheusRule: &openclawv1.PrometheusRuleSpec{
 								Enabled: &trueVal,
 								Labels: map[string]string{
 									"release": "kube-prometheus-stack",
@@ -177,7 +177,7 @@ var _ = Describe("Observability - Deep Insights", func() {
 			instanceName := "grafana-dash-test"
 			trueVal := true
 
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
@@ -185,14 +185,14 @@ var _ = Describe("Observability - Deep Insights", func() {
 						"openclaw.rocks/skip-backup": "true",
 					},
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Image: openclawv1alpha1.ImageSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Image: openclawv1.ImageSpec{
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
-					Observability: openclawv1alpha1.ObservabilitySpec{
-						Metrics: openclawv1alpha1.MetricsSpec{
-							GrafanaDashboard: &openclawv1alpha1.GrafanaDashboardSpec{
+					Observability: openclawv1.ObservabilitySpec{
+						Metrics: openclawv1.MetricsSpec{
+							GrafanaDashboard: &openclawv1.GrafanaDashboardSpec{
 								Enabled: &trueVal,
 							},
 						},
@@ -269,7 +269,7 @@ var _ = Describe("Observability - Deep Insights", func() {
 			instanceName := "sm-metrics-test"
 			trueVal := true
 
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
@@ -277,14 +277,14 @@ var _ = Describe("Observability - Deep Insights", func() {
 						"openclaw.rocks/skip-backup": "true",
 					},
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Image: openclawv1alpha1.ImageSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Image: openclawv1.ImageSpec{
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
-					Observability: openclawv1alpha1.ObservabilitySpec{
-						Metrics: openclawv1alpha1.MetricsSpec{
-							ServiceMonitor: &openclawv1alpha1.ServiceMonitorSpec{
+					Observability: openclawv1.ObservabilitySpec{
+						Metrics: openclawv1.MetricsSpec{
+							ServiceMonitor: &openclawv1.ServiceMonitorSpec{
 								Enabled: &trueVal,
 							},
 						},
@@ -381,7 +381,7 @@ var _ = Describe("Observability - Deep Insights", func() {
 			instanceName := "prom-cleanup-test"
 			trueVal := true
 
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
@@ -389,14 +389,14 @@ var _ = Describe("Observability - Deep Insights", func() {
 						"openclaw.rocks/skip-backup": "true",
 					},
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Image: openclawv1alpha1.ImageSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Image: openclawv1.ImageSpec{
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
-					Observability: openclawv1alpha1.ObservabilitySpec{
-						Metrics: openclawv1alpha1.MetricsSpec{
-							PrometheusRule: &openclawv1alpha1.PrometheusRuleSpec{
+					Observability: openclawv1.ObservabilitySpec{
+						Metrics: openclawv1.MetricsSpec{
+							PrometheusRule: &openclawv1.PrometheusRuleSpec{
 								Enabled: &trueVal,
 							},
 						},
@@ -421,7 +421,7 @@ var _ = Describe("Observability - Deep Insights", func() {
 			}, timeout, interval).Should(Succeed())
 
 			// Disable PrometheusRule
-			updatedInstance := &openclawv1alpha1.OpenClawInstance{}
+			updatedInstance := &openclawv1.OpenClawInstance{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{
 				Name:      instanceName,
 				Namespace: namespace,

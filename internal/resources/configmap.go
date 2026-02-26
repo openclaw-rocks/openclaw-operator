@@ -23,7 +23,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 )
 
 // BuildConfigMap creates a ConfigMap for the OpenClawInstance configuration.
@@ -31,7 +31,7 @@ import (
 // access) and optionally injects gateway.auth credentials when gatewayToken
 // is non-empty. Also includes the nginx stream config for the proxy sidecar.
 // Uses the inline raw config from the instance spec as the base.
-func BuildConfigMap(instance *openclawv1alpha1.OpenClawInstance, gatewayToken string) *corev1.ConfigMap {
+func BuildConfigMap(instance *openclawv1.OpenClawInstance, gatewayToken string) *corev1.ConfigMap {
 	// Start with empty config, overlay raw config if present
 	configBytes := []byte("{}")
 	if instance.Spec.Config.Raw != nil && len(instance.Spec.Config.Raw.Raw) > 0 {
@@ -46,7 +46,7 @@ func BuildConfigMap(instance *openclawv1alpha1.OpenClawInstance, gatewayToken st
 // from any source (inline raw, external ConfigMap, or empty default).
 // The enrichment pipeline (gateway auth, tailscale, browser, gateway bind)
 // always runs on the provided bytes.
-func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseConfig []byte, gatewayToken string) *corev1.ConfigMap {
+func BuildConfigMapFromBytes(instance *openclawv1.OpenClawInstance, baseConfig []byte, gatewayToken string) *corev1.ConfigMap {
 	labels := Labels(instance)
 
 	configBytes := baseConfig
@@ -142,7 +142,7 @@ func enrichConfigWithGatewayAuth(configJSON []byte, token string) ([]byte, error
 // If authSSO is enabled, sets gateway.auth.allowTailscale=true so the main
 // container accepts tailnet-authenticated requests.
 // Does not override user-set values.
-func enrichConfigWithTailscale(configJSON []byte, instance *openclawv1alpha1.OpenClawInstance) ([]byte, error) {
+func enrichConfigWithTailscale(configJSON []byte, instance *openclawv1.OpenClawInstance) ([]byte, error) {
 	// Only need to inject config when AuthSSO is enabled
 	if !instance.Spec.Tailscale.AuthSSO {
 		return configJSON, nil
@@ -196,7 +196,7 @@ type tailscaleWebHandler struct {
 // BuildTailscaleServeConfig generates the TS_SERVE_CONFIG JSON for the sidecar.
 // It proxies HTTPS traffic to the gateway on 127.0.0.1:GatewayPort.
 // In funnel mode, AllowFunnel is set to expose the instance publicly.
-func BuildTailscaleServeConfig(instance *openclawv1alpha1.OpenClawInstance) string {
+func BuildTailscaleServeConfig(instance *openclawv1.OpenClawInstance) string {
 	proxy := fmt.Sprintf("http://127.0.0.1:%d", GatewayPort)
 
 	cfg := tailscaleServeConfig{
@@ -296,7 +296,7 @@ func enrichConfigWithBrowser(configJSON []byte) ([]byte, error) {
 // JSON. The gateway proxy sidecar handles external access, so the gateway
 // process always binds to loopback. If the user has already set gateway.bind,
 // the config is returned unchanged (user override wins).
-func enrichConfigWithGatewayBind(configJSON []byte, instance *openclawv1alpha1.OpenClawInstance) ([]byte, error) {
+func enrichConfigWithGatewayBind(configJSON []byte, instance *openclawv1.OpenClawInstance) ([]byte, error) {
 	_ = instance // signature kept for enrichment pipeline consistency
 	var config map[string]interface{}
 	if err := json.Unmarshal(configJSON, &config); err != nil {

@@ -31,14 +31,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 )
 
 // reconcileRestore handles restoring PVC data from an S3 backup before StatefulSet creation.
 // Returns (result, done, error):
 //   - done=true: restore is complete (or not needed), continue to create StatefulSet
 //   - done=false: restore is in progress, requeue with result
-func (r *OpenClawInstanceReconciler) reconcileRestore(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) (result ctrl.Result, done bool, _ error) {
+func (r *OpenClawInstanceReconciler) reconcileRestore(ctx context.Context, instance *openclawv1.OpenClawInstance) (result ctrl.Result, done bool, _ error) {
 	logger := log.FromContext(ctx)
 
 	// Skip if no restore requested
@@ -54,8 +54,8 @@ func (r *OpenClawInstanceReconciler) reconcileRestore(ctx context.Context, insta
 	logger.Info("Restore from backup requested", "restoreFrom", instance.Spec.RestoreFrom)
 
 	// Update phase to Restoring
-	if instance.Status.Phase != openclawv1alpha1.PhaseRestoring {
-		instance.Status.Phase = openclawv1alpha1.PhaseRestoring
+	if instance.Status.Phase != openclawv1.PhaseRestoring {
+		instance.Status.Phase = openclawv1.PhaseRestoring
 		if err := r.Status().Update(ctx, instance); err != nil {
 			return ctrl.Result{}, false, err
 		}
@@ -118,7 +118,7 @@ func (r *OpenClawInstanceReconciler) reconcileRestore(ctx context.Context, insta
 			fmt.Sprintf("Restore Job %s failed. Delete the Job to retry.", jobName))
 
 		meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
-			Type:    openclawv1alpha1.ConditionTypeRestoreComplete,
+			Type:    openclawv1.ConditionTypeRestoreComplete,
 			Status:  metav1.ConditionFalse,
 			Reason:  "RestoreFailed",
 			Message: fmt.Sprintf("Restore Job %s failed", jobName),
@@ -136,9 +136,9 @@ func (r *OpenClawInstanceReconciler) reconcileRestore(ctx context.Context, insta
 
 	// Set status
 	instance.Status.RestoredFrom = instance.Spec.RestoreFrom
-	instance.Status.Phase = openclawv1alpha1.PhaseProvisioning
+	instance.Status.Phase = openclawv1.PhaseProvisioning
 	meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
-		Type:    openclawv1alpha1.ConditionTypeRestoreComplete,
+		Type:    openclawv1.ConditionTypeRestoreComplete,
 		Status:  metav1.ConditionTrue,
 		Reason:  "RestoreSucceeded",
 		Message: fmt.Sprintf("Restored from %s", instance.Spec.RestoreFrom),

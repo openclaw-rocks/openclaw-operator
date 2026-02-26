@@ -20,7 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 )
 
 // ServiceMonitorGVK returns the GroupVersionKind for ServiceMonitor
@@ -33,12 +33,12 @@ func ServiceMonitorGVK() schema.GroupVersionKind {
 }
 
 // ServiceMonitorName returns the name of the ServiceMonitor
-func ServiceMonitorName(instance *openclawv1alpha1.OpenClawInstance) string {
+func ServiceMonitorName(instance *openclawv1.OpenClawInstance) string {
 	return instance.Name
 }
 
 // BuildServiceMonitor creates an unstructured ServiceMonitor for the OpenClawInstance
-func BuildServiceMonitor(instance *openclawv1alpha1.OpenClawInstance) *unstructured.Unstructured {
+func BuildServiceMonitor(instance *openclawv1.OpenClawInstance) *unstructured.Unstructured {
 	labels := Labels(instance)
 
 	// Add custom labels from spec

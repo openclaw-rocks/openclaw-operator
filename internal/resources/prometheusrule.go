@@ -22,7 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 )
 
 const defaultRunbookBaseURL = "https://openclaw.rocks/docs/runbooks"
@@ -37,12 +37,12 @@ func PrometheusRuleGVK() schema.GroupVersionKind {
 }
 
 // PrometheusRuleName returns the name of the PrometheusRule
-func PrometheusRuleName(instance *openclawv1alpha1.OpenClawInstance) string {
+func PrometheusRuleName(instance *openclawv1.OpenClawInstance) string {
 	return instance.Name + "-alerts"
 }
 
 // BuildPrometheusRule creates an unstructured PrometheusRule for the OpenClawInstance
-func BuildPrometheusRule(instance *openclawv1alpha1.OpenClawInstance) *unstructured.Unstructured {
+func BuildPrometheusRule(instance *openclawv1.OpenClawInstance) *unstructured.Unstructured {
 	labels := Labels(instance)
 
 	// Add custom labels from spec

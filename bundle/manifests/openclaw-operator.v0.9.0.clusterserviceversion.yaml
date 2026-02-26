@@ -14,7 +14,7 @@ metadata:
     alm-examples: |-
       [
         {
-          "apiVersion": "openclaw.rocks/v1alpha1",
+          "apiVersion": "openclaw.rocks/v1",
           "kind": "OpenClawInstance",
           "metadata": {
             "name": "my-openclaw",
@@ -37,7 +37,7 @@ metadata:
           }
         },
         {
-          "apiVersion": "openclaw.rocks/v1alpha1",
+          "apiVersion": "openclaw.rocks/v1",
           "kind": "OpenClawInstance",
           "metadata": {
             "name": "production-openclaw",

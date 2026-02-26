@@ -31,17 +31,17 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 )
 
 // newTestInstance creates a minimal OpenClawInstance for testing.
-func newTestInstance(name string) *openclawv1alpha1.OpenClawInstance {
-	return &openclawv1alpha1.OpenClawInstance{
+func newTestInstance(name string) *openclawv1.OpenClawInstance {
+	return &openclawv1.OpenClawInstance{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: "test-ns",
 		},
-		Spec: openclawv1alpha1.OpenClawInstanceSpec{},
+		Spec: openclawv1.OpenClawInstanceSpec{},
 	}
 }
 
@@ -107,17 +107,17 @@ func TestSelectorLabels_SubsetOfLabels(t *testing.T) {
 func TestGetImage(t *testing.T) {
 	tests := []struct {
 		name     string
-		image    openclawv1alpha1.ImageSpec
+		image    openclawv1.ImageSpec
 		expected string
 	}{
 		{
 			name:     "defaults",
-			image:    openclawv1alpha1.ImageSpec{},
+			image:    openclawv1.ImageSpec{},
 			expected: "ghcr.io/openclaw/openclaw:latest",
 		},
 		{
 			name: "custom repo and tag",
-			image: openclawv1alpha1.ImageSpec{
+			image: openclawv1.ImageSpec{
 				Repository: "my-registry.io/openclaw",
 				Tag:        "v1.2.3",
 			},
@@ -125,7 +125,7 @@ func TestGetImage(t *testing.T) {
 		},
 		{
 			name: "digest takes precedence over tag",
-			image: openclawv1alpha1.ImageSpec{
+			image: openclawv1.ImageSpec{
 				Repository: "my-registry.io/openclaw",
 				Tag:        "v1.2.3",
 				Digest:     "sha256:abc123",
@@ -134,14 +134,14 @@ func TestGetImage(t *testing.T) {
 		},
 		{
 			name: "digest with default repo",
-			image: openclawv1alpha1.ImageSpec{
+			image: openclawv1.ImageSpec{
 				Digest: "sha256:def456",
 			},
 			expected: "ghcr.io/openclaw/openclaw@sha256:def456",
 		},
 		{
 			name: "custom repo with default tag",
-			image: openclawv1alpha1.ImageSpec{
+			image: openclawv1.ImageSpec{
 				Repository: "custom.io/img",
 			},
 			expected: "custom.io/img:latest",
@@ -166,7 +166,7 @@ func TestNameHelpers(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		fn       func(*openclawv1alpha1.OpenClawInstance) string
+		fn       func(*openclawv1.OpenClawInstance) string
 		expected string
 	}{
 		{"StatefulSetName", StatefulSetName, "foo"},
@@ -668,12 +668,12 @@ func TestBuildStatefulSet_ChromiumNoExtraArgs(t *testing.T) {
 
 func TestBuildStatefulSet_CustomResources(t *testing.T) {
 	instance := newTestInstance("res-test")
-	instance.Spec.Resources = openclawv1alpha1.ResourcesSpec{
-		Requests: openclawv1alpha1.ResourceList{
+	instance.Spec.Resources = openclawv1.ResourcesSpec{
+		Requests: openclawv1.ResourceList{
 			CPU:    "1",
 			Memory: "2Gi",
 		},
-		Limits: openclawv1alpha1.ResourceList{
+		Limits: openclawv1.ResourceList{
 			CPU:    "4",
 			Memory: "8Gi",
 		},
@@ -702,7 +702,7 @@ func TestBuildStatefulSet_CustomResources(t *testing.T) {
 
 func TestBuildStatefulSet_ImageDigest(t *testing.T) {
 	instance := newTestInstance("digest-test")
-	instance.Spec.Image = openclawv1alpha1.ImageSpec{
+	instance.Spec.Image = openclawv1.ImageSpec{
 		Repository: "my-registry.io/openclaw",
 		Tag:        "v1.0.0",
 		Digest:     "sha256:abcdef1234567890",
@@ -719,14 +719,14 @@ func TestBuildStatefulSet_ImageDigest(t *testing.T) {
 
 func TestBuildStatefulSet_ProbesDisabled(t *testing.T) {
 	instance := newTestInstance("probes-disabled")
-	instance.Spec.Probes = &openclawv1alpha1.ProbesSpec{
-		Liveness: &openclawv1alpha1.ProbeSpec{
+	instance.Spec.Probes = &openclawv1.ProbesSpec{
+		Liveness: &openclawv1.ProbeSpec{
 			Enabled: Ptr(false),
 		},
-		Readiness: &openclawv1alpha1.ProbeSpec{
+		Readiness: &openclawv1.ProbeSpec{
 			Enabled: Ptr(false),
 		},
-		Startup: &openclawv1alpha1.ProbeSpec{
+		Startup: &openclawv1.ProbeSpec{
 			Enabled: Ptr(false),
 		},
 	}
@@ -747,8 +747,8 @@ func TestBuildStatefulSet_ProbesDisabled(t *testing.T) {
 
 func TestBuildStatefulSet_CustomProbeValues(t *testing.T) {
 	instance := newTestInstance("probes-custom")
-	instance.Spec.Probes = &openclawv1alpha1.ProbesSpec{
-		Liveness: &openclawv1alpha1.ProbeSpec{
+	instance.Spec.Probes = &openclawv1.ProbesSpec{
+		Liveness: &openclawv1.ProbeSpec{
 			InitialDelaySeconds: Ptr(int32(60)),
 			PeriodSeconds:       Ptr(int32(20)),
 			TimeoutSeconds:      Ptr(int32(10)),
@@ -816,7 +816,7 @@ func TestBuildStatefulSet_ExistingClaim(t *testing.T) {
 
 func TestBuildStatefulSet_ConfigVolume_RawConfig(t *testing.T) {
 	instance := newTestInstance("raw-cfg")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{
 			Raw: []byte(`{"key":"value"}`),
 		},
@@ -870,7 +870,7 @@ func TestBuildStatefulSet_ConfigVolume_RawConfig(t *testing.T) {
 
 func TestBuildStatefulSet_ConfigVolume_ConfigMapRef(t *testing.T) {
 	instance := newTestInstance("ref-cfg")
-	instance.Spec.Config.ConfigMapRef = &openclawv1alpha1.ConfigMapKeySelector{
+	instance.Spec.Config.ConfigMapRef = &openclawv1.ConfigMapKeySelector{
 		Name: "external-config",
 		Key:  "my-config.json",
 	}
@@ -907,7 +907,7 @@ func TestBuildStatefulSet_ConfigVolume_ConfigMapRef(t *testing.T) {
 
 func TestBuildStatefulSet_ConfigMapRef_DefaultKey(t *testing.T) {
 	instance := newTestInstance("ref-default-key")
-	instance.Spec.Config.ConfigMapRef = &openclawv1alpha1.ConfigMapKeySelector{
+	instance.Spec.Config.ConfigMapRef = &openclawv1.ConfigMapKeySelector{
 		Name: "external-config",
 		// Key not set - operator-managed CM always uses "openclaw.json"
 	}
@@ -967,7 +967,7 @@ func TestBuildStatefulSet_VanillaDeployment_HasInitContainer(t *testing.T) {
 
 func TestBuildStatefulSet_PostStart_OverwriteMode(t *testing.T) {
 	instance := newTestInstance("poststart-overwrite")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
 	}
 
@@ -990,7 +990,7 @@ func TestBuildStatefulSet_PostStart_OverwriteMode(t *testing.T) {
 
 func TestBuildStatefulSet_PostStart_MergeMode(t *testing.T) {
 	instance := newTestInstance("poststart-merge")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
 	}
 	instance.Spec.Config.MergeMode = ConfigMergeModeMerge
@@ -1023,7 +1023,7 @@ func TestBuildStatefulSet_PostStart_MergeMode(t *testing.T) {
 
 func TestBuildStatefulSet_PostStart_JSON5Mode_NoHook(t *testing.T) {
 	instance := newTestInstance("poststart-json5")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
 	}
 	instance.Spec.Config.Format = ConfigFormatJSON5
@@ -1039,7 +1039,7 @@ func TestBuildStatefulSet_PostStart_JSON5Mode_NoHook(t *testing.T) {
 
 func TestBuildStatefulSet_PostStart_ConfigMapRef(t *testing.T) {
 	instance := newTestInstance("poststart-ref")
-	instance.Spec.Config.ConfigMapRef = &openclawv1alpha1.ConfigMapKeySelector{
+	instance.Spec.Config.ConfigMapRef = &openclawv1.ConfigMapKeySelector{
 		Name: "external-config",
 		Key:  "my-config.json",
 	}
@@ -1119,7 +1119,7 @@ func TestBuildStatefulSet_ImagePullSecrets(t *testing.T) {
 func TestBuildStatefulSet_ChromiumCustomImage(t *testing.T) {
 	instance := newTestInstance("chromium-custom")
 	instance.Spec.Chromium.Enabled = true
-	instance.Spec.Chromium.Image = openclawv1alpha1.ChromiumImageSpec{
+	instance.Spec.Chromium.Image = openclawv1.ChromiumImageSpec{
 		Repository: "my-registry.io/chromium",
 		Tag:        "v120",
 	}
@@ -1143,7 +1143,7 @@ func TestBuildStatefulSet_ChromiumCustomImage(t *testing.T) {
 func TestBuildStatefulSet_ChromiumDigest(t *testing.T) {
 	instance := newTestInstance("chromium-digest")
 	instance.Spec.Chromium.Enabled = true
-	instance.Spec.Chromium.Image = openclawv1alpha1.ChromiumImageSpec{
+	instance.Spec.Chromium.Image = openclawv1.ChromiumImageSpec{
 		Repository: "my-registry.io/chromium",
 		Tag:        "v120",
 		Digest:     "sha256:chromiumhash",
@@ -1351,7 +1351,7 @@ func TestBuildService_CustomAnnotations(t *testing.T) {
 
 func TestBuildService_CustomPorts(t *testing.T) {
 	instance := newTestInstance("svc-custom-ports")
-	instance.Spec.Networking.Service.Ports = []openclawv1alpha1.ServicePortSpec{
+	instance.Spec.Networking.Service.Ports = []openclawv1.ServicePortSpec{
 		{
 			Name: "http",
 			Port: 3978,
@@ -1368,7 +1368,7 @@ func TestBuildService_CustomPorts(t *testing.T) {
 
 func TestBuildService_CustomPortsWithTargetPort(t *testing.T) {
 	instance := newTestInstance("svc-custom-tp")
-	instance.Spec.Networking.Service.Ports = []openclawv1alpha1.ServicePortSpec{
+	instance.Spec.Networking.Service.Ports = []openclawv1.ServicePortSpec{
 		{
 			Name:       "http",
 			Port:       80,
@@ -1391,7 +1391,7 @@ func TestBuildService_CustomPortsWithTargetPort(t *testing.T) {
 
 func TestBuildService_CustomPortsMultiple(t *testing.T) {
 	instance := newTestInstance("svc-multi-ports")
-	instance.Spec.Networking.Service.Ports = []openclawv1alpha1.ServicePortSpec{
+	instance.Spec.Networking.Service.Ports = []openclawv1.ServicePortSpec{
 		{
 			Name: "http",
 			Port: 3978,
@@ -1415,7 +1415,7 @@ func TestBuildService_CustomPortsMultiple(t *testing.T) {
 
 func TestBuildService_CustomPortsOverrideDefaults(t *testing.T) {
 	instance := newTestInstance("svc-override")
-	instance.Spec.Networking.Service.Ports = []openclawv1alpha1.ServicePortSpec{
+	instance.Spec.Networking.Service.Ports = []openclawv1.ServicePortSpec{
 		{
 			Name: "http",
 			Port: 8080,
@@ -1433,7 +1433,7 @@ func TestBuildService_CustomPortsOverrideDefaults(t *testing.T) {
 
 func TestBuildService_CustomPortsDefaultProtocol(t *testing.T) {
 	instance := newTestInstance("svc-proto")
-	instance.Spec.Networking.Service.Ports = []openclawv1alpha1.ServicePortSpec{
+	instance.Spec.Networking.Service.Ports = []openclawv1.ServicePortSpec{
 		{
 			Name: "http",
 			Port: 8080,
@@ -1449,7 +1449,7 @@ func TestBuildService_CustomPortsDefaultProtocol(t *testing.T) {
 
 func TestBuildService_CustomPortsTargetPortDefaultsToPort(t *testing.T) {
 	instance := newTestInstance("svc-tp-default")
-	instance.Spec.Networking.Service.Ports = []openclawv1alpha1.ServicePortSpec{
+	instance.Spec.Networking.Service.Ports = []openclawv1.ServicePortSpec{
 		{
 			Name: "http",
 			Port: 3978,
@@ -1558,7 +1558,7 @@ func TestBuildNetworkPolicy_Default(t *testing.T) {
 
 func TestBuildNetworkPolicy_CustomServicePorts(t *testing.T) {
 	instance := newTestInstance("np-custom-ports")
-	instance.Spec.Networking.Service.Ports = []openclawv1alpha1.ServicePortSpec{
+	instance.Spec.Networking.Service.Ports = []openclawv1.ServicePortSpec{
 		{Name: "http", Port: 3978},
 		{Name: "grpc", Port: 50051, Protocol: corev1.ProtocolTCP},
 	}
@@ -1576,7 +1576,7 @@ func TestBuildNetworkPolicy_CustomServicePorts(t *testing.T) {
 
 func TestBuildNetworkPolicy_CustomServicePortsWithTargetPort(t *testing.T) {
 	instance := newTestInstance("np-custom-tp")
-	instance.Spec.Networking.Service.Ports = []openclawv1alpha1.ServicePortSpec{
+	instance.Spec.Networking.Service.Ports = []openclawv1.ServicePortSpec{
 		{Name: "http", Port: 80, TargetPort: Ptr(int32(3978))},
 	}
 
@@ -1592,7 +1592,7 @@ func TestBuildNetworkPolicy_CustomServicePortsWithTargetPort(t *testing.T) {
 
 func TestBuildNetworkPolicy_CustomPortsApplyToAllRules(t *testing.T) {
 	instance := newTestInstance("np-custom-all")
-	instance.Spec.Networking.Service.Ports = []openclawv1alpha1.ServicePortSpec{
+	instance.Spec.Networking.Service.Ports = []openclawv1.ServicePortSpec{
 		{Name: "http", Port: 8080},
 	}
 	instance.Spec.Security.NetworkPolicy.AllowedIngressNamespaces = []string{"monitoring"}
@@ -1860,7 +1860,7 @@ func TestBuildRole_Default(t *testing.T) {
 
 func TestBuildRole_AdditionalRules(t *testing.T) {
 	instance := newTestInstance("role-extra")
-	instance.Spec.Security.RBAC.AdditionalRules = []openclawv1alpha1.RBACRule{
+	instance.Spec.Security.RBAC.AdditionalRules = []openclawv1.RBACRule{
 		{
 			APIGroups: []string{""},
 			Resources: []string{"secrets"},
@@ -1984,7 +1984,7 @@ func TestBuildConfigMap_Default(t *testing.T) {
 
 func TestBuildConfigMap_RawConfig(t *testing.T) {
 	instance := newTestInstance("cm-raw")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{
 			Raw: []byte(`{"mcpServers":{"test":{"url":"http://localhost:3000"}}}`),
 		},
@@ -2012,7 +2012,7 @@ func TestBuildConfigMap_InvalidJSON_RawPreserved(t *testing.T) {
 	instance := newTestInstance("cm-invalid")
 	// If raw JSON is technically valid but the builder tries to pretty-print,
 	// verify it handles valid JSON correctly and gateway.bind is injected
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{
 			Raw: []byte(`{"key":"value"}`),
 		},
@@ -2228,7 +2228,7 @@ func TestEnrichConfigWithGatewayBind_InvalidJSON(t *testing.T) {
 
 func TestBuildConfigMap_RawConfig_GatewayBindInjected(t *testing.T) {
 	instance := newTestInstance("cm-bind-inject")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{
 			Raw: []byte(`{"mcpServers":{"test":{"url":"http://localhost"}}}`),
 		},
@@ -2257,7 +2257,7 @@ func TestBuildConfigMap_RawConfig_GatewayBindInjected(t *testing.T) {
 
 func TestBuildConfigMap_RawConfig_UserBindPreserved(t *testing.T) {
 	instance := newTestInstance("cm-bind-preserve")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{
 			Raw: []byte(`{"gateway":{"bind":"0.0.0.0"}}`),
 		},
@@ -2395,7 +2395,7 @@ func TestBuildPDB_Default(t *testing.T) {
 
 func TestBuildPDB_Custom(t *testing.T) {
 	instance := newTestInstance("pdb-custom")
-	instance.Spec.Availability.PodDisruptionBudget = &openclawv1alpha1.PodDisruptionBudgetSpec{
+	instance.Spec.Availability.PodDisruptionBudget = &openclawv1.PodDisruptionBudgetSpec{
 		MaxUnavailable: Ptr(int32(0)),
 	}
 
@@ -2408,7 +2408,7 @@ func TestBuildPDB_Custom(t *testing.T) {
 
 func TestBuildPDB_CustomValue(t *testing.T) {
 	instance := newTestInstance("pdb-val")
-	instance.Spec.Availability.PodDisruptionBudget = &openclawv1alpha1.PodDisruptionBudgetSpec{
+	instance.Spec.Availability.PodDisruptionBudget = &openclawv1.PodDisruptionBudgetSpec{
 		MaxUnavailable: Ptr(int32(2)),
 	}
 
@@ -2426,15 +2426,15 @@ func TestBuildPDB_CustomValue(t *testing.T) {
 func TestBuildIngress_Basic(t *testing.T) {
 	instance := newTestInstance("ing-test")
 	className := "nginx"
-	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+	instance.Spec.Networking.Ingress = openclawv1.IngressSpec{
 		Enabled:   true,
 		ClassName: &className,
-		Hosts: []openclawv1alpha1.IngressHost{
+		Hosts: []openclawv1.IngressHost{
 			{
 				Host: "openclaw.example.com",
 			},
 		},
-		TLS: []openclawv1alpha1.IngressTLS{
+		TLS: []openclawv1.IngressTLS{
 			{
 				Hosts:      []string{"openclaw.example.com"},
 				SecretName: "openclaw-tls",
@@ -2500,9 +2500,9 @@ func TestBuildIngress_Basic(t *testing.T) {
 
 func TestBuildIngress_DefaultAnnotations(t *testing.T) {
 	instance := newTestInstance("ing-ann")
-	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+	instance.Spec.Networking.Ingress = openclawv1.IngressSpec{
 		Enabled: true,
-		Hosts: []openclawv1alpha1.IngressHost{
+		Hosts: []openclawv1.IngressHost{
 			{Host: "test.example.com"},
 		},
 	}
@@ -2528,13 +2528,13 @@ func TestBuildIngress_DefaultAnnotations(t *testing.T) {
 func TestBuildIngress_SecurityDisabled(t *testing.T) {
 	instance := newTestInstance("ing-nosec")
 	className := "nginx"
-	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+	instance.Spec.Networking.Ingress = openclawv1.IngressSpec{
 		Enabled:   true,
 		ClassName: &className,
-		Hosts: []openclawv1alpha1.IngressHost{
+		Hosts: []openclawv1.IngressHost{
 			{Host: "test.example.com"},
 		},
-		Security: openclawv1alpha1.IngressSecuritySpec{
+		Security: openclawv1.IngressSecuritySpec{
 			ForceHTTPS: Ptr(false),
 			EnableHSTS: Ptr(false),
 		},
@@ -2565,14 +2565,14 @@ func TestBuildIngress_SecurityDisabled(t *testing.T) {
 func TestBuildIngress_RateLimiting(t *testing.T) {
 	instance := newTestInstance("ing-rl")
 	rps := int32(20)
-	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+	instance.Spec.Networking.Ingress = openclawv1.IngressSpec{
 		Enabled:   true,
 		ClassName: Ptr("nginx"),
-		Hosts: []openclawv1alpha1.IngressHost{
+		Hosts: []openclawv1.IngressHost{
 			{Host: "test.example.com"},
 		},
-		Security: openclawv1alpha1.IngressSecuritySpec{
-			RateLimiting: &openclawv1alpha1.RateLimitingSpec{
+		Security: openclawv1.IngressSecuritySpec{
+			RateLimiting: &openclawv1.RateLimitingSpec{
 				RequestsPerSecond: &rps,
 			},
 		},
@@ -2588,14 +2588,14 @@ func TestBuildIngress_RateLimiting(t *testing.T) {
 
 func TestBuildIngress_RateLimitingDefault(t *testing.T) {
 	instance := newTestInstance("ing-rl-default")
-	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+	instance.Spec.Networking.Ingress = openclawv1.IngressSpec{
 		Enabled:   true,
 		ClassName: Ptr("nginx"),
-		Hosts: []openclawv1alpha1.IngressHost{
+		Hosts: []openclawv1.IngressHost{
 			{Host: "test.example.com"},
 		},
-		Security: openclawv1alpha1.IngressSecuritySpec{
-			RateLimiting: &openclawv1alpha1.RateLimitingSpec{
+		Security: openclawv1.IngressSecuritySpec{
+			RateLimiting: &openclawv1.RateLimitingSpec{
 				// Enabled defaults to true, RPS defaults to 10
 			},
 		},
@@ -2611,14 +2611,14 @@ func TestBuildIngress_RateLimitingDefault(t *testing.T) {
 
 func TestBuildIngress_RateLimitingDisabled(t *testing.T) {
 	instance := newTestInstance("ing-rl-off")
-	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+	instance.Spec.Networking.Ingress = openclawv1.IngressSpec{
 		Enabled:   true,
 		ClassName: Ptr("nginx"),
-		Hosts: []openclawv1alpha1.IngressHost{
+		Hosts: []openclawv1.IngressHost{
 			{Host: "test.example.com"},
 		},
-		Security: openclawv1alpha1.IngressSecuritySpec{
-			RateLimiting: &openclawv1alpha1.RateLimitingSpec{
+		Security: openclawv1.IngressSecuritySpec{
+			RateLimiting: &openclawv1.RateLimitingSpec{
 				Enabled: Ptr(false),
 			},
 		},
@@ -2635,13 +2635,13 @@ func TestBuildIngress_RateLimitingDisabled(t *testing.T) {
 func TestBuildIngress_CustomAnnotations(t *testing.T) {
 	instance := newTestInstance("ing-custom-ann")
 	className := "nginx"
-	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+	instance.Spec.Networking.Ingress = openclawv1.IngressSpec{
 		Enabled:   true,
 		ClassName: &className,
 		Annotations: map[string]string{
 			"custom-key": "custom-value",
 		},
-		Hosts: []openclawv1alpha1.IngressHost{
+		Hosts: []openclawv1.IngressHost{
 			{Host: "test.example.com"},
 		},
 	}
@@ -2659,13 +2659,13 @@ func TestBuildIngress_CustomAnnotations(t *testing.T) {
 
 func TestBuildIngress_MultipleHosts(t *testing.T) {
 	instance := newTestInstance("ing-multi")
-	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+	instance.Spec.Networking.Ingress = openclawv1.IngressSpec{
 		Enabled: true,
-		Hosts: []openclawv1alpha1.IngressHost{
+		Hosts: []openclawv1.IngressHost{
 			{Host: "a.example.com"},
 			{Host: "b.example.com"},
 		},
-		TLS: []openclawv1alpha1.IngressTLS{
+		TLS: []openclawv1.IngressTLS{
 			{
 				Hosts:      []string{"a.example.com", "b.example.com"},
 				SecretName: "multi-tls",
@@ -2694,12 +2694,12 @@ func TestBuildIngress_MultipleHosts(t *testing.T) {
 
 func TestBuildIngress_CustomPaths(t *testing.T) {
 	instance := newTestInstance("ing-paths")
-	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+	instance.Spec.Networking.Ingress = openclawv1.IngressSpec{
 		Enabled: true,
-		Hosts: []openclawv1alpha1.IngressHost{
+		Hosts: []openclawv1.IngressHost{
 			{
 				Host: "test.example.com",
-				Paths: []openclawv1alpha1.IngressPath{
+				Paths: []openclawv1.IngressPath{
 					{Path: "/api", PathType: "Prefix"},
 					{Path: "/health", PathType: "Exact"},
 				},
@@ -2734,7 +2734,7 @@ func TestBuildIngress_CustomPaths(t *testing.T) {
 
 func TestBuildIngress_NoHosts(t *testing.T) {
 	instance := newTestInstance("ing-no-hosts")
-	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+	instance.Spec.Networking.Ingress = openclawv1.IngressSpec{
 		Enabled: true,
 		// No hosts
 	}
@@ -2748,12 +2748,12 @@ func TestBuildIngress_NoHosts(t *testing.T) {
 
 func TestBuildIngress_CustomBackendPort(t *testing.T) {
 	instance := newTestInstance("ing-port")
-	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+	instance.Spec.Networking.Ingress = openclawv1.IngressSpec{
 		Enabled: true,
-		Hosts: []openclawv1alpha1.IngressHost{
+		Hosts: []openclawv1.IngressHost{
 			{
 				Host: "aibot.example.com",
-				Paths: []openclawv1alpha1.IngressPath{
+				Paths: []openclawv1.IngressPath{
 					{Path: "/api/messages", PathType: "Prefix", Port: Ptr(int32(3978))},
 				},
 			},
@@ -2774,12 +2774,12 @@ func TestBuildIngress_CustomBackendPort(t *testing.T) {
 
 func TestBuildIngress_DefaultBackendPort(t *testing.T) {
 	instance := newTestInstance("ing-default-port")
-	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+	instance.Spec.Networking.Ingress = openclawv1.IngressSpec{
 		Enabled: true,
-		Hosts: []openclawv1alpha1.IngressHost{
+		Hosts: []openclawv1.IngressHost{
 			{
 				Host: "test.example.com",
-				Paths: []openclawv1alpha1.IngressPath{
+				Paths: []openclawv1.IngressPath{
 					{Path: "/", PathType: "Prefix"},
 				},
 			},
@@ -2796,12 +2796,12 @@ func TestBuildIngress_DefaultBackendPort(t *testing.T) {
 
 func TestBuildIngress_MixedPorts(t *testing.T) {
 	instance := newTestInstance("ing-mixed-ports")
-	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+	instance.Spec.Networking.Ingress = openclawv1.IngressSpec{
 		Enabled: true,
-		Hosts: []openclawv1alpha1.IngressHost{
+		Hosts: []openclawv1.IngressHost{
 			{
 				Host: "app.example.com",
-				Paths: []openclawv1alpha1.IngressPath{
+				Paths: []openclawv1.IngressPath{
 					{Path: "/api", PathType: "Prefix", Port: Ptr(int32(3978))},
 					{Path: "/ws", PathType: "Prefix"},
 				},
@@ -2856,10 +2856,10 @@ func TestDetectIngressProvider(t *testing.T) {
 
 func TestBuildIngress_NginxProvider(t *testing.T) {
 	instance := newTestInstance("ing-nginx")
-	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+	instance.Spec.Networking.Ingress = openclawv1.IngressSpec{
 		Enabled:   true,
 		ClassName: Ptr("nginx"),
-		Hosts: []openclawv1alpha1.IngressHost{
+		Hosts: []openclawv1.IngressHost{
 			{Host: "test.example.com"},
 		},
 	}
@@ -2892,10 +2892,10 @@ func TestBuildIngress_NginxProvider(t *testing.T) {
 
 func TestBuildIngress_TraefikProvider(t *testing.T) {
 	instance := newTestInstance("ing-traefik")
-	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+	instance.Spec.Networking.Ingress = openclawv1.IngressSpec{
 		Enabled:   true,
 		ClassName: Ptr("traefik"),
-		Hosts: []openclawv1alpha1.IngressHost{
+		Hosts: []openclawv1.IngressHost{
 			{Host: "test.example.com"},
 		},
 	}
@@ -2939,10 +2939,10 @@ func TestBuildIngress_TraefikProvider(t *testing.T) {
 
 func TestBuildIngress_UnknownProvider(t *testing.T) {
 	instance := newTestInstance("ing-haproxy")
-	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+	instance.Spec.Networking.Ingress = openclawv1.IngressSpec{
 		Enabled:   true,
 		ClassName: Ptr("haproxy"),
-		Hosts: []openclawv1alpha1.IngressHost{
+		Hosts: []openclawv1.IngressHost{
 			{Host: "test.example.com"},
 		},
 	}
@@ -2964,14 +2964,14 @@ func TestBuildIngress_UnknownProvider(t *testing.T) {
 
 func TestBuildIngress_TraefikNoRateLimiting(t *testing.T) {
 	instance := newTestInstance("ing-traefik-rl")
-	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+	instance.Spec.Networking.Ingress = openclawv1.IngressSpec{
 		Enabled:   true,
 		ClassName: Ptr("traefik"),
-		Hosts: []openclawv1alpha1.IngressHost{
+		Hosts: []openclawv1.IngressHost{
 			{Host: "test.example.com"},
 		},
-		Security: openclawv1alpha1.IngressSecuritySpec{
-			RateLimiting: &openclawv1alpha1.RateLimitingSpec{
+		Security: openclawv1.IngressSecuritySpec{
+			RateLimiting: &openclawv1.RateLimitingSpec{
 				// Enabled defaults to true
 			},
 		},
@@ -2993,14 +2993,14 @@ func TestBuildIngress_TraefikNoRateLimiting(t *testing.T) {
 func TestAllBuilders_ConsistentLabels(t *testing.T) {
 	instance := newTestInstance("label-check")
 	instance.Spec.Chromium.Enabled = true
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{
 			Raw: []byte(`{}`),
 		},
 	}
-	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+	instance.Spec.Networking.Ingress = openclawv1.IngressSpec{
 		Enabled: true,
-		Hosts:   []openclawv1alpha1.IngressHost{{Host: "test.example.com"}},
+		Hosts:   []openclawv1.IngressHost{{Host: "test.example.com"}},
 	}
 
 	expectedLabels := Labels(instance)
@@ -3035,14 +3035,14 @@ func TestAllBuilders_ConsistentLabels(t *testing.T) {
 func TestAllBuilders_ConsistentNamespace(t *testing.T) {
 	instance := newTestInstance("ns-check")
 	instance.Namespace = "production"
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{
 			Raw: []byte(`{}`),
 		},
 	}
-	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+	instance.Spec.Networking.Ingress = openclawv1.IngressSpec{
 		Enabled: true,
-		Hosts:   []openclawv1alpha1.IngressHost{{Host: "test.example.com"}},
+		Hosts:   []openclawv1.IngressHost{{Host: "test.example.com"}},
 	}
 
 	resources := []struct {
@@ -3073,12 +3073,12 @@ func TestAllBuilders_ConsistentNamespace(t *testing.T) {
 func TestBuildStatefulSet_ChromiumCustomResources(t *testing.T) {
 	instance := newTestInstance("chromium-res")
 	instance.Spec.Chromium.Enabled = true
-	instance.Spec.Chromium.Resources = openclawv1alpha1.ResourcesSpec{
-		Requests: openclawv1alpha1.ResourceList{
+	instance.Spec.Chromium.Resources = openclawv1.ResourcesSpec{
+		Requests: openclawv1.ResourceList{
 			CPU:    "500m",
 			Memory: "1Gi",
 		},
-		Limits: openclawv1alpha1.ResourceList{
+		Limits: openclawv1.ResourceList{
 			CPU:    "2",
 			Memory: "4Gi",
 		},
@@ -3116,7 +3116,7 @@ func TestBuildStatefulSet_ChromiumCustomResources(t *testing.T) {
 
 func TestBuildStatefulSet_CustomPodSecurityContext(t *testing.T) {
 	instance := newTestInstance("custom-psc")
-	instance.Spec.Security.PodSecurityContext = &openclawv1alpha1.PodSecurityContextSpec{
+	instance.Spec.Security.PodSecurityContext = &openclawv1.PodSecurityContextSpec{
 		RunAsUser:  Ptr(int64(2000)),
 		RunAsGroup: Ptr(int64(3000)),
 		FSGroup:    Ptr(int64(4000)),
@@ -3316,7 +3316,7 @@ func TestBuildStatefulSet_KubernetesDefaults(t *testing.T) {
 // Kubernetes default fields to avoid reconcile-loop drift.
 func TestBuildStatefulSet_InitContainerDefaults(t *testing.T) {
 	instance := newTestInstance("init-defaults")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
 	}
 
@@ -3361,7 +3361,7 @@ func TestBuildStatefulSet_ChromiumContainerDefaults(t *testing.T) {
 // explicitly sets DefaultMode to match the Kubernetes default (0644).
 func TestBuildStatefulSet_ConfigMapDefaultMode(t *testing.T) {
 	instance := newTestInstance("cm-default-mode")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
 	}
 
@@ -3394,7 +3394,7 @@ func TestBuildService_KubernetesDefaults(t *testing.T) {
 // issues). This is essential for CreateOrUpdate comparisons to work.
 func TestBuildStatefulSet_Idempotent(t *testing.T) {
 	instance := newTestInstance("idempotent")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{"key":"val"}`)},
 	}
 	instance.Spec.Chromium.Enabled = true
@@ -3426,7 +3426,7 @@ func TestBuildWorkspaceConfigMap_Nil(t *testing.T) {
 
 func TestBuildWorkspaceConfigMap_EmptyFiles(t *testing.T) {
 	instance := newTestInstance("ws-empty")
-	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+	instance.Spec.Workspace = &openclawv1.WorkspaceSpec{
 		InitialDirectories: []string{"memory"},
 	}
 
@@ -3438,7 +3438,7 @@ func TestBuildWorkspaceConfigMap_EmptyFiles(t *testing.T) {
 
 func TestBuildWorkspaceConfigMap_WithFiles(t *testing.T) {
 	instance := newTestInstance("ws-files")
-	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+	instance.Spec.Workspace = &openclawv1.WorkspaceSpec{
 		InitialFiles: map[string]string{
 			"SOUL.md":   "# Personality\nBe helpful.",
 			"AGENTS.md": "# Agents config",
@@ -3497,7 +3497,7 @@ func TestShellQuote(t *testing.T) {
 
 func TestBuildInitScript_ConfigOnly(t *testing.T) {
 	instance := newTestInstance("init-config-only")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
 	}
 
@@ -3509,7 +3509,7 @@ func TestBuildInitScript_ConfigOnly(t *testing.T) {
 
 func TestBuildInitScript_WorkspaceOnly(t *testing.T) {
 	instance := newTestInstance("init-ws-only")
-	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+	instance.Spec.Workspace = &openclawv1.WorkspaceSpec{
 		InitialFiles: map[string]string{
 			"SOUL.md": "content",
 		},
@@ -3525,10 +3525,10 @@ func TestBuildInitScript_WorkspaceOnly(t *testing.T) {
 
 func TestBuildInitScript_Both(t *testing.T) {
 	instance := newTestInstance("init-both")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
 	}
-	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+	instance.Spec.Workspace = &openclawv1.WorkspaceSpec{
 		InitialFiles: map[string]string{
 			"SOUL.md":   "soul",
 			"AGENTS.md": "agents",
@@ -3565,7 +3565,7 @@ func TestBuildInitScript_Both(t *testing.T) {
 
 func TestBuildInitScript_DirsOnly(t *testing.T) {
 	instance := newTestInstance("init-dirs-only")
-	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+	instance.Spec.Workspace = &openclawv1.WorkspaceSpec{
 		InitialDirectories: []string{"memory", "tools/scripts"},
 	}
 
@@ -3578,7 +3578,7 @@ func TestBuildInitScript_DirsOnly(t *testing.T) {
 
 func TestBuildInitScript_ShellQuotesSpecialChars(t *testing.T) {
 	instance := newTestInstance("init-special")
-	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+	instance.Spec.Workspace = &openclawv1.WorkspaceSpec{
 		InitialFiles: map[string]string{
 			"it's a file.md": "content",
 		},
@@ -3595,7 +3595,7 @@ func TestBuildInitScript_FilesOnly_MkdirWorkspace(t *testing.T) {
 	// Regression test: files without directories must still mkdir /data/workspace
 	// so that cp doesn't fail on first run with emptyDir.
 	instance := newTestInstance("init-files-only")
-	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+	instance.Spec.Workspace = &openclawv1.WorkspaceSpec{
 		InitialFiles: map[string]string{
 			"README.md": "hello",
 		},
@@ -3623,14 +3623,14 @@ func TestBuildInitScript_VanillaDeployment(t *testing.T) {
 
 func TestConfigHash_ChangesWithWorkspace(t *testing.T) {
 	instance := newTestInstance("hash-ws")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
 	}
 
 	dep1 := BuildStatefulSet(instance)
 	hash1 := dep1.Spec.Template.Annotations["openclaw.rocks/config-hash"]
 
-	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+	instance.Spec.Workspace = &openclawv1.WorkspaceSpec{
 		InitialFiles: map[string]string{"SOUL.md": "hello"},
 	}
 
@@ -3644,7 +3644,7 @@ func TestConfigHash_ChangesWithWorkspace(t *testing.T) {
 
 func TestConfigHash_ChangesWithFileContent(t *testing.T) {
 	instance := newTestInstance("hash-content")
-	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+	instance.Spec.Workspace = &openclawv1.WorkspaceSpec{
 		InitialFiles: map[string]string{"SOUL.md": "v1"},
 	}
 
@@ -3667,10 +3667,10 @@ func TestConfigHash_ChangesWithFileContent(t *testing.T) {
 
 func TestBuildStatefulSet_WorkspaceVolume(t *testing.T) {
 	instance := newTestInstance("ws-vol")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
 	}
-	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+	instance.Spec.Workspace = &openclawv1.WorkspaceSpec{
 		InitialFiles: map[string]string{"SOUL.md": "hello"},
 	}
 
@@ -3695,7 +3695,7 @@ func TestBuildStatefulSet_WorkspaceVolume(t *testing.T) {
 
 func TestBuildStatefulSet_NoWorkspaceVolume(t *testing.T) {
 	instance := newTestInstance("no-ws-vol")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
 	}
 
@@ -3710,10 +3710,10 @@ func TestBuildStatefulSet_NoWorkspaceVolume(t *testing.T) {
 
 func TestBuildStatefulSet_WorkspaceDirsOnly_NoVolume(t *testing.T) {
 	instance := newTestInstance("ws-dirs-no-vol")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
 	}
-	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+	instance.Spec.Workspace = &openclawv1.WorkspaceSpec{
 		InitialDirectories: []string{"memory"},
 	}
 
@@ -3733,10 +3733,10 @@ func TestBuildStatefulSet_WorkspaceDirsOnly_NoVolume(t *testing.T) {
 
 func TestBuildStatefulSet_Idempotent_WithWorkspace(t *testing.T) {
 	instance := newTestInstance("idempotent-ws")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{"key":"val"}`)},
 	}
-	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+	instance.Spec.Workspace = &openclawv1.WorkspaceSpec{
 		InitialFiles:       map[string]string{"SOUL.md": "hello", "AGENTS.md": "agents"},
 		InitialDirectories: []string{"memory", "tools"},
 	}
@@ -3769,7 +3769,7 @@ func TestBuildStatefulSet_ReadOnlyRootFilesystem_Default(t *testing.T) {
 
 func TestBuildStatefulSet_ReadOnlyRootFilesystem_ExplicitFalse(t *testing.T) {
 	instance := newTestInstance("rorfs-false")
-	instance.Spec.Security.ContainerSecurityContext = &openclawv1alpha1.ContainerSecurityContextSpec{
+	instance.Spec.Security.ContainerSecurityContext = &openclawv1.ContainerSecurityContextSpec{
 		ReadOnlyRootFilesystem: Ptr(false),
 	}
 
@@ -3805,7 +3805,7 @@ func TestBuildStatefulSet_TmpVolumeAndMount(t *testing.T) {
 
 func TestBuildInitScript_OverwriteMode(t *testing.T) {
 	instance := newTestInstance("init-overwrite")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
 	}
 	instance.Spec.Config.MergeMode = "overwrite"
@@ -3821,7 +3821,7 @@ func TestBuildInitScript_OverwriteMode(t *testing.T) {
 
 func TestBuildInitScript_MergeMode(t *testing.T) {
 	instance := newTestInstance("init-merge")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
 	}
 	instance.Spec.Config.MergeMode = ConfigMergeModeMerge
@@ -3853,7 +3853,7 @@ func TestBuildInitScript_MergeMode(t *testing.T) {
 
 func TestBuildStatefulSet_MergeMode_OpenClawImage(t *testing.T) {
 	instance := newTestInstance("merge-oci")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
 	}
 	instance.Spec.Config.MergeMode = ConfigMergeModeMerge
@@ -3898,7 +3898,7 @@ func TestBuildStatefulSet_MergeMode_OpenClawImage(t *testing.T) {
 
 func TestBuildStatefulSet_OverwriteMode_BusyboxImage(t *testing.T) {
 	instance := newTestInstance("overwrite-bb")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
 	}
 	instance.Spec.Config.MergeMode = "overwrite"
@@ -3917,7 +3917,7 @@ func TestBuildStatefulSet_OverwriteMode_BusyboxImage(t *testing.T) {
 
 func TestBuildStatefulSet_MergeMode_InitTmpVolume(t *testing.T) {
 	instance := newTestInstance("merge-vol")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
 	}
 	instance.Spec.Config.MergeMode = ConfigMergeModeMerge
@@ -3934,7 +3934,7 @@ func TestBuildStatefulSet_MergeMode_InitTmpVolume(t *testing.T) {
 
 func TestBuildStatefulSet_OverwriteMode_NoInitTmpVolume(t *testing.T) {
 	instance := newTestInstance("overwrite-vol")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
 	}
 	instance.Spec.Config.MergeMode = "overwrite"
@@ -4328,7 +4328,7 @@ func TestEnrichConfigWithGatewayAuth_InvalidJSON(t *testing.T) {
 
 func TestBuildConfigMap_WithGatewayToken(t *testing.T) {
 	instance := newTestInstance("gw-test")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{
 			Raw: []byte(`{"channels":{"slack":{"enabled":true}}}`),
 		},
@@ -4388,7 +4388,7 @@ func TestBuildConfigMap_WithGatewayToken_NoRawConfig(t *testing.T) {
 
 func TestBuildConfigMap_EmptyGatewayToken(t *testing.T) {
 	instance := newTestInstance("gw-empty")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{
 			Raw: []byte(`{"key":"value"}`),
 		},
@@ -4583,7 +4583,7 @@ func TestBuildStatefulSet_FSGroupChangePolicy_Default(t *testing.T) {
 func TestBuildStatefulSet_FSGroupChangePolicy_OnRootMismatch(t *testing.T) {
 	instance := newTestInstance("fsgcp-onroot")
 	policy := corev1.FSGroupChangeOnRootMismatch
-	instance.Spec.Security.PodSecurityContext = &openclawv1alpha1.PodSecurityContextSpec{
+	instance.Spec.Security.PodSecurityContext = &openclawv1.PodSecurityContextSpec{
 		FSGroupChangePolicy: &policy,
 	}
 
@@ -4600,7 +4600,7 @@ func TestBuildStatefulSet_FSGroupChangePolicy_OnRootMismatch(t *testing.T) {
 func TestBuildStatefulSet_FSGroupChangePolicy_Always(t *testing.T) {
 	instance := newTestInstance("fsgcp-always")
 	policy := corev1.FSGroupChangeAlways
-	instance.Spec.Security.PodSecurityContext = &openclawv1alpha1.PodSecurityContextSpec{
+	instance.Spec.Security.PodSecurityContext = &openclawv1.PodSecurityContextSpec{
 		FSGroupChangePolicy: &policy,
 	}
 
@@ -4742,7 +4742,7 @@ func TestBuildStatefulSet_CABundle_Nil(t *testing.T) {
 
 func TestBuildStatefulSet_CABundle_ConfigMap(t *testing.T) {
 	instance := newTestInstance("ca-cm")
-	instance.Spec.Security.CABundle = &openclawv1alpha1.CABundleSpec{
+	instance.Spec.Security.CABundle = &openclawv1.CABundleSpec{
 		ConfigMapName: "my-ca-bundle",
 		Key:           "custom-ca.crt",
 	}
@@ -4781,7 +4781,7 @@ func TestBuildStatefulSet_CABundle_ConfigMap(t *testing.T) {
 
 func TestBuildStatefulSet_CABundle_Secret(t *testing.T) {
 	instance := newTestInstance("ca-secret")
-	instance.Spec.Security.CABundle = &openclawv1alpha1.CABundleSpec{
+	instance.Spec.Security.CABundle = &openclawv1.CABundleSpec{
 		SecretName: "ca-secret",
 	}
 
@@ -4801,7 +4801,7 @@ func TestBuildStatefulSet_CABundle_Secret(t *testing.T) {
 
 func TestBuildStatefulSet_CABundle_DefaultKey(t *testing.T) {
 	instance := newTestInstance("ca-default-key")
-	instance.Spec.Security.CABundle = &openclawv1alpha1.CABundleSpec{
+	instance.Spec.Security.CABundle = &openclawv1.CABundleSpec{
 		ConfigMapName: "my-ca",
 		// Key not set — should default to "ca-bundle.crt"
 	}
@@ -4824,7 +4824,7 @@ func TestBuildStatefulSet_CABundle_DefaultKey(t *testing.T) {
 func TestBuildStatefulSet_CABundle_WithChromium(t *testing.T) {
 	instance := newTestInstance("ca-chromium")
 	instance.Spec.Chromium.Enabled = true
-	instance.Spec.Security.CABundle = &openclawv1alpha1.CABundleSpec{
+	instance.Spec.Security.CABundle = &openclawv1.CABundleSpec{
 		ConfigMapName: "my-ca",
 		Key:           "ca.crt",
 	}
@@ -4861,7 +4861,7 @@ func TestBuildStatefulSet_CABundle_WithChromium(t *testing.T) {
 func TestBuildStatefulSet_CABundle_InitSkills(t *testing.T) {
 	instance := newTestInstance("ca-skills")
 	instance.Spec.Skills = []string{"some-skill"}
-	instance.Spec.Security.CABundle = &openclawv1alpha1.CABundleSpec{
+	instance.Spec.Security.CABundle = &openclawv1.CABundleSpec{
 		ConfigMapName: "my-ca",
 		Key:           "ca.crt",
 	}
@@ -4937,7 +4937,7 @@ func TestBuildStatefulSet_CustomInitContainers(t *testing.T) {
 
 func TestBuildStatefulSet_CustomInitContainers_AfterOperatorManaged(t *testing.T) {
 	instance := newTestInstance("custom-init-order")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
 	}
 	instance.Spec.Skills = []string{"some-skill"}
@@ -4986,7 +4986,7 @@ func TestConfigHash_ChangesWithInitContainers(t *testing.T) {
 
 func TestBuildInitScript_JSON5_Overwrite(t *testing.T) {
 	instance := newTestInstance("json5-overwrite")
-	instance.Spec.Config.ConfigMapRef = &openclawv1alpha1.ConfigMapKeySelector{
+	instance.Spec.Config.ConfigMapRef = &openclawv1.ConfigMapKeySelector{
 		Name: "my-config",
 		Key:  "config.json5",
 	}
@@ -5003,7 +5003,7 @@ func TestBuildInitScript_JSON5_Overwrite(t *testing.T) {
 
 func TestBuildStatefulSet_JSON5_UsesOpenClawImage(t *testing.T) {
 	instance := newTestInstance("json5-image")
-	instance.Spec.Config.ConfigMapRef = &openclawv1alpha1.ConfigMapKeySelector{
+	instance.Spec.Config.ConfigMapRef = &openclawv1.ConfigMapKeySelector{
 		Name: "my-config",
 		Key:  "config.json5",
 	}
@@ -5024,7 +5024,7 @@ func TestBuildStatefulSet_JSON5_UsesOpenClawImage(t *testing.T) {
 
 func TestBuildStatefulSet_JSON5_InitTmpVolume(t *testing.T) {
 	instance := newTestInstance("json5-vol")
-	instance.Spec.Config.ConfigMapRef = &openclawv1alpha1.ConfigMapKeySelector{
+	instance.Spec.Config.ConfigMapRef = &openclawv1.ConfigMapKeySelector{
 		Name: "my-config",
 	}
 	instance.Spec.Config.Format = ConfigFormatJSON5
@@ -5044,7 +5044,7 @@ func TestBuildStatefulSet_JSON5_InitTmpVolume(t *testing.T) {
 
 func TestBuildStatefulSet_JSON5_WritableRootFS(t *testing.T) {
 	instance := newTestInstance("json5-writable")
-	instance.Spec.Config.ConfigMapRef = &openclawv1alpha1.ConfigMapKeySelector{
+	instance.Spec.Config.ConfigMapRef = &openclawv1.ConfigMapKeySelector{
 		Name: "my-config",
 	}
 	instance.Spec.Config.Format = ConfigFormatJSON5
@@ -5059,7 +5059,7 @@ func TestBuildStatefulSet_JSON5_WritableRootFS(t *testing.T) {
 
 func TestBuildInitScript_JSON_Overwrite_NoBusyboxRegression(t *testing.T) {
 	instance := newTestInstance("json-overwrite")
-	instance.Spec.Config.ConfigMapRef = &openclawv1alpha1.ConfigMapKeySelector{
+	instance.Spec.Config.ConfigMapRef = &openclawv1.ConfigMapKeySelector{
 		Name: "my-config",
 	}
 	instance.Spec.Config.Format = "json"
@@ -5289,7 +5289,7 @@ func TestBuildStatefulSet_RuntimeDeps_None(t *testing.T) {
 
 func TestBuildStatefulSet_RuntimeDeps_InitContainerOrder(t *testing.T) {
 	instance := newTestInstance("order")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
 	}
 	instance.Spec.RuntimeDeps.Pnpm = true
@@ -5323,7 +5323,7 @@ func TestBuildStatefulSet_RuntimeDeps_InitContainerOrder(t *testing.T) {
 func TestBuildStatefulSet_RuntimeDeps_Pnpm_CABundle(t *testing.T) {
 	instance := newTestInstance("pnpm-ca")
 	instance.Spec.RuntimeDeps.Pnpm = true
-	instance.Spec.Security.CABundle = &openclawv1alpha1.CABundleSpec{
+	instance.Spec.Security.CABundle = &openclawv1.CABundleSpec{
 		ConfigMapName: "my-ca",
 		Key:           "ca.crt",
 	}
@@ -5498,7 +5498,7 @@ func TestBuildConfigMap_TailscaleUserConfig_Preserved(t *testing.T) {
 	instance := newTestInstance("ts-override")
 	instance.Spec.Tailscale.Enabled = true
 	instance.Spec.Tailscale.Mode = "serve"
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{
 			Raw: []byte(`{"gateway":{"tailscale":{"mode":"funnel","resetOnExit":false}}}`),
 		},
@@ -5947,7 +5947,7 @@ func TestBuildNetworkPolicy_TailscaleDisabled(t *testing.T) {
 
 func TestBuildStatefulSet_Idempotent_WithTailscale(t *testing.T) {
 	instance := newTestInstance("idempotent-ts")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{"key":"val"}`)},
 	}
 	instance.Spec.Tailscale.Enabled = true
@@ -6108,7 +6108,7 @@ func TestBuildConfigMap_TailscaleLoopback_UserOverridePreserved(t *testing.T) {
 	instance := newTestInstance("ts-user-override")
 	instance.Spec.Tailscale.Enabled = true
 	instance.Spec.Tailscale.Mode = "serve"
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{
 			Raw: []byte(`{"gateway":{"bind":"0.0.0.0"}}`),
 		},
@@ -6282,7 +6282,7 @@ func TestBuildConfigMap_ChromiumDisabled_NoBrowserConfig(t *testing.T) {
 func TestBuildConfigMap_ChromiumUserOverrideDefaultProfile(t *testing.T) {
 	instance := newTestInstance("cr-override-profile")
 	instance.Spec.Chromium.Enabled = true
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{
 			Raw: []byte(`{"browser":{"defaultProfile":"chrome"}}`),
 		},
@@ -6305,7 +6305,7 @@ func TestBuildConfigMap_ChromiumUserOverrideDefaultProfile(t *testing.T) {
 func TestBuildConfigMap_ChromiumUserOverrideCdpUrl(t *testing.T) {
 	instance := newTestInstance("cr-override-cdp")
 	instance.Spec.Chromium.Enabled = true
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{
 			Raw: []byte(`{"browser":{"profiles":{"default":{"cdpUrl":"ws://custom:1234"}}}}`),
 		},
@@ -6331,7 +6331,7 @@ func TestBuildConfigMap_ChromiumUserOverrideCdpUrl(t *testing.T) {
 func TestBuildConfigMap_ChromiumUserOverrideCdpPort(t *testing.T) {
 	instance := newTestInstance("cr-override-port")
 	instance.Spec.Chromium.Enabled = true
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{
 			Raw: []byte(`{"browser":{"profiles":{"default":{"cdpPort":18800}}}}`),
 		},
@@ -6612,7 +6612,7 @@ func TestBuildStatefulSet_OllamaEnabled_ExistingClaim(t *testing.T) {
 func TestBuildStatefulSet_OllamaEnabled_CustomImage(t *testing.T) {
 	instance := newTestInstance("ollama-custom-img")
 	instance.Spec.Ollama.Enabled = true
-	instance.Spec.Ollama.Image = openclawv1alpha1.OllamaImageSpec{
+	instance.Spec.Ollama.Image = openclawv1.OllamaImageSpec{
 		Repository: "my-registry.io/ollama",
 		Tag:        "v0.3.0",
 	}
@@ -6637,7 +6637,7 @@ func TestBuildStatefulSet_OllamaEnabled_CustomImage(t *testing.T) {
 func TestBuildStatefulSet_OllamaEnabled_CustomImageDigest(t *testing.T) {
 	instance := newTestInstance("ollama-digest")
 	instance.Spec.Ollama.Enabled = true
-	instance.Spec.Ollama.Image = openclawv1alpha1.OllamaImageSpec{
+	instance.Spec.Ollama.Image = openclawv1.OllamaImageSpec{
 		Repository: "ollama/ollama",
 		Tag:        "v0.3.0",
 		Digest:     "sha256:ollamahash",
@@ -6663,12 +6663,12 @@ func TestBuildStatefulSet_OllamaEnabled_CustomImageDigest(t *testing.T) {
 func TestBuildStatefulSet_OllamaEnabled_CustomResources(t *testing.T) {
 	instance := newTestInstance("ollama-res")
 	instance.Spec.Ollama.Enabled = true
-	instance.Spec.Ollama.Resources = openclawv1alpha1.ResourcesSpec{
-		Requests: openclawv1alpha1.ResourceList{
+	instance.Spec.Ollama.Resources = openclawv1.ResourcesSpec{
+		Requests: openclawv1.ResourceList{
 			CPU:    "1",
 			Memory: "4Gi",
 		},
-		Limits: openclawv1alpha1.ResourceList{
+		Limits: openclawv1.ResourceList{
 			CPU:    "4",
 			Memory: "16Gi",
 		},
@@ -6866,7 +6866,7 @@ func TestBuildStatefulSet_OllamaEnabled_InitContainerUsesCustomImage(t *testing.
 	instance := newTestInstance("ollama-init-img")
 	instance.Spec.Ollama.Enabled = true
 	instance.Spec.Ollama.Models = []string{"llama3.2"}
-	instance.Spec.Ollama.Image = openclawv1alpha1.OllamaImageSpec{
+	instance.Spec.Ollama.Image = openclawv1.OllamaImageSpec{
 		Repository: "my-registry.io/ollama",
 		Tag:        "v0.3.0",
 	}
@@ -6902,7 +6902,7 @@ func TestPrometheusRuleName(t *testing.T) {
 
 func TestBuildPrometheusRule(t *testing.T) {
 	instance := newTestInstance("my-instance")
-	instance.Spec.Observability.Metrics.PrometheusRule = &openclawv1alpha1.PrometheusRuleSpec{
+	instance.Spec.Observability.Metrics.PrometheusRule = &openclawv1.PrometheusRuleSpec{
 		Enabled: Ptr(true),
 	}
 
@@ -6977,9 +6977,9 @@ func TestBuildPrometheusRule(t *testing.T) {
 
 func TestBuildRole_SelfConfigureEnabled(t *testing.T) {
 	instance := newTestInstance("sc-role")
-	instance.Spec.SelfConfigure = openclawv1alpha1.SelfConfigureSpec{
+	instance.Spec.SelfConfigure = openclawv1.SelfConfigureSpec{
 		Enabled:        true,
-		AllowedActions: []openclawv1alpha1.SelfConfigAction{"skills", "config"},
+		AllowedActions: []openclawv1.SelfConfigAction{"skills", "config"},
 	}
 
 	role := BuildRole(instance)
@@ -7084,9 +7084,9 @@ func TestBuildRole_SelfConfigureDisabled(t *testing.T) {
 
 func TestBuildRole_SelfConfigureWithEnvFromSecrets(t *testing.T) {
 	instance := newTestInstance("sc-envfrom")
-	instance.Spec.SelfConfigure = openclawv1alpha1.SelfConfigureSpec{
+	instance.Spec.SelfConfigure = openclawv1.SelfConfigureSpec{
 		Enabled:        true,
-		AllowedActions: []openclawv1alpha1.SelfConfigAction{"skills"},
+		AllowedActions: []openclawv1.SelfConfigAction{"skills"},
 	}
 	instance.Spec.EnvFrom = []corev1.EnvFromSource{
 		{
@@ -7120,7 +7120,7 @@ func TestBuildRole_SelfConfigureWithEnvFromSecrets(t *testing.T) {
 
 func TestBuildServiceAccount_SelfConfigureTokenMount(t *testing.T) {
 	instance := newTestInstance("sc-sa-token")
-	instance.Spec.SelfConfigure = openclawv1alpha1.SelfConfigureSpec{
+	instance.Spec.SelfConfigure = openclawv1.SelfConfigureSpec{
 		Enabled: true,
 	}
 
@@ -7143,7 +7143,7 @@ func TestBuildServiceAccount_SelfConfigureDisabledTokenMount(t *testing.T) {
 
 func TestBuildStatefulSet_SelfConfigureEnvVars(t *testing.T) {
 	instance := newTestInstance("sc-env")
-	instance.Spec.SelfConfigure = openclawv1alpha1.SelfConfigureSpec{
+	instance.Spec.SelfConfigure = openclawv1.SelfConfigureSpec{
 		Enabled: true,
 	}
 
@@ -7178,7 +7178,7 @@ func TestBuildStatefulSet_SelfConfigureDisabledNoEnvVars(t *testing.T) {
 
 func TestBuildStatefulSet_SelfConfigureAutoMount(t *testing.T) {
 	instance := newTestInstance("sc-automount")
-	instance.Spec.SelfConfigure = openclawv1alpha1.SelfConfigureSpec{
+	instance.Spec.SelfConfigure = openclawv1.SelfConfigureSpec{
 		Enabled: true,
 	}
 
@@ -7192,7 +7192,7 @@ func TestBuildStatefulSet_SelfConfigureAutoMount(t *testing.T) {
 
 func TestBuildNetworkPolicy_SelfConfigureEgress(t *testing.T) {
 	instance := newTestInstance("sc-netpol")
-	instance.Spec.SelfConfigure = openclawv1alpha1.SelfConfigureSpec{
+	instance.Spec.SelfConfigure = openclawv1.SelfConfigureSpec{
 		Enabled: true,
 	}
 
@@ -7228,7 +7228,7 @@ func TestBuildNetworkPolicy_SelfConfigureDisabledNo6443(t *testing.T) {
 
 func TestBuildWorkspaceConfigMap_SelfConfigureSkillInjected(t *testing.T) {
 	instance := newTestInstance("sc-ws")
-	instance.Spec.SelfConfigure = openclawv1alpha1.SelfConfigureSpec{
+	instance.Spec.SelfConfigure = openclawv1.SelfConfigureSpec{
 		Enabled: true,
 	}
 
@@ -7248,10 +7248,10 @@ func TestBuildWorkspaceConfigMap_SelfConfigureSkillInjected(t *testing.T) {
 
 func TestBuildWorkspaceConfigMap_SelfConfigureMergedWithUserFiles(t *testing.T) {
 	instance := newTestInstance("sc-ws-merge")
-	instance.Spec.SelfConfigure = openclawv1alpha1.SelfConfigureSpec{
+	instance.Spec.SelfConfigure = openclawv1.SelfConfigureSpec{
 		Enabled: true,
 	}
-	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+	instance.Spec.Workspace = &openclawv1.WorkspaceSpec{
 		InitialFiles: map[string]string{
 			"README.md": "# My Project",
 			"notes.txt": "some notes",
@@ -7293,7 +7293,7 @@ func TestBuildWorkspaceConfigMap_SelfConfigureDisabledNoFiles(t *testing.T) {
 
 func TestHasWorkspaceFiles_SelfConfigureEnabled(t *testing.T) {
 	instance := newTestInstance("sc-hasws")
-	instance.Spec.SelfConfigure = openclawv1alpha1.SelfConfigureSpec{
+	instance.Spec.SelfConfigure = openclawv1.SelfConfigureSpec{
 		Enabled: true,
 	}
 
@@ -7304,7 +7304,7 @@ func TestHasWorkspaceFiles_SelfConfigureEnabled(t *testing.T) {
 
 func TestBuildStatefulSet_SelfConfigureWorkspaceVolume(t *testing.T) {
 	instance := newTestInstance("sc-ws-vol")
-	instance.Spec.SelfConfigure = openclawv1alpha1.SelfConfigureSpec{
+	instance.Spec.SelfConfigure = openclawv1.SelfConfigureSpec{
 		Enabled: true,
 	}
 
@@ -7329,7 +7329,7 @@ func TestBuildStatefulSet_SelfConfigureWorkspaceVolume(t *testing.T) {
 
 func TestBuildPrometheusRule_CustomRunbookURL(t *testing.T) {
 	instance := newTestInstance("my-instance")
-	instance.Spec.Observability.Metrics.PrometheusRule = &openclawv1alpha1.PrometheusRuleSpec{
+	instance.Spec.Observability.Metrics.PrometheusRule = &openclawv1.PrometheusRuleSpec{
 		Enabled:        Ptr(true),
 		RunbookBaseURL: "https://wiki.example.com/runbooks",
 	}
@@ -7351,7 +7351,7 @@ func TestBuildPrometheusRule_CustomRunbookURL(t *testing.T) {
 
 func TestBuildPrometheusRule_CustomLabels(t *testing.T) {
 	instance := newTestInstance("my-instance")
-	instance.Spec.Observability.Metrics.PrometheusRule = &openclawv1alpha1.PrometheusRuleSpec{
+	instance.Spec.Observability.Metrics.PrometheusRule = &openclawv1.PrometheusRuleSpec{
 		Enabled: Ptr(true),
 		Labels: map[string]string{
 			"release": "kube-prometheus-stack",
@@ -7392,7 +7392,7 @@ func TestGrafanaDashboardInstanceName(t *testing.T) {
 
 func TestBuildGrafanaDashboardOperator(t *testing.T) {
 	instance := newTestInstance("my-instance")
-	instance.Spec.Observability.Metrics.GrafanaDashboard = &openclawv1alpha1.GrafanaDashboardSpec{
+	instance.Spec.Observability.Metrics.GrafanaDashboard = &openclawv1.GrafanaDashboardSpec{
 		Enabled: Ptr(true),
 	}
 
@@ -7456,7 +7456,7 @@ func TestBuildGrafanaDashboardOperator(t *testing.T) {
 
 func TestBuildGrafanaDashboardInstance(t *testing.T) {
 	instance := newTestInstance("my-instance")
-	instance.Spec.Observability.Metrics.GrafanaDashboard = &openclawv1alpha1.GrafanaDashboardSpec{
+	instance.Spec.Observability.Metrics.GrafanaDashboard = &openclawv1.GrafanaDashboardSpec{
 		Enabled: Ptr(true),
 	}
 
@@ -7505,7 +7505,7 @@ func TestBuildGrafanaDashboardInstance(t *testing.T) {
 
 func TestBuildGrafanaDashboard_CustomLabelsAndFolder(t *testing.T) {
 	instance := newTestInstance("my-instance")
-	instance.Spec.Observability.Metrics.GrafanaDashboard = &openclawv1alpha1.GrafanaDashboardSpec{
+	instance.Spec.Observability.Metrics.GrafanaDashboard = &openclawv1.GrafanaDashboardSpec{
 		Enabled: Ptr(true),
 		Labels: map[string]string{
 			"custom-label": "custom-value",
@@ -7561,13 +7561,13 @@ func TestHPAName(t *testing.T) {
 func TestIsHPAEnabled(t *testing.T) {
 	tests := []struct {
 		name     string
-		as       *openclawv1alpha1.AutoScalingSpec
+		as       *openclawv1.AutoScalingSpec
 		expected bool
 	}{
 		{"nil spec", nil, false},
-		{"nil enabled", &openclawv1alpha1.AutoScalingSpec{}, false},
-		{"enabled false", &openclawv1alpha1.AutoScalingSpec{Enabled: Ptr(false)}, false},
-		{"enabled true", &openclawv1alpha1.AutoScalingSpec{Enabled: Ptr(true)}, true},
+		{"nil enabled", &openclawv1.AutoScalingSpec{}, false},
+		{"enabled false", &openclawv1.AutoScalingSpec{Enabled: Ptr(false)}, false},
+		{"enabled true", &openclawv1.AutoScalingSpec{Enabled: Ptr(true)}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -7582,7 +7582,7 @@ func TestIsHPAEnabled(t *testing.T) {
 
 func TestBuildHPA_Defaults(t *testing.T) {
 	instance := newTestInstance("my-app")
-	instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+	instance.Spec.Availability.AutoScaling = &openclawv1.AutoScalingSpec{
 		Enabled: Ptr(true),
 	}
 
@@ -7616,7 +7616,7 @@ func TestBuildHPA_Defaults(t *testing.T) {
 
 func TestBuildHPA_CustomValues(t *testing.T) {
 	instance := newTestInstance("my-app")
-	instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+	instance.Spec.Availability.AutoScaling = &openclawv1.AutoScalingSpec{
 		Enabled:              Ptr(true),
 		MinReplicas:          Ptr(int32(2)),
 		MaxReplicas:          Ptr(int32(10)),
@@ -7638,7 +7638,7 @@ func TestBuildHPA_CustomValues(t *testing.T) {
 
 func TestBuildHPA_WithMemoryMetric(t *testing.T) {
 	instance := newTestInstance("my-app")
-	instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+	instance.Spec.Availability.AutoScaling = &openclawv1.AutoScalingSpec{
 		Enabled:                 Ptr(true),
 		TargetMemoryUtilization: Ptr(int32(70)),
 	}
@@ -7659,7 +7659,7 @@ func TestBuildHPA_WithMemoryMetric(t *testing.T) {
 
 func TestStatefulSetReplicas_HPAEnabled(t *testing.T) {
 	instance := newTestInstance("my-app")
-	instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+	instance.Spec.Availability.AutoScaling = &openclawv1.AutoScalingSpec{
 		Enabled: Ptr(true),
 	}
 
@@ -7722,7 +7722,7 @@ func TestMetricsPort_Custom(t *testing.T) {
 
 func TestBuildServiceMonitor_MetricsPort(t *testing.T) {
 	instance := newTestInstance("sm-port")
-	instance.Spec.Observability.Metrics.ServiceMonitor = &openclawv1alpha1.ServiceMonitorSpec{
+	instance.Spec.Observability.Metrics.ServiceMonitor = &openclawv1.ServiceMonitorSpec{
 		Enabled: Ptr(true),
 	}
 
@@ -7959,7 +7959,7 @@ func TestBuildStatefulSet_WebTerminalEnabled(t *testing.T) {
 func TestBuildStatefulSet_WebTerminalCustomImage(t *testing.T) {
 	instance := newTestInstance("wt-custom-img")
 	instance.Spec.WebTerminal.Enabled = true
-	instance.Spec.WebTerminal.Image = openclawv1alpha1.WebTerminalImageSpec{
+	instance.Spec.WebTerminal.Image = openclawv1.WebTerminalImageSpec{
 		Repository: "my-registry.io/ttyd",
 		Tag:        "v1.7.0",
 	}
@@ -7982,7 +7982,7 @@ func TestBuildStatefulSet_WebTerminalCustomImage(t *testing.T) {
 func TestBuildStatefulSet_WebTerminalDigest(t *testing.T) {
 	instance := newTestInstance("wt-digest")
 	instance.Spec.WebTerminal.Enabled = true
-	instance.Spec.WebTerminal.Image = openclawv1alpha1.WebTerminalImageSpec{
+	instance.Spec.WebTerminal.Image = openclawv1.WebTerminalImageSpec{
 		Repository: "tsl0922/ttyd",
 		Digest:     "sha256:abcdef1234567890",
 	}
@@ -8005,9 +8005,9 @@ func TestBuildStatefulSet_WebTerminalDigest(t *testing.T) {
 func TestBuildStatefulSet_WebTerminalCustomResources(t *testing.T) {
 	instance := newTestInstance("wt-resources")
 	instance.Spec.WebTerminal.Enabled = true
-	instance.Spec.WebTerminal.Resources = openclawv1alpha1.ResourcesSpec{
-		Requests: openclawv1alpha1.ResourceList{CPU: "100m", Memory: "128Mi"},
-		Limits:   openclawv1alpha1.ResourceList{CPU: "500m", Memory: "256Mi"},
+	instance.Spec.WebTerminal.Resources = openclawv1.ResourcesSpec{
+		Requests: openclawv1.ResourceList{CPU: "100m", Memory: "128Mi"},
+		Limits:   openclawv1.ResourceList{CPU: "500m", Memory: "256Mi"},
 	}
 
 	sts := BuildStatefulSet(instance)
@@ -8069,7 +8069,7 @@ func TestBuildStatefulSet_WebTerminalReadOnly(t *testing.T) {
 func TestBuildStatefulSet_WebTerminalCredential(t *testing.T) {
 	instance := newTestInstance("wt-cred")
 	instance.Spec.WebTerminal.Enabled = true
-	instance.Spec.WebTerminal.Credential = &openclawv1alpha1.WebTerminalCredentialSpec{
+	instance.Spec.WebTerminal.Credential = &openclawv1.WebTerminalCredentialSpec{
 		SecretRef: corev1.LocalObjectReference{Name: "wt-secret"},
 	}
 
@@ -8252,7 +8252,7 @@ func TestBuildStatefulSet_WebTerminalReadOnlyWithCredential(t *testing.T) {
 	instance := newTestInstance("wt-readonly-cred")
 	instance.Spec.WebTerminal.Enabled = true
 	instance.Spec.WebTerminal.ReadOnly = true
-	instance.Spec.WebTerminal.Credential = &openclawv1alpha1.WebTerminalCredentialSpec{
+	instance.Spec.WebTerminal.Credential = &openclawv1.WebTerminalCredentialSpec{
 		SecretRef: corev1.LocalObjectReference{Name: "cred-secret"},
 	}
 
@@ -8474,7 +8474,7 @@ func TestHtpasswdEntry_Format(t *testing.T) {
 
 func TestBuildBasicAuthSecret(t *testing.T) {
 	instance := newTestInstance("ba-test")
-	instance.Spec.Networking.Ingress.Security.BasicAuth = &openclawv1alpha1.IngressBasicAuthSpec{
+	instance.Spec.Networking.Ingress.Security.BasicAuth = &openclawv1.IngressBasicAuthSpec{
 		Username: "testuser",
 	}
 	secret := BuildBasicAuthSecret(instance, "mypassword")
@@ -8495,14 +8495,14 @@ func TestBuildIngress_BasicAuth_Nginx(t *testing.T) {
 	enabled := true
 	nginxClass := "nginx"
 	instance := newTestInstance("ba-nginx")
-	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+	instance.Spec.Networking.Ingress = openclawv1.IngressSpec{
 		Enabled:   true,
 		ClassName: &nginxClass,
-		Hosts:     []openclawv1alpha1.IngressHost{{Host: "test.example.com"}},
-		Security: openclawv1alpha1.IngressSecuritySpec{
+		Hosts:     []openclawv1.IngressHost{{Host: "test.example.com"}},
+		Security: openclawv1.IngressSecuritySpec{
 			ForceHTTPS: &enabled,
 			EnableHSTS: Ptr(false),
-			BasicAuth: &openclawv1alpha1.IngressBasicAuthSpec{
+			BasicAuth: &openclawv1.IngressBasicAuthSpec{
 				Enabled:  &enabled,
 				Username: "admin",
 				Realm:    "My Realm",
@@ -8528,12 +8528,12 @@ func TestBuildIngress_BasicAuth_ExistingSecret(t *testing.T) {
 	enabled := true
 	nginxClass := "nginx"
 	instance := newTestInstance("ba-existing")
-	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+	instance.Spec.Networking.Ingress = openclawv1.IngressSpec{
 		Enabled:   true,
 		ClassName: &nginxClass,
-		Hosts:     []openclawv1alpha1.IngressHost{{Host: "test.example.com"}},
-		Security: openclawv1alpha1.IngressSecuritySpec{
-			BasicAuth: &openclawv1alpha1.IngressBasicAuthSpec{
+		Hosts:     []openclawv1.IngressHost{{Host: "test.example.com"}},
+		Security: openclawv1.IngressSecuritySpec{
+			BasicAuth: &openclawv1.IngressBasicAuthSpec{
 				Enabled:        &enabled,
 				ExistingSecret: "my-custom-auth",
 			},
@@ -8553,12 +8553,12 @@ func TestBuildIngress_BasicAuth_Traefik(t *testing.T) {
 	traefikClass := "traefik"
 	instance := newTestInstance("ba-traefik")
 	instance.Namespace = "myns"
-	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+	instance.Spec.Networking.Ingress = openclawv1.IngressSpec{
 		Enabled:   true,
 		ClassName: &traefikClass,
-		Hosts:     []openclawv1alpha1.IngressHost{{Host: "test.example.com"}},
-		Security: openclawv1alpha1.IngressSecuritySpec{
-			BasicAuth: &openclawv1alpha1.IngressBasicAuthSpec{
+		Hosts:     []openclawv1.IngressHost{{Host: "test.example.com"}},
+		Security: openclawv1.IngressSecuritySpec{
+			BasicAuth: &openclawv1.IngressBasicAuthSpec{
 				Enabled: &enabled,
 			},
 		},
@@ -8596,7 +8596,7 @@ func TestBuildService_Idempotent(t *testing.T) {
 
 func TestBuildConfigMap_Idempotent(t *testing.T) {
 	instance := newTestInstance("idem-cm")
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+	instance.Spec.Config.Raw = &openclawv1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{"key":"val"}`)},
 	}
 	c1 := BuildConfigMap(instance, "token123")
@@ -8622,7 +8622,7 @@ func TestBuildNetworkPolicy_Idempotent(t *testing.T) {
 func TestBuildIngress_Idempotent(t *testing.T) {
 	instance := newTestInstance("idem-ing")
 	instance.Spec.Networking.Ingress.Enabled = true
-	instance.Spec.Networking.Ingress.Hosts = []openclawv1alpha1.IngressHost{
+	instance.Spec.Networking.Ingress.Hosts = []openclawv1.IngressHost{
 		{Host: "test.example.com"},
 	}
 	i1 := BuildIngress(instance)
@@ -8647,7 +8647,7 @@ func TestBuildPDB_Idempotent(t *testing.T) {
 
 func TestBuildHPA_Idempotent(t *testing.T) {
 	instance := newTestInstance("idem-hpa")
-	instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+	instance.Spec.Availability.AutoScaling = &openclawv1.AutoScalingSpec{
 		Enabled:              Ptr(true),
 		MinReplicas:          Ptr(int32(1)),
 		MaxReplicas:          Ptr(int32(5)),
@@ -8675,7 +8675,7 @@ func TestBuildPVC_Idempotent(t *testing.T) {
 
 func TestBuildWorkspaceConfigMap_Idempotent(t *testing.T) {
 	instance := newTestInstance("idem-ws")
-	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+	instance.Spec.Workspace = &openclawv1.WorkspaceSpec{
 		InitialFiles: map[string]string{
 			"SOUL.md": "# Personality\nBe helpful.",
 		},

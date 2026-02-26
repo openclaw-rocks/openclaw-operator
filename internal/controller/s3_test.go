@@ -24,13 +24,13 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 )
 
 var _ = Describe("S3 Helpers", func() {
 	Context("getTenantID", func() {
 		It("Should return the tenant label value when present", func() {
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test",
 					Namespace: "oc-tenant-cus_123",
@@ -43,7 +43,7 @@ var _ = Describe("S3 Helpers", func() {
 		})
 
 		It("Should extract tenant from namespace when label is missing", func() {
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test",
 					Namespace: "oc-tenant-cus_789",
@@ -53,7 +53,7 @@ var _ = Describe("S3 Helpers", func() {
 		})
 
 		It("Should return namespace as-is when not in oc-tenant format", func() {
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test",
 					Namespace: "default",
@@ -76,7 +76,7 @@ var _ = Describe("S3 Helpers", func() {
 		})
 
 		It("Should build a backup Job with correct args and SecurityContext", func() {
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "myinst",
 					Namespace: "oc-tenant-t1",
@@ -115,7 +115,7 @@ var _ = Describe("S3 Helpers", func() {
 		})
 
 		It("Should build a restore Job with S3 as source", func() {
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "myinst",
 					Namespace: "oc-tenant-t1",
@@ -180,7 +180,7 @@ var _ = Describe("S3 Helpers", func() {
 
 	Context("backupLabels", func() {
 		It("Should include tenant, instance, and job-type labels", func() {
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "myinst",
 					Namespace: "oc-tenant-cus_123",

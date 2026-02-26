@@ -30,13 +30,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 )
 
 // BuildStatefulSet creates a StatefulSet for the OpenClawInstance.
 // If gatewayTokenSecretName is non-empty and the user hasn't already set
 // OPENCLAW_GATEWAY_TOKEN in spec.env, the env var is injected via SecretKeyRef.
-func BuildStatefulSet(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecretName ...string) *appsv1.StatefulSet {
+func BuildStatefulSet(instance *openclawv1.OpenClawInstance, gatewayTokenSecretName ...string) *appsv1.StatefulSet {
 	labels := Labels(instance)
 	selectorLabels := SelectorLabels(instance)
 
@@ -107,7 +107,7 @@ func BuildStatefulSet(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenS
 }
 
 // buildPodSecurityContext creates the pod-level security context
-func buildPodSecurityContext(instance *openclawv1alpha1.OpenClawInstance) *corev1.PodSecurityContext {
+func buildPodSecurityContext(instance *openclawv1.OpenClawInstance) *corev1.PodSecurityContext {
 	psc := &corev1.PodSecurityContext{
 		RunAsNonRoot: Ptr(true),
 		SeccompProfile: &corev1.SeccompProfile{
@@ -149,7 +149,7 @@ func buildPodSecurityContext(instance *openclawv1alpha1.OpenClawInstance) *corev
 }
 
 // buildContainerSecurityContext creates the container-level security context
-func buildContainerSecurityContext(instance *openclawv1alpha1.OpenClawInstance) *corev1.SecurityContext {
+func buildContainerSecurityContext(instance *openclawv1.OpenClawInstance) *corev1.SecurityContext {
 	sc := &corev1.SecurityContext{
 		AllowPrivilegeEscalation: Ptr(false),
 		ReadOnlyRootFilesystem:   Ptr(true), // PVC at ~/.openclaw/ + /tmp emptyDir provide writable paths
@@ -180,7 +180,7 @@ func buildContainerSecurityContext(instance *openclawv1alpha1.OpenClawInstance) 
 }
 
 // buildContainers creates the container specs
-func buildContainers(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecretName string) []corev1.Container {
+func buildContainers(instance *openclawv1.OpenClawInstance, gatewayTokenSecretName string) []corev1.Container {
 	containers := []corev1.Container{
 		buildMainContainer(instance, gatewayTokenSecretName),
 		buildGatewayProxyContainer(instance),
@@ -214,7 +214,7 @@ func buildContainers(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSe
 
 // buildMainContainerPorts returns the container ports for the main container.
 // Always includes gateway and canvas; conditionally adds metrics when enabled.
-func buildMainContainerPorts(instance *openclawv1alpha1.OpenClawInstance) []corev1.ContainerPort {
+func buildMainContainerPorts(instance *openclawv1.OpenClawInstance) []corev1.ContainerPort {
 	ports := []corev1.ContainerPort{
 		{
 			Name:          "gateway",
@@ -240,7 +240,7 @@ func buildMainContainerPorts(instance *openclawv1alpha1.OpenClawInstance) []core
 }
 
 // buildMainContainer creates the main OpenClaw container
-func buildMainContainer(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecretName string) corev1.Container {
+func buildMainContainer(instance *openclawv1.OpenClawInstance, gatewayTokenSecretName string) corev1.Container {
 	container := corev1.Container{
 		Name:                     "openclaw",
 		Image:                    GetImage(instance),
@@ -333,7 +333,7 @@ func buildMainContainer(instance *openclawv1alpha1.OpenClawInstance, gatewayToke
 }
 
 // buildMainEnv creates the environment variables for the main container
-func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecretName string) []corev1.EnvVar {
+func buildMainEnv(instance *openclawv1.OpenClawInstance, gatewayTokenSecretName string) []corev1.EnvVar {
 	env := []corev1.EnvVar{
 		{Name: "HOME", Value: "/home/openclaw"},
 		// mDNS/Bonjour pairing is unusable in Kubernetes — always disable it
@@ -420,7 +420,7 @@ func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecre
 }
 
 // hasUserEnv checks whether the user has defined a specific env var in spec.env.
-func hasUserEnv(instance *openclawv1alpha1.OpenClawInstance, name string) bool {
+func hasUserEnv(instance *openclawv1.OpenClawInstance, name string) bool {
 	for _, e := range instance.Spec.Env {
 		if e.Name == name {
 			return true
@@ -433,7 +433,7 @@ func hasUserEnv(instance *openclawv1alpha1.OpenClawInstance, name string) bool {
 // files into the data volume. Config is always overwritten (operator-managed),
 // while workspace files use seed-once semantics (only copied if not present).
 // Skills are installed via a separate init container using the OpenClaw image.
-func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance) []corev1.Container {
+func buildInitContainers(instance *openclawv1.OpenClawInstance) []corev1.Container {
 	var initContainers []corev1.Container
 
 	// Config/workspace init container (only if there's something to do)
@@ -541,7 +541,7 @@ func shellQuote(s string) string {
 // It handles config copy or merge, directory creation (idempotent),
 // and workspace file seeding (only if not present).
 // Returns "" if there is nothing to do.
-func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance) string {
+func BuildInitScript(instance *openclawv1.OpenClawInstance) string {
 	var lines []string
 
 	// 1. Config handling — overwrite or merge, with optional JSON5 conversion
@@ -636,7 +636,7 @@ func parseSkillEntry(entry string) string {
 // Each entry produces either a `clawhub install` (default) or `npm install`
 // (when prefixed with "npm:") command. Entries are sorted for determinism.
 // Returns "" if no skills are defined.
-func BuildSkillsScript(instance *openclawv1alpha1.OpenClawInstance) string {
+func BuildSkillsScript(instance *openclawv1.OpenClawInstance) string {
 	if len(instance.Spec.Skills) == 0 {
 		return ""
 	}
@@ -655,7 +655,7 @@ func BuildSkillsScript(instance *openclawv1alpha1.OpenClawInstance) string {
 // buildSkillsInitContainer creates the init container that installs skills.
 // Supports both ClawHub skills (default) and npm packages (npm: prefix).
 // npm lifecycle scripts are disabled globally via NPM_CONFIG_IGNORE_SCRIPTS (#91).
-func buildSkillsInitContainer(instance *openclawv1alpha1.OpenClawInstance) *corev1.Container {
+func buildSkillsInitContainer(instance *openclawv1.OpenClawInstance) *corev1.Container {
 	script := BuildSkillsScript(instance)
 	if script == "" {
 		return nil
@@ -715,7 +715,7 @@ func buildSkillsInitContainer(instance *openclawv1alpha1.OpenClawInstance) *core
 }
 
 // buildPnpmInitContainer creates the init container that installs pnpm via corepack.
-func buildPnpmInitContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
+func buildPnpmInitContainer(instance *openclawv1.OpenClawInstance) corev1.Container {
 	script := `set -e
 INSTALL_DIR=/home/openclaw/.openclaw/.local
 mkdir -p "$INSTALL_DIR/bin"
@@ -776,7 +776,7 @@ pnpm --version`
 }
 
 // buildPythonInitContainer creates the init container that installs Python 3.12 and uv.
-func buildPythonInitContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
+func buildPythonInitContainer(instance *openclawv1.OpenClawInstance) corev1.Container {
 	script := `set -e
 INSTALL_DIR=/home/openclaw/.openclaw/.local
 mkdir -p "$INSTALL_DIR/bin"
@@ -842,7 +842,7 @@ uv --version`
 
 // hasWorkspaceFiles returns true if the instance has workspace files to seed,
 // either from user-defined workspace files or operator-injected self-configure files.
-func hasWorkspaceFiles(instance *openclawv1alpha1.OpenClawInstance) bool {
+func hasWorkspaceFiles(instance *openclawv1.OpenClawInstance) bool {
 	if instance.Spec.SelfConfigure.Enabled {
 		return true
 	}
@@ -854,14 +854,14 @@ func hasWorkspaceFiles(instance *openclawv1alpha1.OpenClawInstance) bool {
 // uses this key, regardless of whether the user provided config via raw,
 // configMapRef, or none. The controller reads external CMs and writes the
 // enriched result into the operator-managed CM under "openclaw.json".
-func configMapKey(_ *openclawv1alpha1.OpenClawInstance) string {
+func configMapKey(_ *openclawv1.OpenClawInstance) string {
 	return "openclaw.json"
 }
 
 // buildTailscaleContainer creates the Tailscale sidecar that runs tailscaled.
 // It handles serve/funnel declaratively via TS_SERVE_CONFIG and exposes a Unix
 // socket so the main container can call "tailscale whois" for SSO auth.
-func buildTailscaleContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
+func buildTailscaleContainer(instance *openclawv1.OpenClawInstance) corev1.Container {
 	image := GetTailscaleImage(instance)
 
 	hostname := instance.Spec.Tailscale.Hostname
@@ -942,7 +942,7 @@ func buildTailscaleContainer(instance *openclawv1alpha1.OpenClawInstance) corev1
 }
 
 // buildTailscaleResourceRequirements creates resource requirements for the Tailscale sidecar
-func buildTailscaleResourceRequirements(instance *openclawv1alpha1.OpenClawInstance) corev1.ResourceRequirements {
+func buildTailscaleResourceRequirements(instance *openclawv1.OpenClawInstance) corev1.ResourceRequirements {
 	req := corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{},
 		Limits:   corev1.ResourceList{},
@@ -979,7 +979,7 @@ func buildTailscaleResourceRequirements(instance *openclawv1alpha1.OpenClawInsta
 // tailscale CLI binary from the Tailscale image to a shared emptyDir volume.
 // The main container mounts this volume at TailscaleBinPath so OpenClaw can
 // find the "tailscale" binary via PATH (e.g. for "tailscale whois").
-func buildTailscaleBinInitContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
+func buildTailscaleBinInitContainer(instance *openclawv1.OpenClawInstance) corev1.Container {
 	image := GetTailscaleImage(instance)
 
 	return corev1.Container{
@@ -1011,7 +1011,7 @@ func buildTailscaleBinInitContainer(instance *openclawv1alpha1.OpenClawInstance)
 
 // buildGatewayProxyContainer creates the nginx reverse proxy sidecar that
 // exposes the loopback-bound gateway and canvas ports for external access.
-func buildGatewayProxyContainer(_ *openclawv1alpha1.OpenClawInstance) corev1.Container {
+func buildGatewayProxyContainer(_ *openclawv1.OpenClawInstance) corev1.Container {
 	return corev1.Container{
 		Name:            "gateway-proxy",
 		Image:           DefaultGatewayProxyImage,
@@ -1068,7 +1068,7 @@ func buildGatewayProxyContainer(_ *openclawv1alpha1.OpenClawInstance) corev1.Con
 }
 
 // buildChromiumContainer creates the Chromium sidecar container
-func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
+func buildChromiumContainer(instance *openclawv1.OpenClawInstance) corev1.Container {
 	repo := instance.Spec.Chromium.Image.Repository
 	if repo == "" {
 		repo = "ghcr.io/browserless/chromium"
@@ -1176,7 +1176,7 @@ func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.
 }
 
 // buildOllamaContainer creates the Ollama sidecar container
-func buildOllamaContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
+func buildOllamaContainer(instance *openclawv1.OpenClawInstance) corev1.Container {
 	repo := instance.Spec.Ollama.Image.Repository
 	if repo == "" {
 		repo = "ollama/ollama"
@@ -1230,7 +1230,7 @@ func buildOllamaContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Co
 }
 
 // buildWebTerminalContainer creates the ttyd web terminal sidecar container
-func buildWebTerminalContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
+func buildWebTerminalContainer(instance *openclawv1.OpenClawInstance) corev1.Container {
 	repo := instance.Spec.WebTerminal.Image.Repository
 	if repo == "" {
 		repo = "tsl0922/ttyd"
@@ -1335,7 +1335,7 @@ func buildWebTerminalContainer(instance *openclawv1alpha1.OpenClawInstance) core
 }
 
 // buildWebTerminalResourceRequirements creates resource requirements for the web terminal container
-func buildWebTerminalResourceRequirements(instance *openclawv1alpha1.OpenClawInstance) corev1.ResourceRequirements {
+func buildWebTerminalResourceRequirements(instance *openclawv1.OpenClawInstance) corev1.ResourceRequirements {
 	req := corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{},
 		Limits:   corev1.ResourceList{},
@@ -1371,7 +1371,7 @@ func buildWebTerminalResourceRequirements(instance *openclawv1alpha1.OpenClawIns
 }
 
 // buildOllamaResourceRequirements creates resource requirements for the Ollama container
-func buildOllamaResourceRequirements(instance *openclawv1alpha1.OpenClawInstance) corev1.ResourceRequirements {
+func buildOllamaResourceRequirements(instance *openclawv1.OpenClawInstance) corev1.ResourceRequirements {
 	req := corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{},
 		Limits:   corev1.ResourceList{},
@@ -1414,7 +1414,7 @@ func buildOllamaResourceRequirements(instance *openclawv1alpha1.OpenClawInstance
 }
 
 // buildOllamaModelPullInitContainer creates the init container that pre-pulls Ollama models.
-func buildOllamaModelPullInitContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
+func buildOllamaModelPullInitContainer(instance *openclawv1.OpenClawInstance) corev1.Container {
 	// Build the pull command: start server, pull each model, then stop server
 	var pullCmds []string
 	for _, model := range instance.Spec.Ollama.Models {
@@ -1465,7 +1465,7 @@ func buildOllamaModelPullInitContainer(instance *openclawv1alpha1.OpenClawInstan
 }
 
 // buildVolumes creates the volume specs
-func buildVolumes(instance *openclawv1alpha1.OpenClawInstance) []corev1.Volume {
+func buildVolumes(instance *openclawv1.OpenClawInstance) []corev1.Volume {
 	volumes := []corev1.Volume{}
 
 	// Data volume (PVC or emptyDir)
@@ -1698,7 +1698,7 @@ func buildVolumes(instance *openclawv1alpha1.OpenClawInstance) []corev1.Volume {
 }
 
 // buildResourceRequirements creates resource requirements for the main container
-func buildResourceRequirements(instance *openclawv1alpha1.OpenClawInstance) corev1.ResourceRequirements {
+func buildResourceRequirements(instance *openclawv1.OpenClawInstance) corev1.ResourceRequirements {
 	req := corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{},
 		Limits:   corev1.ResourceList{},
@@ -1734,7 +1734,7 @@ func buildResourceRequirements(instance *openclawv1alpha1.OpenClawInstance) core
 }
 
 // buildChromiumResourceRequirements creates resource requirements for the Chromium container
-func buildChromiumResourceRequirements(instance *openclawv1alpha1.OpenClawInstance) corev1.ResourceRequirements {
+func buildChromiumResourceRequirements(instance *openclawv1.OpenClawInstance) corev1.ResourceRequirements {
 	req := corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{},
 		Limits:   corev1.ResourceList{},
@@ -1774,7 +1774,7 @@ func buildChromiumResourceRequirements(instance *openclawv1alpha1.OpenClawInstan
 // sidecar handles external access), which is unreachable from the kubelet
 // via TCPSocket probes (they connect to the pod IP). Exec probes run inside
 // the container and can reach localhost.
-func buildProbeHandler(_ *openclawv1alpha1.OpenClawInstance) corev1.ProbeHandler {
+func buildProbeHandler(_ *openclawv1.OpenClawInstance) corev1.ProbeHandler {
 	return corev1.ProbeHandler{
 		Exec: &corev1.ExecAction{
 			Command: []string{
@@ -1786,8 +1786,8 @@ func buildProbeHandler(_ *openclawv1alpha1.OpenClawInstance) corev1.ProbeHandler
 }
 
 // buildLivenessProbe creates the liveness probe
-func buildLivenessProbe(instance *openclawv1alpha1.OpenClawInstance) *corev1.Probe {
-	var spec *openclawv1alpha1.ProbeSpec
+func buildLivenessProbe(instance *openclawv1.OpenClawInstance) *corev1.Probe {
+	var spec *openclawv1.ProbeSpec
 	if instance.Spec.Probes != nil {
 		spec = instance.Spec.Probes.Liveness
 	}
@@ -1823,8 +1823,8 @@ func buildLivenessProbe(instance *openclawv1alpha1.OpenClawInstance) *corev1.Pro
 }
 
 // buildReadinessProbe creates the readiness probe
-func buildReadinessProbe(instance *openclawv1alpha1.OpenClawInstance) *corev1.Probe {
-	var spec *openclawv1alpha1.ProbeSpec
+func buildReadinessProbe(instance *openclawv1.OpenClawInstance) *corev1.Probe {
+	var spec *openclawv1.ProbeSpec
 	if instance.Spec.Probes != nil {
 		spec = instance.Spec.Probes.Readiness
 	}
@@ -1860,8 +1860,8 @@ func buildReadinessProbe(instance *openclawv1alpha1.OpenClawInstance) *corev1.Pr
 }
 
 // buildStartupProbe creates the startup probe
-func buildStartupProbe(instance *openclawv1alpha1.OpenClawInstance) *corev1.Probe {
-	var spec *openclawv1alpha1.ProbeSpec
+func buildStartupProbe(instance *openclawv1.OpenClawInstance) *corev1.Probe {
+	var spec *openclawv1.ProbeSpec
 	if instance.Spec.Probes != nil {
 		spec = instance.Spec.Probes.Startup
 	}
@@ -1901,7 +1901,7 @@ func buildStartupProbe(instance *openclawv1alpha1.OpenClawInstance) *corev1.Prob
 // ConfigMap volume to the PVC on every container start, ensuring the config is
 // restored even after a container restart (where init containers don't re-run).
 // Returns "" for JSON5 format (requires npx, too slow for postStart).
-func buildConfigRestoreCommand(instance *openclawv1alpha1.OpenClawInstance) string {
+func buildConfigRestoreCommand(instance *openclawv1.OpenClawInstance) string {
 	key := configMapKey(instance)
 	if key == "" {
 		return ""
@@ -1936,7 +1936,7 @@ func buildConfigRestoreCommand(instance *openclawv1alpha1.OpenClawInstance) stri
 }
 
 // getPullPolicy returns the image pull policy with defaults
-func getPullPolicy(instance *openclawv1alpha1.OpenClawInstance) corev1.PullPolicy {
+func getPullPolicy(instance *openclawv1.OpenClawInstance) corev1.PullPolicy {
 	if instance.Spec.Image.PullPolicy != "" {
 		return instance.Spec.Image.PullPolicy
 	}
@@ -1945,7 +1945,7 @@ func getPullPolicy(instance *openclawv1alpha1.OpenClawInstance) corev1.PullPolic
 
 // calculateConfigHash computes a hash of the config, workspace, and skills for rollout detection.
 // Changes to any of these trigger a pod restart.
-func calculateConfigHash(instance *openclawv1alpha1.OpenClawInstance) string {
+func calculateConfigHash(instance *openclawv1.OpenClawInstance) string {
 	h := sha256.New()
 	configData, _ := json.Marshal(instance.Spec.Config)
 	h.Write(configData)
@@ -1975,7 +1975,7 @@ func calculateConfigHash(instance *openclawv1alpha1.OpenClawInstance) string {
 // statefulSetReplicas returns the replica count for the StatefulSet.
 // When HPA is enabled, replicas is set to nil so the HPA manages scaling.
 // Otherwise defaults to 1 (single-instance).
-func statefulSetReplicas(instance *openclawv1alpha1.OpenClawInstance) *int32 {
+func statefulSetReplicas(instance *openclawv1.OpenClawInstance) *int32 {
 	if IsHPAEnabled(instance) {
 		return nil
 	}

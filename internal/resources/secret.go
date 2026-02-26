@@ -24,7 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 )
 
 // HtpasswdEntry returns a single htpasswd line in {SHA} format for the given username and password.
@@ -39,7 +39,7 @@ func HtpasswdEntry(username, password string) string {
 
 // BuildBasicAuthSecret creates a Secret containing htpasswd content for Ingress Basic Authentication.
 // The Secret holds an "auth" key whose value is an htpasswd-formatted line.
-func BuildBasicAuthSecret(instance *openclawv1alpha1.OpenClawInstance, password string) *corev1.Secret {
+func BuildBasicAuthSecret(instance *openclawv1.OpenClawInstance, password string) *corev1.Secret {
 	username := AppName
 	if instance.Spec.Networking.Ingress.Security.BasicAuth != nil &&
 		instance.Spec.Networking.Ingress.Security.BasicAuth.Username != "" {
@@ -60,7 +60,7 @@ func BuildBasicAuthSecret(instance *openclawv1alpha1.OpenClawInstance, password 
 // BuildGatewayTokenSecret creates a Secret containing the gateway authentication token.
 // The token is used to configure gateway.auth.mode=token so that Bonjour/mDNS pairing
 // (which is unusable in Kubernetes) is bypassed automatically.
-func BuildGatewayTokenSecret(instance *openclawv1alpha1.OpenClawInstance, tokenHex string) *corev1.Secret {
+func BuildGatewayTokenSecret(instance *openclawv1.OpenClawInstance, tokenHex string) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      GatewayTokenSecretName(instance),

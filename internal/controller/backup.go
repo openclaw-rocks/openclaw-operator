@@ -33,7 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 	"github.com/openclawrocks/k8s-operator/internal/resources"
 )
 
@@ -43,13 +43,13 @@ import (
 //  3. Wait for pods to terminate → requeue 5s
 //  4. Create/check backup Job
 //  5. On success: remove finalizer → K8s GCs all owned resources
-func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) (ctrl.Result, error) {
+func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Context, instance *openclawv1.OpenClawInstance) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	logger.Info("Handling deletion with backup", "instance", instance.Name, "namespace", instance.Namespace)
 
 	// Step 0: Update phase to BackingUp (if not already terminating/backing up)
-	if instance.Status.Phase != openclawv1alpha1.PhaseBackingUp && instance.Status.Phase != openclawv1alpha1.PhaseTerminating {
-		instance.Status.Phase = openclawv1alpha1.PhaseBackingUp
+	if instance.Status.Phase != openclawv1.PhaseBackingUp && instance.Status.Phase != openclawv1.PhaseTerminating {
+		instance.Status.Phase = openclawv1.PhaseBackingUp
 		if err := r.Status().Update(ctx, instance); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -58,7 +58,7 @@ func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Conte
 	// Step 1: Check skip-backup annotation
 	if instance.Annotations[AnnotationSkipBackup] == "true" {
 		logger.Info("Skip-backup annotation set, removing finalizer immediately")
-		instance.Status.Phase = openclawv1alpha1.PhaseTerminating
+		instance.Status.Phase = openclawv1.PhaseTerminating
 		if err := r.Status().Update(ctx, instance); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -69,7 +69,7 @@ func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Conte
 	persistenceEnabled := instance.Spec.Storage.Persistence.Enabled == nil || *instance.Spec.Storage.Persistence.Enabled
 	if !persistenceEnabled {
 		logger.Info("Persistence disabled, skipping backup")
-		instance.Status.Phase = openclawv1alpha1.PhaseTerminating
+		instance.Status.Phase = openclawv1.PhaseTerminating
 		if err := r.Status().Update(ctx, instance); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -120,7 +120,7 @@ func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Conte
 			logger.Info("S3 backup credentials not configured, skipping backup")
 			r.Recorder.Event(instance, corev1.EventTypeNormal, "BackupSkipped",
 				"S3 backup credentials Secret not found - skipping pre-delete backup")
-			instance.Status.Phase = openclawv1alpha1.PhaseTerminating
+			instance.Status.Phase = openclawv1.PhaseTerminating
 			if statusErr := r.Status().Update(ctx, instance); statusErr != nil {
 				return ctrl.Result{}, statusErr
 			}
@@ -190,7 +190,7 @@ func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Conte
 			fmt.Sprintf("Backup Job %s failed. Fix and delete the Job to retry, or annotate %s=true to skip.", jobName, AnnotationSkipBackup))
 
 		meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
-			Type:    openclawv1alpha1.ConditionTypeBackupComplete,
+			Type:    openclawv1.ConditionTypeBackupComplete,
 			Status:  metav1.ConditionFalse,
 			Reason:  "BackupFailed",
 			Message: "Backup Job failed",
@@ -208,10 +208,10 @@ func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Conte
 
 	now := metav1.Now()
 	instance.Status.LastBackupTime = &now
-	instance.Status.Phase = openclawv1alpha1.PhaseTerminating
+	instance.Status.Phase = openclawv1.PhaseTerminating
 
 	meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
-		Type:    openclawv1alpha1.ConditionTypeBackupComplete,
+		Type:    openclawv1.ConditionTypeBackupComplete,
 		Status:  metav1.ConditionTrue,
 		Reason:  "BackupSucceeded",
 		Message: fmt.Sprintf("Backup completed to %s", instance.Status.LastBackupPath),
@@ -226,7 +226,7 @@ func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Conte
 // removeFinalizer removes the operator finalizer, allowing K8s to GC the resource.
 // When spec.storage.persistence.orphan is true (the default), the PVC owner reference
 // is removed first so K8s does not garbage-collect the PVC with the CR.
-func (r *OpenClawInstanceReconciler) removeFinalizer(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) (ctrl.Result, error) {
+func (r *OpenClawInstanceReconciler) removeFinalizer(ctx context.Context, instance *openclawv1.OpenClawInstance) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	// Orphan the PVC unless the user explicitly set orphan=false.
@@ -258,7 +258,7 @@ func (r *OpenClawInstanceReconciler) removeFinalizer(ctx context.Context, instan
 
 // orphanPVC removes the owner reference pointing to instance from the managed PVC
 // so that Kubernetes does not garbage-collect it when the CR is deleted.
-func (r *OpenClawInstanceReconciler) orphanPVC(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) error {
+func (r *OpenClawInstanceReconciler) orphanPVC(ctx context.Context, instance *openclawv1.OpenClawInstance) error {
 	logger := log.FromContext(ctx)
 
 	pvc := &corev1.PersistentVolumeClaim{}

@@ -20,12 +20,12 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 )
 
 // BuildWorkspaceConfigMap creates a ConfigMap containing workspace seed files.
 // Returns nil if the instance has no workspace files (user-defined or operator-injected).
-func BuildWorkspaceConfigMap(instance *openclawv1alpha1.OpenClawInstance) *corev1.ConfigMap {
+func BuildWorkspaceConfigMap(instance *openclawv1.OpenClawInstance) *corev1.ConfigMap {
 	files := make(map[string]string)
 
 	// User-defined workspace files

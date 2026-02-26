@@ -29,7 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 	"github.com/openclawrocks/k8s-operator/internal/resources"
 )
 
@@ -64,7 +64,7 @@ var _ = Describe("OpenClawSelfConfig Controller", func() {
 
 			instanceName := "sc-rbac-test"
 
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
@@ -72,16 +72,16 @@ var _ = Describe("OpenClawSelfConfig Controller", func() {
 						"openclaw.rocks/skip-backup": "true",
 					},
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Image: openclawv1alpha1.ImageSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Image: openclawv1.ImageSpec{
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
-					SelfConfigure: openclawv1alpha1.SelfConfigureSpec{
+					SelfConfigure: openclawv1.SelfConfigureSpec{
 						Enabled: true,
-						AllowedActions: []openclawv1alpha1.SelfConfigAction{
-							openclawv1alpha1.SelfConfigActionSkills,
-							openclawv1alpha1.SelfConfigActionConfig,
+						AllowedActions: []openclawv1.SelfConfigAction{
+							openclawv1.SelfConfigActionSkills,
+							openclawv1.SelfConfigActionConfig,
 						},
 					},
 				},
@@ -99,7 +99,7 @@ var _ = Describe("OpenClawSelfConfig Controller", func() {
 					return "found"
 				}
 				// Include instance phase in error for diagnostics
-				inst := &openclawv1alpha1.OpenClawInstance{}
+				inst := &openclawv1.OpenClawInstance{}
 				phase := "unknown"
 				if getErr := k8sClient.Get(ctx, types.NamespacedName{
 					Name: instanceName, Namespace: namespace,
@@ -160,7 +160,7 @@ var _ = Describe("OpenClawSelfConfig Controller", func() {
 
 			instanceName := "sc-apply-test"
 
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
@@ -168,17 +168,17 @@ var _ = Describe("OpenClawSelfConfig Controller", func() {
 						"openclaw.rocks/skip-backup": "true",
 					},
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Image: openclawv1alpha1.ImageSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Image: openclawv1.ImageSpec{
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
 					Skills: []string{"existing-skill"},
-					SelfConfigure: openclawv1alpha1.SelfConfigureSpec{
+					SelfConfigure: openclawv1.SelfConfigureSpec{
 						Enabled: true,
-						AllowedActions: []openclawv1alpha1.SelfConfigAction{
-							openclawv1alpha1.SelfConfigActionSkills,
-							openclawv1alpha1.SelfConfigActionEnvVars,
+						AllowedActions: []openclawv1.SelfConfigAction{
+							openclawv1.SelfConfigActionSkills,
+							openclawv1.SelfConfigActionEnvVars,
 						},
 					},
 				},
@@ -194,7 +194,7 @@ var _ = Describe("OpenClawSelfConfig Controller", func() {
 				if err == nil {
 					return "found"
 				}
-				inst := &openclawv1alpha1.OpenClawInstance{}
+				inst := &openclawv1.OpenClawInstance{}
 				phase := "unknown"
 				if getErr := k8sClient.Get(ctx, types.NamespacedName{
 					Name: instanceName, Namespace: namespace,
@@ -206,12 +206,12 @@ var _ = Describe("OpenClawSelfConfig Controller", func() {
 				"StatefulSet should be created by reconcile")
 
 			// Create a self-config request to add a skill
-			sc := &openclawv1alpha1.OpenClawSelfConfig{
+			sc := &openclawv1.OpenClawSelfConfig{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "add-skill-e2e",
 					Namespace: namespace,
 				},
-				Spec: openclawv1alpha1.OpenClawSelfConfigSpec{
+				Spec: openclawv1.OpenClawSelfConfigSpec{
 					InstanceRef: instanceName,
 					AddSkills:   []string{"@anthropic/mcp-server-fetch"},
 				},
@@ -219,18 +219,18 @@ var _ = Describe("OpenClawSelfConfig Controller", func() {
 			Expect(k8sClient.Create(ctx, sc)).Should(Succeed())
 
 			// Wait for Applied phase
-			Eventually(func() openclawv1alpha1.SelfConfigPhase {
-				fetched := &openclawv1alpha1.OpenClawSelfConfig{}
+			Eventually(func() openclawv1.SelfConfigPhase {
+				fetched := &openclawv1.OpenClawSelfConfig{}
 				if err := k8sClient.Get(ctx, types.NamespacedName{
 					Name: "add-skill-e2e", Namespace: namespace,
 				}, fetched); err != nil {
 					return ""
 				}
 				return fetched.Status.Phase
-			}, timeout, interval).Should(Equal(openclawv1alpha1.SelfConfigPhaseApplied))
+			}, timeout, interval).Should(Equal(openclawv1.SelfConfigPhaseApplied))
 
 			// Verify parent instance was updated
-			updatedInstance := &openclawv1alpha1.OpenClawInstance{}
+			updatedInstance := &openclawv1.OpenClawInstance{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{
 				Name: instanceName, Namespace: namespace,
 			}, updatedInstance)).To(Succeed())
@@ -247,7 +247,7 @@ var _ = Describe("OpenClawSelfConfig Controller", func() {
 
 			instanceName := "sc-deny-test"
 
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
@@ -255,15 +255,15 @@ var _ = Describe("OpenClawSelfConfig Controller", func() {
 						"openclaw.rocks/skip-backup": "true",
 					},
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Image: openclawv1alpha1.ImageSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Image: openclawv1.ImageSpec{
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
-					SelfConfigure: openclawv1alpha1.SelfConfigureSpec{
+					SelfConfigure: openclawv1.SelfConfigureSpec{
 						Enabled: true,
-						AllowedActions: []openclawv1alpha1.SelfConfigAction{
-							openclawv1alpha1.SelfConfigActionSkills,
+						AllowedActions: []openclawv1.SelfConfigAction{
+							openclawv1.SelfConfigActionSkills,
 						},
 					},
 				},
@@ -279,7 +279,7 @@ var _ = Describe("OpenClawSelfConfig Controller", func() {
 				if err == nil {
 					return "found"
 				}
-				inst := &openclawv1alpha1.OpenClawInstance{}
+				inst := &openclawv1.OpenClawInstance{}
 				phase := "unknown"
 				if getErr := k8sClient.Get(ctx, types.NamespacedName{
 					Name: instanceName, Namespace: namespace,
@@ -291,14 +291,14 @@ var _ = Describe("OpenClawSelfConfig Controller", func() {
 				"StatefulSet should be created by reconcile")
 
 			// Create a self-config request for config (not in allowedActions)
-			sc := &openclawv1alpha1.OpenClawSelfConfig{
+			sc := &openclawv1.OpenClawSelfConfig{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "denied-config-e2e",
 					Namespace: namespace,
 				},
-				Spec: openclawv1alpha1.OpenClawSelfConfigSpec{
+				Spec: openclawv1.OpenClawSelfConfigSpec{
 					InstanceRef: instanceName,
-					ConfigPatch: &openclawv1alpha1.RawConfig{
+					ConfigPatch: &openclawv1.RawConfig{
 						RawExtension: runtime.RawExtension{Raw: []byte(`{"key":"value"}`)},
 					},
 				},
@@ -306,15 +306,15 @@ var _ = Describe("OpenClawSelfConfig Controller", func() {
 			Expect(k8sClient.Create(ctx, sc)).Should(Succeed())
 
 			// Wait for Denied phase
-			Eventually(func() openclawv1alpha1.SelfConfigPhase {
-				fetched := &openclawv1alpha1.OpenClawSelfConfig{}
+			Eventually(func() openclawv1.SelfConfigPhase {
+				fetched := &openclawv1.OpenClawSelfConfig{}
 				if err := k8sClient.Get(ctx, types.NamespacedName{
 					Name: "denied-config-e2e", Namespace: namespace,
 				}, fetched); err != nil {
 					return ""
 				}
 				return fetched.Status.Phase
-			}, timeout, interval).Should(Equal(openclawv1alpha1.SelfConfigPhaseDenied))
+			}, timeout, interval).Should(Equal(openclawv1.SelfConfigPhaseDenied))
 
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})

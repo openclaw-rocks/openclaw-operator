@@ -70,7 +70,7 @@ kubectl create secret generic openclaw-api-keys \
   --from-literal=ANTHROPIC_API_KEY=sk-your-key
 
 kubectl apply -f - <<EOF
-apiVersion: openclaw.rocks/v1alpha1
+apiVersion: openclaw.rocks/v1
 kind: OpenClawInstance
 metadata:
   name: dev-assistant
@@ -162,7 +162,7 @@ kubectl create secret generic openclaw-api-keys \
   --from-literal=ANTHROPIC_API_KEY=sk-your-key
 
 kubectl apply -f - <<EOF
-apiVersion: openclaw.rocks/v1alpha1
+apiVersion: openclaw.rocks/v1
 kind: OpenClawInstance
 metadata:
   name: my-assistant
@@ -278,7 +278,7 @@ kubectl create secret generic openclaw-api-keys \
   --from-literal=ANTHROPIC_API_KEY=sk-your-key
 
 kubectl apply -f - <<EOF
-apiVersion: openclaw.rocks/v1alpha1
+apiVersion: openclaw.rocks/v1
 kind: OpenClawInstance
 metadata:
   name: my-assistant
@@ -398,7 +398,7 @@ kubectl create secret generic openclaw-api-keys \
   --from-literal=ANTHROPIC_API_KEY=sk-your-key
 
 kubectl apply -f - <<EOF
-apiVersion: openclaw.rocks/v1alpha1
+apiVersion: openclaw.rocks/v1
 kind: OpenClawInstance
 metadata:
   name: my-assistant
@@ -487,7 +487,7 @@ kubectl create secret generic openclaw-api-keys \
   --from-literal=ANTHROPIC_API_KEY=sk-your-key
 
 kubectl apply -f - <<EOF
-apiVersion: openclaw.rocks/v1alpha1
+apiVersion: openclaw.rocks/v1
 kind: OpenClawInstance
 metadata:
   name: my-assistant

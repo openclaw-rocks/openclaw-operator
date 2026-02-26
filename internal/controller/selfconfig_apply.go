@@ -23,7 +23,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 )
 
 // protectedConfigKeys are config paths that cannot be modified via self-config
@@ -52,32 +52,32 @@ var protectedEnvVars = map[string]bool{
 }
 
 // determineActions inspects which action categories a SelfConfig request uses.
-func determineActions(sc *openclawv1alpha1.OpenClawSelfConfig) []openclawv1alpha1.SelfConfigAction {
-	var actions []openclawv1alpha1.SelfConfigAction
+func determineActions(sc *openclawv1.OpenClawSelfConfig) []openclawv1.SelfConfigAction {
+	var actions []openclawv1.SelfConfigAction
 	if len(sc.Spec.AddSkills) > 0 || len(sc.Spec.RemoveSkills) > 0 {
-		actions = append(actions, openclawv1alpha1.SelfConfigActionSkills)
+		actions = append(actions, openclawv1.SelfConfigActionSkills)
 	}
 	if sc.Spec.ConfigPatch != nil {
-		actions = append(actions, openclawv1alpha1.SelfConfigActionConfig)
+		actions = append(actions, openclawv1.SelfConfigActionConfig)
 	}
 	if len(sc.Spec.AddWorkspaceFiles) > 0 || len(sc.Spec.RemoveWorkspaceFiles) > 0 {
-		actions = append(actions, openclawv1alpha1.SelfConfigActionWorkspaceFiles)
+		actions = append(actions, openclawv1.SelfConfigActionWorkspaceFiles)
 	}
 	if len(sc.Spec.AddEnvVars) > 0 || len(sc.Spec.RemoveEnvVars) > 0 {
-		actions = append(actions, openclawv1alpha1.SelfConfigActionEnvVars)
+		actions = append(actions, openclawv1.SelfConfigActionEnvVars)
 	}
 	return actions
 }
 
 // checkAllowedActions validates that all requested actions are in the allowed list.
 // Returns a list of denied action names, or nil if all are allowed.
-func checkAllowedActions(requested, allowed []openclawv1alpha1.SelfConfigAction) []openclawv1alpha1.SelfConfigAction {
-	allowedSet := make(map[openclawv1alpha1.SelfConfigAction]bool, len(allowed))
+func checkAllowedActions(requested, allowed []openclawv1.SelfConfigAction) []openclawv1.SelfConfigAction {
+	allowedSet := make(map[openclawv1.SelfConfigAction]bool, len(allowed))
 	for _, a := range allowed {
 		allowedSet[a] = true
 	}
 
-	var denied []openclawv1alpha1.SelfConfigAction
+	var denied []openclawv1.SelfConfigAction
 	for _, a := range requested {
 		if !allowedSet[a] {
 			denied = append(denied, a)
@@ -87,7 +87,7 @@ func checkAllowedActions(requested, allowed []openclawv1alpha1.SelfConfigAction)
 }
 
 // applySkillChanges adds and removes skills from the instance spec.
-func applySkillChanges(instance *openclawv1alpha1.OpenClawInstance, sc *openclawv1alpha1.OpenClawSelfConfig) {
+func applySkillChanges(instance *openclawv1.OpenClawInstance, sc *openclawv1.OpenClawSelfConfig) {
 	// Remove skills
 	if len(sc.Spec.RemoveSkills) > 0 {
 		removeSet := make(map[string]bool, len(sc.Spec.RemoveSkills))
@@ -120,7 +120,7 @@ func applySkillChanges(instance *openclawv1alpha1.OpenClawInstance, sc *openclaw
 
 // applyConfigPatch deep-merges the config patch into the instance config.
 // Returns an error if protected keys are present in the patch.
-func applyConfigPatch(instance *openclawv1alpha1.OpenClawInstance, sc *openclawv1alpha1.OpenClawSelfConfig) error {
+func applyConfigPatch(instance *openclawv1.OpenClawInstance, sc *openclawv1.OpenClawSelfConfig) error {
 	if sc.Spec.ConfigPatch == nil || len(sc.Spec.ConfigPatch.Raw) == 0 {
 		return nil
 	}
@@ -155,7 +155,7 @@ func applyConfigPatch(instance *openclawv1alpha1.OpenClawInstance, sc *openclawv
 	}
 
 	if instance.Spec.Config.Raw == nil {
-		instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{}
+		instance.Spec.Config.Raw = &openclawv1.RawConfig{}
 	}
 	instance.Spec.Config.Raw.RawExtension = runtime.RawExtension{Raw: raw}
 	return nil
@@ -180,10 +180,10 @@ func deepMerge(dst, src map[string]interface{}) map[string]interface{} {
 }
 
 // applyWorkspaceFileChanges adds and removes workspace files.
-func applyWorkspaceFileChanges(instance *openclawv1alpha1.OpenClawInstance, sc *openclawv1alpha1.OpenClawSelfConfig) {
+func applyWorkspaceFileChanges(instance *openclawv1.OpenClawInstance, sc *openclawv1.OpenClawSelfConfig) {
 	// Initialize workspace if needed
 	if instance.Spec.Workspace == nil {
-		instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{}
+		instance.Spec.Workspace = &openclawv1.WorkspaceSpec{}
 	}
 	if instance.Spec.Workspace.InitialFiles == nil {
 		instance.Spec.Workspace.InitialFiles = make(map[string]string)
@@ -202,7 +202,7 @@ func applyWorkspaceFileChanges(instance *openclawv1alpha1.OpenClawInstance, sc *
 
 // applyEnvVarChanges adds and removes environment variables.
 // Returns an error if protected env vars are targeted.
-func applyEnvVarChanges(instance *openclawv1alpha1.OpenClawInstance, sc *openclawv1alpha1.OpenClawSelfConfig) error {
+func applyEnvVarChanges(instance *openclawv1.OpenClawInstance, sc *openclawv1.OpenClawSelfConfig) error {
 	// Check for protected env var additions
 	for _, ev := range sc.Spec.AddEnvVars {
 		if protectedEnvVars[ev.Name] {

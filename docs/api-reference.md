@@ -1,9 +1,9 @@
 # API Reference
 
-## OpenClawInstance (v1alpha1)
+## OpenClawInstance (v1)
 
 **Group**: `openclaw.rocks`
-**Version**: `v1alpha1`
+**Version**: `v1` (also served as `v1alpha1` for backward compatibility)
 **Kind**: `OpenClawInstance`
 **Scope**: Namespaced
 
@@ -935,10 +935,10 @@ As a workaround, you can trigger a manual backup by annotating `openclaw.rocks/t
 
 ---
 
-## OpenClawSelfConfig (v1alpha1)
+## OpenClawSelfConfig (v1)
 
 **Group**: `openclaw.rocks`
-**Version**: `v1alpha1`
+**Version**: `v1` (also served as `v1alpha1` for backward compatibility)
 **Kind**: `OpenClawSelfConfig`
 **Scope**: Namespaced
 **Short name**: `ocsc`
@@ -1003,7 +1003,7 @@ The following are protected and cannot be modified via self-configure:
 ### Example
 
 ```yaml
-apiVersion: openclaw.rocks/v1alpha1
+apiVersion: openclaw.rocks/v1
 kind: OpenClawSelfConfig
 metadata:
   name: add-fetch-skill
@@ -1021,7 +1021,7 @@ spec:
 ## Full Example
 
 ```yaml
-apiVersion: openclaw.rocks/v1alpha1
+apiVersion: openclaw.rocks/v1
 kind: OpenClawInstance
 metadata:
   name: my-assistant

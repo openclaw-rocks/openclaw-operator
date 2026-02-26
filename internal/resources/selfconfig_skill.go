@@ -156,15 +156,15 @@ req.end();
 create_selfconfig() {
   local name body="$1"
   name="sc-$(date +%s)-$RANDOM"
-  local path="/apis/openclaw.rocks/v1alpha1/namespaces/${NAMESPACE}/openclawselfconfigs"
-  local full_body="{\"apiVersion\":\"openclaw.rocks/v1alpha1\",\"kind\":\"OpenClawSelfConfig\",\"metadata\":{\"name\":\"${name}\"},\"spec\":{\"instanceRef\":\"${INSTANCE_NAME}\",${body}}}"
+  local path="/apis/openclaw.rocks/v1/namespaces/${NAMESPACE}/openclawselfconfigs"
+  local full_body="{\"apiVersion\":\"openclaw.rocks/v1\",\"kind\":\"OpenClawSelfConfig\",\"metadata\":{\"name\":\"${name}\"},\"spec\":{\"instanceRef\":\"${INSTANCE_NAME}\",${body}}}"
   kube_request POST "$path" "$(printf '%s' "$full_body" | node -e "process.stdout.write(JSON.stringify(require('fs').readFileSync('/dev/stdin','utf8')))")"
   echo "Created request: ${name}"
 }
 
 case "${1:-help}" in
   get-instance)
-    kube_request GET "/apis/openclaw.rocks/v1alpha1/namespaces/${NAMESPACE}/openclawinstances/${INSTANCE_NAME}"
+    kube_request GET "/apis/openclaw.rocks/v1/namespaces/${NAMESPACE}/openclawinstances/${INSTANCE_NAME}"
     ;;
   get-config)
     kube_request GET "/api/v1/namespaces/${NAMESPACE}/configmaps/${INSTANCE_NAME}-config"
@@ -205,7 +205,7 @@ case "${1:-help}" in
     ;;
   status)
     [ -z "${2:-}" ] && echo "Usage: selfconfig.sh status <request-name>" && exit 1
-    kube_request GET "/apis/openclaw.rocks/v1alpha1/namespaces/${NAMESPACE}/openclawselfconfigs/$2"
+    kube_request GET "/apis/openclaw.rocks/v1/namespaces/${NAMESPACE}/openclawselfconfigs/$2"
     ;;
   help|*)
     echo "Usage: selfconfig.sh <command> [args...]"

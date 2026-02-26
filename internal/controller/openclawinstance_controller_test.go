@@ -30,7 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 	"github.com/openclawrocks/k8s-operator/internal/resources"
 )
 
@@ -43,12 +43,12 @@ var _ = Describe("OpenClawInstance Controller", func() {
 	Context("When creating OpenClawInstance", func() {
 		It("Should create all managed resources", func() {
 			By("Creating an OpenClawInstance")
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-instance",
 					Namespace: "default",
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
 					EnvFrom: []corev1.EnvFromSource{
 						{
 							SecretRef: &corev1.SecretEnvSource{
@@ -152,7 +152,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 
 			By("Verifying instance status is updated")
 			Eventually(func() string {
-				inst := &openclawv1alpha1.OpenClawInstance{}
+				inst := &openclawv1.OpenClawInstance{}
 				err := k8sClient.Get(ctx, instanceLookupKey, inst)
 				if err != nil {
 					return ""
@@ -167,12 +167,12 @@ var _ = Describe("OpenClawInstance Controller", func() {
 
 	Context("When StatefulSet security contexts", func() {
 		It("Should enforce non-root execution", func() {
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "security-test",
 					Namespace: "default",
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{},
+				Spec: openclawv1.OpenClawInstanceSpec{},
 			}
 
 			sts := resources.BuildStatefulSet(instance)
@@ -192,14 +192,14 @@ var _ = Describe("OpenClawInstance Controller", func() {
 
 	Context("When NetworkPolicy is configured", func() {
 		It("Should create proper ingress and egress rules", func() {
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "netpol-test",
 					Namespace: "default",
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Security: openclawv1alpha1.SecuritySpec{
-						NetworkPolicy: openclawv1alpha1.NetworkPolicySpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Security: openclawv1.SecuritySpec{
+						NetworkPolicy: openclawv1.NetworkPolicySpec{
 							AllowedIngressCIDRs: []string{"10.0.0.0/8"},
 						},
 					},

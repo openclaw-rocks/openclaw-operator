@@ -21,11 +21,11 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 )
 
 // BuildPVC creates a PersistentVolumeClaim for the OpenClawInstance
-func BuildPVC(instance *openclawv1alpha1.OpenClawInstance) *corev1.PersistentVolumeClaim {
+func BuildPVC(instance *openclawv1.OpenClawInstance) *corev1.PersistentVolumeClaim {
 	labels := Labels(instance)
 
 	// Get storage size with default

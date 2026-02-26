@@ -27,7 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 	"github.com/openclawrocks/k8s-operator/internal/resources"
 )
 
@@ -47,12 +47,12 @@ var _ = Describe("Backup on Delete", func() {
 				},
 			})
 
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "backup-no-s3-test",
 					Namespace: "default",
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{},
+				Spec: openclawv1.OpenClawInstanceSpec{},
 			}
 			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
 
@@ -60,11 +60,11 @@ var _ = Describe("Backup on Delete", func() {
 
 			// Wait for instance to be provisioned (finalizer added)
 			Eventually(func() bool {
-				inst := &openclawv1alpha1.OpenClawInstance{}
+				inst := &openclawv1.OpenClawInstance{}
 				if err := k8sClient.Get(ctx, instanceKey, inst); err != nil {
 					return false
 				}
-				return inst.Status.Phase != "" && inst.Status.Phase != openclawv1alpha1.PhasePending
+				return inst.Status.Phase != "" && inst.Status.Phase != openclawv1.PhasePending
 			}, timeout, interval).Should(BeTrue())
 
 			// Delete the instance
@@ -72,7 +72,7 @@ var _ = Describe("Backup on Delete", func() {
 
 			// The instance should be fully deleted (finalizer removed, no stuck requeue)
 			Eventually(func() bool {
-				inst := &openclawv1alpha1.OpenClawInstance{}
+				inst := &openclawv1.OpenClawInstance{}
 				err := k8sClient.Get(ctx, instanceKey, inst)
 				return err != nil // NotFound means deleted
 			}, timeout, interval).Should(BeTrue())
@@ -96,7 +96,7 @@ var _ = Describe("Backup on Delete", func() {
 			}
 			_ = k8sClient.Create(ctx, s3Secret)
 
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "backup-skip-test",
 					Namespace: "default",
@@ -104,7 +104,7 @@ var _ = Describe("Backup on Delete", func() {
 						AnnotationSkipBackup: "true",
 					},
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{},
+				Spec: openclawv1.OpenClawInstanceSpec{},
 			}
 			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
 
@@ -112,11 +112,11 @@ var _ = Describe("Backup on Delete", func() {
 
 			// Wait for instance to be provisioned (finalizer added)
 			Eventually(func() bool {
-				inst := &openclawv1alpha1.OpenClawInstance{}
+				inst := &openclawv1.OpenClawInstance{}
 				if err := k8sClient.Get(ctx, instanceKey, inst); err != nil {
 					return false
 				}
-				return inst.Status.Phase != "" && inst.Status.Phase != openclawv1alpha1.PhasePending
+				return inst.Status.Phase != "" && inst.Status.Phase != openclawv1.PhasePending
 			}, timeout, interval).Should(BeTrue())
 
 			// Delete the instance
@@ -124,7 +124,7 @@ var _ = Describe("Backup on Delete", func() {
 
 			// The instance should be fully deleted (finalizer removed immediately)
 			Eventually(func() bool {
-				inst := &openclawv1alpha1.OpenClawInstance{}
+				inst := &openclawv1.OpenClawInstance{}
 				err := k8sClient.Get(ctx, instanceKey, inst)
 				return err != nil // NotFound means deleted
 			}, timeout, interval).Should(BeTrue())
@@ -133,12 +133,12 @@ var _ = Describe("Backup on Delete", func() {
 
 	Context("When deleting an instance with backup", func() {
 		It("Should enter BackingUp phase and scale down StatefulSet", func() {
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "backup-scale-test",
 					Namespace: "default",
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{},
+				Spec: openclawv1.OpenClawInstanceSpec{},
 			}
 			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
 
@@ -159,12 +159,12 @@ var _ = Describe("Backup on Delete", func() {
 
 			// Verify it enters BackingUp phase
 			Eventually(func() string {
-				inst := &openclawv1alpha1.OpenClawInstance{}
+				inst := &openclawv1.OpenClawInstance{}
 				if err := k8sClient.Get(ctx, instanceKey, inst); err != nil {
 					return ""
 				}
 				return inst.Status.Phase
-			}, timeout, interval).Should(Equal(openclawv1alpha1.PhaseBackingUp))
+			}, timeout, interval).Should(Equal(openclawv1.PhaseBackingUp))
 
 			// Verify StatefulSet is scaled to 0
 			Eventually(func() int32 {
@@ -183,7 +183,7 @@ var _ = Describe("Backup on Delete", func() {
 
 			// Clean up: annotate to skip backup so finalizer gets removed
 			Eventually(func() error {
-				inst := &openclawv1alpha1.OpenClawInstance{}
+				inst := &openclawv1.OpenClawInstance{}
 				if err := k8sClient.Get(ctx, instanceKey, inst); err != nil {
 					return err
 				}
@@ -196,7 +196,7 @@ var _ = Describe("Backup on Delete", func() {
 
 			// Wait for deletion to complete
 			Eventually(func() bool {
-				inst := &openclawv1alpha1.OpenClawInstance{}
+				inst := &openclawv1.OpenClawInstance{}
 				err := k8sClient.Get(ctx, instanceKey, inst)
 				return err != nil
 			}, timeout, interval).Should(BeTrue())

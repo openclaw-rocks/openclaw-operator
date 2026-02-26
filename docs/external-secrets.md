@@ -61,7 +61,7 @@ spec:
 ### 3. Reference in OpenClawInstance
 
 ```yaml
-apiVersion: openclaw.rocks/v1alpha1
+apiVersion: openclaw.rocks/v1
 kind: OpenClawInstance
 metadata:
   name: my-assistant

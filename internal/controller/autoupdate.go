@@ -33,7 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 	"github.com/openclawrocks/k8s-operator/internal/resources"
 )
 
@@ -52,7 +52,7 @@ const (
 
 // resolveInitialTag resolves "latest" to a concrete semver tag when auto-update is enabled.
 // Returns true if the tag was resolved (caller should requeue), false if no action was taken.
-func (r *OpenClawInstanceReconciler) resolveInitialTag(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) (bool, error) {
+func (r *OpenClawInstanceReconciler) resolveInitialTag(ctx context.Context, instance *openclawv1.OpenClawInstance) (bool, error) {
 	logger := log.FromContext(ctx)
 
 	if !isAutoUpdateEnabled(instance) {
@@ -97,7 +97,7 @@ func (r *OpenClawInstanceReconciler) resolveInitialTag(ctx context.Context, inst
 
 // reconcileAutoUpdate handles the periodic version check and update state machine.
 // It is called from Reconcile() after successful resource reconciliation.
-func (r *OpenClawInstanceReconciler) reconcileAutoUpdate(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) (ctrl.Result, error) {
+func (r *OpenClawInstanceReconciler) reconcileAutoUpdate(ctx context.Context, instance *openclawv1.OpenClawInstance) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	// If an update is in progress, drive the state machine
@@ -177,7 +177,7 @@ func (r *OpenClawInstanceReconciler) reconcileAutoUpdate(ctx context.Context, in
 	if !latestVer.GreaterThan(currentVer) {
 		logger.V(1).Info("No new version available", "current", currentTag, "latest", version)
 		// Clear any stale AutoUpdateAvailable condition
-		meta.RemoveStatusCondition(&instance.Status.Conditions, openclawv1alpha1.ConditionTypeAutoUpdateAvailable)
+		meta.RemoveStatusCondition(&instance.Status.Conditions, openclawv1.ConditionTypeAutoUpdateAvailable)
 		return ctrl.Result{}, nil
 	}
 
@@ -202,7 +202,7 @@ func (r *OpenClawInstanceReconciler) reconcileAutoUpdate(ctx context.Context, in
 		fmt.Sprintf("New version %s available (current: %s)", version, currentTag))
 
 	meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
-		Type:    openclawv1alpha1.ConditionTypeAutoUpdateAvailable,
+		Type:    openclawv1.ConditionTypeAutoUpdateAvailable,
 		Status:  metav1.ConditionTrue,
 		Reason:  "NewVersionAvailable",
 		Message: fmt.Sprintf("Version %s is available (current: %s)", version, currentTag),
@@ -230,7 +230,7 @@ func (r *OpenClawInstanceReconciler) reconcileAutoUpdate(ctx context.Context, in
 //  5. Set UpdatePhase = HealthCheck, keep PendingVersion set
 //  6. Health check loop: wait for StatefulSet readiness or timeout
 //  7. On timeout (if rollbackOnFailure): rollback
-func (r *OpenClawInstanceReconciler) driveUpdateStateMachine(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) (ctrl.Result, error) {
+func (r *OpenClawInstanceReconciler) driveUpdateStateMachine(ctx context.Context, instance *openclawv1.OpenClawInstance) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	pendingVersion := instance.Status.AutoUpdate.PendingVersion
 
@@ -245,8 +245,8 @@ func (r *OpenClawInstanceReconciler) driveUpdateStateMachine(ctx context.Context
 	}
 
 	// Step 1: Set phase to Updating
-	if instance.Status.Phase != openclawv1alpha1.PhaseUpdating {
-		instance.Status.Phase = openclawv1alpha1.PhaseUpdating
+	if instance.Status.Phase != openclawv1.PhaseUpdating {
+		instance.Status.Phase = openclawv1.PhaseUpdating
 		updatePhaseMetric(instance.Name, instance.Namespace, instance.Status.Phase)
 		if err := r.Status().Update(ctx, instance); err != nil {
 			return ctrl.Result{}, err
@@ -301,7 +301,7 @@ func (r *OpenClawInstanceReconciler) driveUpdateStateMachine(ctx context.Context
 		now := metav1.Now()
 		instance.Status.AutoUpdate.UpdatePhase = updatePhaseHealthCheck
 		instance.Status.AutoUpdate.LastUpdateTime = &now
-		instance.Status.Phase = openclawv1alpha1.PhaseProvisioning
+		instance.Status.Phase = openclawv1.PhaseProvisioning
 		// PendingVersion stays set — signals "update not yet confirmed"
 
 		if err := r.Status().Update(ctx, instance); err != nil {
@@ -326,9 +326,9 @@ func (r *OpenClawInstanceReconciler) driveUpdateStateMachine(ctx context.Context
 	instance.Status.AutoUpdate.PreviousVersion = ""
 	instance.Status.AutoUpdate.PreUpdateBackupPath = ""
 	instance.Status.AutoUpdate.RollbackCount = 0
-	instance.Status.Phase = openclawv1alpha1.PhaseProvisioning
+	instance.Status.Phase = openclawv1.PhaseProvisioning
 
-	meta.RemoveStatusCondition(&instance.Status.Conditions, openclawv1alpha1.ConditionTypeAutoUpdateAvailable)
+	meta.RemoveStatusCondition(&instance.Status.Conditions, openclawv1.ConditionTypeAutoUpdateAvailable)
 
 	if err := r.Status().Update(ctx, instance); err != nil {
 		return ctrl.Result{}, err
@@ -344,7 +344,7 @@ func (r *OpenClawInstanceReconciler) driveUpdateStateMachine(ctx context.Context
 
 // driveHealthCheck monitors the StatefulSet after an update and either confirms
 // the update or triggers a rollback if the health check timeout elapses.
-func (r *OpenClawInstanceReconciler) driveHealthCheck(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) (ctrl.Result, error) {
+func (r *OpenClawInstanceReconciler) driveHealthCheck(ctx context.Context, instance *openclawv1.OpenClawInstance) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	// Check StatefulSet readiness
@@ -369,9 +369,9 @@ func (r *OpenClawInstanceReconciler) driveHealthCheck(ctx context.Context, insta
 		instance.Status.AutoUpdate.PreviousVersion = ""
 		instance.Status.AutoUpdate.PreUpdateBackupPath = ""
 		instance.Status.AutoUpdate.RollbackCount = 0
-		instance.Status.Phase = openclawv1alpha1.PhaseRunning
+		instance.Status.Phase = openclawv1.PhaseRunning
 
-		meta.RemoveStatusCondition(&instance.Status.Conditions, openclawv1alpha1.ConditionTypeAutoUpdateAvailable)
+		meta.RemoveStatusCondition(&instance.Status.Conditions, openclawv1.ConditionTypeAutoUpdateAvailable)
 
 		if err := r.Status().Update(ctx, instance); err != nil {
 			return ctrl.Result{}, err
@@ -404,7 +404,7 @@ func (r *OpenClawInstanceReconciler) driveHealthCheck(ctx context.Context, insta
 		"elapsed", elapsed.Round(time.Second))
 
 	instance.Status.AutoUpdate.UpdatePhase = updatePhaseRollingBack
-	instance.Status.Phase = openclawv1alpha1.PhaseUpdating
+	instance.Status.Phase = openclawv1.PhaseUpdating
 	updatePhaseMetric(instance.Name, instance.Namespace, instance.Status.Phase)
 
 	if err := r.Status().Update(ctx, instance); err != nil {
@@ -420,7 +420,7 @@ func (r *OpenClawInstanceReconciler) driveHealthCheck(ctx context.Context, insta
 
 // driveRollback reverts the image tag to the previous version and optionally
 // restores the PVC from the pre-update backup.
-func (r *OpenClawInstanceReconciler) driveRollback(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) (ctrl.Result, error) {
+func (r *OpenClawInstanceReconciler) driveRollback(ctx context.Context, instance *openclawv1.OpenClawInstance) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	previousVersion := instance.Status.AutoUpdate.PreviousVersion
@@ -464,9 +464,9 @@ func (r *OpenClawInstanceReconciler) driveRollback(ctx context.Context, instance
 	instance.Status.AutoUpdate.LastUpdateError = fmt.Sprintf("version %s failed health check, rolled back to %s", failedVersion, previousVersion)
 	instance.Status.AutoUpdate.RollbackCount++
 	instance.Status.AutoUpdate.CurrentVersion = previousVersion
-	instance.Status.Phase = openclawv1alpha1.PhaseProvisioning
+	instance.Status.Phase = openclawv1.PhaseProvisioning
 
-	meta.RemoveStatusCondition(&instance.Status.Conditions, openclawv1alpha1.ConditionTypeAutoUpdateAvailable)
+	meta.RemoveStatusCondition(&instance.Status.Conditions, openclawv1.ConditionTypeAutoUpdateAvailable)
 
 	if err := r.Status().Update(ctx, instance); err != nil {
 		return ctrl.Result{}, err
@@ -492,7 +492,7 @@ func (r *OpenClawInstanceReconciler) driveRollback(ctx context.Context, instance
 
 // driveRollbackRestore handles the PVC restore during rollback.
 // Returns (result, done, err) where done=true means restore completed.
-func (r *OpenClawInstanceReconciler) driveRollbackRestore(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance, backupPath string) (requeueResult ctrl.Result, done bool, retErr error) {
+func (r *OpenClawInstanceReconciler) driveRollbackRestore(ctx context.Context, instance *openclawv1.OpenClawInstance, backupPath string) (requeueResult ctrl.Result, done bool, retErr error) {
 	logger := log.FromContext(ctx)
 
 	// Scale down StatefulSet
@@ -582,13 +582,13 @@ func (r *OpenClawInstanceReconciler) driveRollbackRestore(ctx context.Context, i
 }
 
 // rollbackRestoreJobName returns a deterministic name for the rollback restore Job.
-func rollbackRestoreJobName(instance *openclawv1alpha1.OpenClawInstance) string {
+func rollbackRestoreJobName(instance *openclawv1.OpenClawInstance) string {
 	return instance.Name + "-rollback-restore"
 }
 
 // lastPreUpdateBackupPath extracts the S3 path from the pre-update backup Job.
 // This is called right after the backup completes so the job should exist.
-func (r *OpenClawInstanceReconciler) lastPreUpdateBackupPath(instance *openclawv1alpha1.OpenClawInstance) string {
+func (r *OpenClawInstanceReconciler) lastPreUpdateBackupPath(instance *openclawv1.OpenClawInstance) string {
 	jobName := preUpdateBackupJobName(instance)
 	job, err := r.getJob(context.TODO(), jobName, instance.Namespace)
 	if err != nil || job == nil {
@@ -633,7 +633,7 @@ func parseHealthCheckTimeout(s string) time.Duration {
 
 // drivePreUpdateBackup handles the backup steps before applying an update.
 // Returns (result, done, err) where done=true means backup completed successfully.
-func (r *OpenClawInstanceReconciler) drivePreUpdateBackup(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) (requeueResult ctrl.Result, done bool, retErr error) {
+func (r *OpenClawInstanceReconciler) drivePreUpdateBackup(ctx context.Context, instance *openclawv1.OpenClawInstance) (requeueResult ctrl.Result, done bool, retErr error) {
 	logger := log.FromContext(ctx)
 
 	// Scale down StatefulSet
@@ -729,16 +729,16 @@ func (r *OpenClawInstanceReconciler) drivePreUpdateBackup(ctx context.Context, i
 }
 
 // abortUpdate clears the update state and returns to Running phase.
-func (r *OpenClawInstanceReconciler) abortUpdate(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance, reason string) (ctrl.Result, error) {
+func (r *OpenClawInstanceReconciler) abortUpdate(ctx context.Context, instance *openclawv1.OpenClawInstance, reason string) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	logger.Error(nil, "Aborting auto-update", "reason", reason)
 
 	instance.Status.AutoUpdate.PendingVersion = ""
 	instance.Status.AutoUpdate.UpdatePhase = ""
 	instance.Status.AutoUpdate.LastUpdateError = reason
-	instance.Status.Phase = openclawv1alpha1.PhaseRunning
+	instance.Status.Phase = openclawv1.PhaseRunning
 
-	meta.RemoveStatusCondition(&instance.Status.Conditions, openclawv1alpha1.ConditionTypeAutoUpdateAvailable)
+	meta.RemoveStatusCondition(&instance.Status.Conditions, openclawv1.ConditionTypeAutoUpdateAvailable)
 
 	r.Recorder.Event(instance, corev1.EventTypeWarning, "AutoUpdateAborted", reason)
 
@@ -764,12 +764,12 @@ func (r *OpenClawInstanceReconciler) abortUpdate(ctx context.Context, instance *
 }
 
 // preUpdateBackupJobName returns a deterministic name for the pre-update backup Job.
-func preUpdateBackupJobName(instance *openclawv1alpha1.OpenClawInstance) string {
+func preUpdateBackupJobName(instance *openclawv1.OpenClawInstance) string {
 	return instance.Name + "-pre-update-backup"
 }
 
 // isAutoUpdateEnabled returns true if auto-update is enabled and no digest pin is set.
-func isAutoUpdateEnabled(instance *openclawv1alpha1.OpenClawInstance) bool {
+func isAutoUpdateEnabled(instance *openclawv1.OpenClawInstance) bool {
 	if instance.Spec.AutoUpdate.Enabled == nil || !*instance.Spec.AutoUpdate.Enabled {
 		return false
 	}
@@ -781,7 +781,7 @@ func isAutoUpdateEnabled(instance *openclawv1alpha1.OpenClawInstance) bool {
 }
 
 // shouldCheckForUpdate returns true if enough time has elapsed since the last check.
-func shouldCheckForUpdate(instance *openclawv1alpha1.OpenClawInstance) bool {
+func shouldCheckForUpdate(instance *openclawv1.OpenClawInstance) bool {
 	if instance.Status.AutoUpdate.LastCheckTime == nil {
 		return true
 	}

@@ -23,38 +23,38 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 )
 
 // newBenchInstance creates a minimal instance for benchmarking.
-func newBenchInstance() *openclawv1alpha1.OpenClawInstance {
-	return &openclawv1alpha1.OpenClawInstance{
+func newBenchInstance() *openclawv1.OpenClawInstance {
+	return &openclawv1.OpenClawInstance{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "bench",
 			Namespace: "bench-ns",
 		},
-		Spec: openclawv1alpha1.OpenClawInstanceSpec{},
+		Spec: openclawv1.OpenClawInstanceSpec{},
 	}
 }
 
 // newFullBenchInstance creates a fully-loaded instance for benchmarking.
-func newFullBenchInstance() *openclawv1alpha1.OpenClawInstance {
-	return &openclawv1alpha1.OpenClawInstance{
+func newFullBenchInstance() *openclawv1.OpenClawInstance {
+	return &openclawv1.OpenClawInstance{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "bench-full",
 			Namespace: "bench-ns",
 		},
-		Spec: openclawv1alpha1.OpenClawInstanceSpec{
-			Image: openclawv1alpha1.ImageSpec{
+		Spec: openclawv1.OpenClawInstanceSpec{
+			Image: openclawv1.ImageSpec{
 				Repository: "ghcr.io/openclaw/openclaw",
 				Tag:        "v1.0.0",
 			},
-			Config: openclawv1alpha1.ConfigSpec{
-				Raw: &openclawv1alpha1.RawConfig{
+			Config: openclawv1.ConfigSpec{
+				Raw: &openclawv1.RawConfig{
 					RawExtension: runtime.RawExtension{Raw: []byte(`{"key":"value","nested":{"a":1,"b":"c"}}`)},
 				},
 			},
-			Chromium: openclawv1alpha1.ChromiumSpec{
+			Chromium: openclawv1.ChromiumSpec{
 				Enabled: true,
 			},
 			Env: []corev1.EnvVar{
@@ -68,17 +68,17 @@ func newFullBenchInstance() *openclawv1alpha1.OpenClawInstance {
 					},
 				},
 			},
-			Resources: openclawv1alpha1.ResourcesSpec{
-				Requests: openclawv1alpha1.ResourceList{
+			Resources: openclawv1.ResourcesSpec{
+				Requests: openclawv1.ResourceList{
 					CPU:    "500m",
 					Memory: "512Mi",
 				},
-				Limits: openclawv1alpha1.ResourceList{
+				Limits: openclawv1.ResourceList{
 					CPU:    "2",
 					Memory: "2Gi",
 				},
 			},
-			Availability: openclawv1alpha1.AvailabilitySpec{
+			Availability: openclawv1.AvailabilitySpec{
 				NodeSelector: map[string]string{"node-type": "gpu"},
 				Tolerations: []corev1.Toleration{
 					{Key: "gpu", Operator: corev1.TolerationOpEqual, Value: "true", Effect: corev1.TaintEffectNoSchedule},
@@ -97,29 +97,29 @@ func newFullBenchInstance() *openclawv1alpha1.OpenClawInstance {
 						},
 					},
 				},
-				PodDisruptionBudget: &openclawv1alpha1.PodDisruptionBudgetSpec{
+				PodDisruptionBudget: &openclawv1.PodDisruptionBudgetSpec{
 					Enabled:        Ptr(true),
 					MaxUnavailable: Ptr(int32(1)),
 				},
-				AutoScaling: &openclawv1alpha1.AutoScalingSpec{
+				AutoScaling: &openclawv1.AutoScalingSpec{
 					Enabled:              Ptr(true),
 					MinReplicas:          Ptr(int32(2)),
 					MaxReplicas:          Ptr(int32(10)),
 					TargetCPUUtilization: Ptr(int32(80)),
 				},
 			},
-			Security: openclawv1alpha1.SecuritySpec{
-				NetworkPolicy: openclawv1alpha1.NetworkPolicySpec{
-					Enabled:                    Ptr(true),
-					AllowedIngressNamespaces:   []string{"monitoring", "ingress-nginx"},
-					AllowedIngressCIDRs:        []string{"10.0.0.0/8"},
-					AllowedEgressCIDRs:         []string{"10.0.0.0/8"},
+			Security: openclawv1.SecuritySpec{
+				NetworkPolicy: openclawv1.NetworkPolicySpec{
+					Enabled:                  Ptr(true),
+					AllowedIngressNamespaces: []string{"monitoring", "ingress-nginx"},
+					AllowedIngressCIDRs:      []string{"10.0.0.0/8"},
+					AllowedEgressCIDRs:       []string{"10.0.0.0/8"},
 				},
 			},
-			Networking: openclawv1alpha1.NetworkingSpec{
-				Ingress: openclawv1alpha1.IngressSpec{
+			Networking: openclawv1.NetworkingSpec{
+				Ingress: openclawv1.IngressSpec{
 					Enabled: true,
-					Hosts: []openclawv1alpha1.IngressHost{
+					Hosts: []openclawv1.IngressHost{
 						{Host: "bench.example.com"},
 					},
 				},

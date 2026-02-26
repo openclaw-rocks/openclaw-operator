@@ -27,7 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 )
 
 var _ = Describe("Restore from Backup", func() {
@@ -38,12 +38,12 @@ var _ = Describe("Restore from Backup", func() {
 
 	Context("When creating an instance without restoreFrom", func() {
 		It("Should proceed normally to Running without restore", func() {
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "no-restore-test",
 					Namespace: "default",
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{},
+				Spec: openclawv1.OpenClawInstanceSpec{},
 			}
 			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
 
@@ -51,14 +51,14 @@ var _ = Describe("Restore from Backup", func() {
 
 			// Should reach Running phase without going through Restoring
 			Eventually(func() string {
-				inst := &openclawv1alpha1.OpenClawInstance{}
+				inst := &openclawv1.OpenClawInstance{}
 				if err := k8sClient.Get(ctx, instanceKey, inst); err != nil {
 					return ""
 				}
 				return inst.Status.Phase
 			}, timeout, interval).Should(BeElementOf(
-				openclawv1alpha1.PhaseRunning,
-				openclawv1alpha1.PhaseProvisioning,
+				openclawv1.PhaseRunning,
+				openclawv1.PhaseProvisioning,
 			))
 
 			// Verify no restore Job was created
@@ -70,7 +70,7 @@ var _ = Describe("Restore from Backup", func() {
 
 			// Clean up: add skip-backup BEFORE deleting to prevent backup flow
 			Eventually(func() error {
-				inst := &openclawv1alpha1.OpenClawInstance{}
+				inst := &openclawv1.OpenClawInstance{}
 				if err := k8sClient.Get(ctx, instanceKey, inst); err != nil {
 					return err
 				}
@@ -83,7 +83,7 @@ var _ = Describe("Restore from Backup", func() {
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 			// Wait for full deletion
 			Eventually(func() bool {
-				err := k8sClient.Get(ctx, instanceKey, &openclawv1alpha1.OpenClawInstance{})
+				err := k8sClient.Get(ctx, instanceKey, &openclawv1.OpenClawInstance{})
 				return err != nil
 			}, timeout, interval).Should(BeTrue())
 		})
@@ -106,12 +106,12 @@ var _ = Describe("Restore from Backup", func() {
 			}
 			_ = k8sClient.Create(ctx, s3Secret)
 
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "restore-test",
 					Namespace: "default",
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
 					RestoreFrom: "backups/cus_123/old-instance/2026-01-01T000000Z",
 				},
 			}
@@ -121,12 +121,12 @@ var _ = Describe("Restore from Backup", func() {
 
 			// Should enter Restoring phase
 			Eventually(func() string {
-				inst := &openclawv1alpha1.OpenClawInstance{}
+				inst := &openclawv1.OpenClawInstance{}
 				if err := k8sClient.Get(ctx, instanceKey, inst); err != nil {
 					return ""
 				}
 				return inst.Status.Phase
-			}, timeout, interval).Should(Equal(openclawv1alpha1.PhaseRestoring))
+			}, timeout, interval).Should(Equal(openclawv1.PhaseRestoring))
 
 			// Verify restore Job was created
 			Eventually(func() bool {
@@ -148,7 +148,7 @@ var _ = Describe("Restore from Backup", func() {
 
 			// Clean up: delete the instance with skip-backup
 			Eventually(func() error {
-				inst := &openclawv1alpha1.OpenClawInstance{}
+				inst := &openclawv1.OpenClawInstance{}
 				if err := k8sClient.Get(ctx, instanceKey, inst); err != nil {
 					return err
 				}

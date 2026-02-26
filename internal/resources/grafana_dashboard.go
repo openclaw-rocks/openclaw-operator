@@ -22,34 +22,34 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 )
 
 const defaultGrafanaFolder = "OpenClaw"
 
 // GrafanaDashboardOperatorName returns the name of the operator overview dashboard ConfigMap
-func GrafanaDashboardOperatorName(instance *openclawv1alpha1.OpenClawInstance) string {
+func GrafanaDashboardOperatorName(instance *openclawv1.OpenClawInstance) string {
 	return instance.Name + "-dashboard-operator"
 }
 
 // GrafanaDashboardInstanceName returns the name of the instance detail dashboard ConfigMap
-func GrafanaDashboardInstanceName(instance *openclawv1alpha1.OpenClawInstance) string {
+func GrafanaDashboardInstanceName(instance *openclawv1.OpenClawInstance) string {
 	return instance.Name + "-dashboard-instance"
 }
 
 // BuildGrafanaDashboardOperator creates a ConfigMap containing the operator overview Grafana dashboard
-func BuildGrafanaDashboardOperator(instance *openclawv1alpha1.OpenClawInstance) *corev1.ConfigMap {
+func BuildGrafanaDashboardOperator(instance *openclawv1.OpenClawInstance) *corev1.ConfigMap {
 	dashboardJSON := buildOperatorDashboard()
 	return buildDashboardConfigMap(instance, GrafanaDashboardOperatorName(instance), "openclaw-operator.json", dashboardJSON)
 }
 
 // BuildGrafanaDashboardInstance creates a ConfigMap containing the per-instance Grafana dashboard
-func BuildGrafanaDashboardInstance(instance *openclawv1alpha1.OpenClawInstance) *corev1.ConfigMap {
+func BuildGrafanaDashboardInstance(instance *openclawv1.OpenClawInstance) *corev1.ConfigMap {
 	dashboardJSON := buildInstanceDashboard()
 	return buildDashboardConfigMap(instance, GrafanaDashboardInstanceName(instance), "openclaw-instance.json", dashboardJSON)
 }
 
-func buildDashboardConfigMap(instance *openclawv1alpha1.OpenClawInstance, name, dataKey, dashboardJSON string) *corev1.ConfigMap {
+func buildDashboardConfigMap(instance *openclawv1.OpenClawInstance, name, dataKey, dashboardJSON string) *corev1.ConfigMap {
 	labels := Labels(instance)
 	labels["grafana_dashboard"] = "1"
 

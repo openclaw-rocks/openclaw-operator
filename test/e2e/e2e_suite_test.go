@@ -38,7 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 	"github.com/openclawrocks/k8s-operator/internal/resources"
 )
 
@@ -63,7 +63,7 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 	Expect(cfg).NotTo(BeNil())
 
-	err = openclawv1alpha1.AddToScheme(scheme.Scheme)
+	err = openclawv1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme.Scheme})
@@ -123,7 +123,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			}
 
 			// Create OpenClawInstance
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
@@ -131,8 +131,8 @@ var _ = Describe("OpenClawInstance Controller", func() {
 						"openclaw.rocks/skip-backup": "true",
 					},
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Image: openclawv1alpha1.ImageSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Image: openclawv1.ImageSpec{
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
@@ -142,7 +142,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
 
 			// Verify the instance was created
-			createdInstance := &openclawv1alpha1.OpenClawInstance{}
+			createdInstance := &openclawv1.OpenClawInstance{}
 			Eventually(func() error {
 				return k8sClient.Get(ctx, types.NamespacedName{
 					Name:      instanceName,
@@ -192,7 +192,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				Skip("Skipping resource validation in minimal mode")
 			}
 
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
@@ -200,8 +200,8 @@ var _ = Describe("OpenClawInstance Controller", func() {
 						"openclaw.rocks/skip-backup": "true",
 					},
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Image: openclawv1alpha1.ImageSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Image: openclawv1.ImageSpec{
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
@@ -276,7 +276,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				Skip("Skipping resource validation in minimal mode")
 			}
 
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
@@ -284,12 +284,12 @@ var _ = Describe("OpenClawInstance Controller", func() {
 						"openclaw.rocks/skip-backup": "true",
 					},
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Image: openclawv1alpha1.ImageSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Image: openclawv1.ImageSpec{
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
-					Config: openclawv1alpha1.ConfigSpec{
+					Config: openclawv1.ConfigSpec{
 						MergeMode: "merge",
 					},
 				},
@@ -335,7 +335,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				Skip("Skipping resource validation in minimal mode")
 			}
 
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
@@ -343,12 +343,12 @@ var _ = Describe("OpenClawInstance Controller", func() {
 						"openclaw.rocks/skip-backup": "true",
 					},
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Image: openclawv1alpha1.ImageSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Image: openclawv1.ImageSpec{
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
-					RuntimeDeps: openclawv1alpha1.RuntimeDepsSpec{
+					RuntimeDeps: openclawv1.RuntimeDepsSpec{
 						Python: true,
 					},
 				},
@@ -391,7 +391,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			}
 
 			// Create vanilla OpenClawInstance (image only, no config)
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
@@ -399,8 +399,8 @@ var _ = Describe("OpenClawInstance Controller", func() {
 						"openclaw.rocks/skip-backup": "true",
 					},
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Image: openclawv1alpha1.ImageSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Image: openclawv1.ImageSpec{
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
@@ -469,7 +469,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				Skip("Skipping resource validation in minimal mode")
 			}
 
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
@@ -477,12 +477,12 @@ var _ = Describe("OpenClawInstance Controller", func() {
 						"openclaw.rocks/skip-backup": "true",
 					},
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Image: openclawv1alpha1.ImageSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Image: openclawv1.ImageSpec{
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
-					Availability: openclawv1alpha1.AvailabilitySpec{
+					Availability: openclawv1.AvailabilitySpec{
 						TopologySpreadConstraints: []corev1.TopologySpreadConstraint{
 							{
 								MaxSkew:           1,
@@ -549,13 +549,13 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			instanceName := "no-s3-delete"
 
 			// No S3 secret exists in the namespace or operator namespace
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Image: openclawv1alpha1.ImageSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Image: openclawv1.ImageSpec{
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
@@ -580,7 +580,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 
 			// Instance should be fully garbage collected (finalizer removed)
 			Eventually(func() bool {
-				inst := &openclawv1alpha1.OpenClawInstance{}
+				inst := &openclawv1.OpenClawInstance{}
 				err := k8sClient.Get(ctx, instanceKey, inst)
 				return err != nil // NotFound means fully deleted
 			}, timeout, interval).Should(BeTrue())
@@ -617,7 +617,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			instanceName := "ingress-nginx"
 			className := "nginx"
 
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
@@ -625,16 +625,16 @@ var _ = Describe("OpenClawInstance Controller", func() {
 						"openclaw.rocks/skip-backup": "true",
 					},
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Image: openclawv1alpha1.ImageSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Image: openclawv1.ImageSpec{
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
-					Networking: openclawv1alpha1.NetworkingSpec{
-						Ingress: openclawv1alpha1.IngressSpec{
+					Networking: openclawv1.NetworkingSpec{
+						Ingress: openclawv1.IngressSpec{
 							Enabled:   true,
 							ClassName: &className,
-							Hosts: []openclawv1alpha1.IngressHost{
+							Hosts: []openclawv1.IngressHost{
 								{Host: "test.example.com"},
 							},
 						},
@@ -669,7 +669,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			instanceName := "ingress-traefik"
 			className := "traefik"
 
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
@@ -677,16 +677,16 @@ var _ = Describe("OpenClawInstance Controller", func() {
 						"openclaw.rocks/skip-backup": "true",
 					},
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Image: openclawv1alpha1.ImageSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Image: openclawv1.ImageSpec{
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
-					Networking: openclawv1alpha1.NetworkingSpec{
-						Ingress: openclawv1alpha1.IngressSpec{
+					Networking: openclawv1.NetworkingSpec{
+						Ingress: openclawv1.IngressSpec{
 							Enabled:   true,
 							ClassName: &className,
-							Hosts: []openclawv1alpha1.IngressHost{
+							Hosts: []openclawv1.IngressHost{
 								{Host: "test.example.com"},
 							},
 						},
@@ -720,7 +720,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 
 			instanceName := "ingress-nil-class"
 
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
@@ -728,16 +728,16 @@ var _ = Describe("OpenClawInstance Controller", func() {
 						"openclaw.rocks/skip-backup": "true",
 					},
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Image: openclawv1alpha1.ImageSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Image: openclawv1.ImageSpec{
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
-					Networking: openclawv1alpha1.NetworkingSpec{
-						Ingress: openclawv1alpha1.IngressSpec{
+					Networking: openclawv1.NetworkingSpec{
+						Ingress: openclawv1.IngressSpec{
 							Enabled: true,
 							// ClassName intentionally nil
-							Hosts: []openclawv1alpha1.IngressHost{
+							Hosts: []openclawv1.IngressHost{
 								{Host: "test.example.com"},
 							},
 						},
@@ -795,7 +795,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 
 			instanceName := "custom-ports"
 
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
@@ -803,14 +803,14 @@ var _ = Describe("OpenClawInstance Controller", func() {
 						"openclaw.rocks/skip-backup": "true",
 					},
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Image: openclawv1alpha1.ImageSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Image: openclawv1.ImageSpec{
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
-					Networking: openclawv1alpha1.NetworkingSpec{
-						Service: openclawv1alpha1.ServiceSpec{
-							Ports: []openclawv1alpha1.ServicePortSpec{
+					Networking: openclawv1.NetworkingSpec{
+						Service: openclawv1.ServiceSpec{
+							Ports: []openclawv1.ServicePortSpec{
 								{Name: "http", Port: 3978},
 								{Name: "grpc", Port: 50051, TargetPort: resources.Ptr(int32(50051))},
 							},
@@ -890,7 +890,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			instanceName := "custom-ingress-port"
 			className := "nginx"
 
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
@@ -898,24 +898,24 @@ var _ = Describe("OpenClawInstance Controller", func() {
 						"openclaw.rocks/skip-backup": "true",
 					},
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Image: openclawv1alpha1.ImageSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Image: openclawv1.ImageSpec{
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
-					Networking: openclawv1alpha1.NetworkingSpec{
-						Service: openclawv1alpha1.ServiceSpec{
-							Ports: []openclawv1alpha1.ServicePortSpec{
+					Networking: openclawv1.NetworkingSpec{
+						Service: openclawv1.ServiceSpec{
+							Ports: []openclawv1.ServicePortSpec{
 								{Name: "http", Port: 3978},
 							},
 						},
-						Ingress: openclawv1alpha1.IngressSpec{
+						Ingress: openclawv1.IngressSpec{
 							Enabled:   true,
 							ClassName: &className,
-							Hosts: []openclawv1alpha1.IngressHost{
+							Hosts: []openclawv1.IngressHost{
 								{
 									Host: "aibot.example.com",
-									Paths: []openclawv1alpha1.IngressPath{
+									Paths: []openclawv1.IngressPath{
 										{
 											Path:     "/api/messages",
 											PathType: "Prefix",
@@ -984,7 +984,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			Expect(k8sClient.Create(ctx, tsSecret)).Should(Succeed())
 
 			// Create instance with Tailscale enabled
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
@@ -992,12 +992,12 @@ var _ = Describe("OpenClawInstance Controller", func() {
 						"openclaw.rocks/skip-backup": "true",
 					},
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Image: openclawv1alpha1.ImageSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Image: openclawv1.ImageSpec{
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
-					Tailscale: openclawv1alpha1.TailscaleSpec{
+					Tailscale: openclawv1.TailscaleSpec{
 						Enabled: true,
 						Mode:    "serve",
 						AuthKeySecretRef: &corev1.LocalObjectReference{
@@ -1174,7 +1174,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 
 			instanceName := "ollama-test"
 
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
@@ -1182,12 +1182,12 @@ var _ = Describe("OpenClawInstance Controller", func() {
 						"openclaw.rocks/skip-backup": "true",
 					},
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Image: openclawv1alpha1.ImageSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Image: openclawv1.ImageSpec{
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
-					Ollama: openclawv1alpha1.OllamaSpec{
+					Ollama: openclawv1.OllamaSpec{
 						Enabled: true,
 					},
 				},
@@ -1253,7 +1253,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 
 			instanceName := "chromium-test"
 
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
@@ -1261,12 +1261,12 @@ var _ = Describe("OpenClawInstance Controller", func() {
 						"openclaw.rocks/skip-backup": "true",
 					},
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Image: openclawv1alpha1.ImageSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Image: openclawv1.ImageSpec{
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
-					Chromium: openclawv1alpha1.ChromiumSpec{
+					Chromium: openclawv1.ChromiumSpec{
 						Enabled: true,
 					},
 				},
@@ -1406,7 +1406,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 
 			instanceName := "web-terminal-test"
 
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
@@ -1414,12 +1414,12 @@ var _ = Describe("OpenClawInstance Controller", func() {
 						"openclaw.rocks/skip-backup": "true",
 					},
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Image: openclawv1alpha1.ImageSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Image: openclawv1.ImageSpec{
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
-					WebTerminal: openclawv1alpha1.WebTerminalSpec{
+					WebTerminal: openclawv1.WebTerminalSpec{
 						Enabled: true,
 					},
 				},
@@ -1501,7 +1501,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 
 			instanceName := "npm-skills-test"
 
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
@@ -1509,8 +1509,8 @@ var _ = Describe("OpenClawInstance Controller", func() {
 						"openclaw.rocks/skip-backup": "true",
 					},
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Image: openclawv1alpha1.ImageSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Image: openclawv1.ImageSpec{
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
@@ -1581,7 +1581,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			// Disable all probes so the pod stays Running regardless of
 			// whether OpenClaw can fully start without API keys.
 			falseVal := false
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
@@ -1589,15 +1589,15 @@ var _ = Describe("OpenClawInstance Controller", func() {
 						"openclaw.rocks/skip-backup": "true",
 					},
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Image: openclawv1alpha1.ImageSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Image: openclawv1.ImageSpec{
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
-					Probes: &openclawv1alpha1.ProbesSpec{
-						Liveness:  &openclawv1alpha1.ProbeSpec{Enabled: &falseVal},
-						Readiness: &openclawv1alpha1.ProbeSpec{Enabled: &falseVal},
-						Startup:   &openclawv1alpha1.ProbeSpec{Enabled: &falseVal},
+					Probes: &openclawv1.ProbesSpec{
+						Liveness:  &openclawv1.ProbeSpec{Enabled: &falseVal},
+						Readiness: &openclawv1.ProbeSpec{Enabled: &falseVal},
+						Startup:   &openclawv1.ProbeSpec{Enabled: &falseVal},
 					},
 				},
 			}
@@ -1751,7 +1751,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			Expect(k8sClient.Create(ctx, externalCM)).Should(Succeed())
 
 			// Create instance referencing the external ConfigMap
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
@@ -1759,13 +1759,13 @@ var _ = Describe("OpenClawInstance Controller", func() {
 						"openclaw.rocks/skip-backup": "true",
 					},
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Image: openclawv1alpha1.ImageSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Image: openclawv1.ImageSpec{
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
-					Config: openclawv1alpha1.ConfigSpec{
-						ConfigMapRef: &openclawv1alpha1.ConfigMapKeySelector{
+					Config: openclawv1.ConfigSpec{
+						ConfigMapRef: &openclawv1.ConfigMapKeySelector{
 							Name: "my-external-config",
 						},
 					},
@@ -1831,14 +1831,14 @@ var _ = Describe("OpenClawInstance Controller", func() {
 		const hpaTestNs = "default"
 
 		It("Should create an HPA targeting the StatefulSet", func() {
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      hpaTestName,
 					Namespace: hpaTestNs,
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Availability: openclawv1alpha1.AvailabilitySpec{
-						AutoScaling: &openclawv1alpha1.AutoScalingSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Availability: openclawv1.AvailabilitySpec{
+						AutoScaling: &openclawv1.AutoScalingSpec{
 							Enabled:              resources.Ptr(true),
 							MinReplicas:          resources.Ptr(int32(1)),
 							MaxReplicas:          resources.Ptr(int32(3)),
@@ -1900,7 +1900,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 
 			instanceName := "selfcfg-e2e"
 
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
@@ -1908,16 +1908,16 @@ var _ = Describe("OpenClawInstance Controller", func() {
 						"openclaw.rocks/skip-backup": "true",
 					},
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Image: openclawv1alpha1.ImageSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Image: openclawv1.ImageSpec{
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
-					SelfConfigure: openclawv1alpha1.SelfConfigureSpec{
+					SelfConfigure: openclawv1.SelfConfigureSpec{
 						Enabled: true,
-						AllowedActions: []openclawv1alpha1.SelfConfigAction{
-							openclawv1alpha1.SelfConfigActionSkills,
-							openclawv1alpha1.SelfConfigActionConfig,
+						AllowedActions: []openclawv1.SelfConfigAction{
+							openclawv1.SelfConfigActionSkills,
+							openclawv1.SelfConfigActionConfig,
 						},
 					},
 				},
@@ -1927,7 +1927,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
 
 			// Verify the instance was created with selfConfigure preserved
-			created := &openclawv1alpha1.OpenClawInstance{}
+			created := &openclawv1.OpenClawInstance{}
 			Eventually(func() error {
 				return k8sClient.Get(ctx, types.NamespacedName{
 					Name:      instanceName,
@@ -1998,7 +1998,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				Skip("Skipping resource validation in minimal mode")
 			}
 
-			instance := &openclawv1alpha1.OpenClawInstance{
+			instance := &openclawv1.OpenClawInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      instanceName,
 					Namespace: namespace,
@@ -2006,8 +2006,8 @@ var _ = Describe("OpenClawInstance Controller", func() {
 						"openclaw.rocks/skip-backup": "true",
 					},
 				},
-				Spec: openclawv1alpha1.OpenClawInstanceSpec{
-					Image: openclawv1alpha1.ImageSpec{
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Image: openclawv1.ImageSpec{
 						Repository: "ghcr.io/openclaw/openclaw",
 						Tag:        "latest",
 					},
@@ -2056,7 +2056,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			}, timeout, interval).Should(BeTrue(), "StatefulSet should reflect updated env var")
 
 			// Verify ObservedGeneration matches instance generation
-			updatedInstance := &openclawv1alpha1.OpenClawInstance{}
+			updatedInstance := &openclawv1.OpenClawInstance{}
 			Eventually(func() bool {
 				if err := k8sClient.Get(ctx, types.NamespacedName{
 					Name:      instanceName,

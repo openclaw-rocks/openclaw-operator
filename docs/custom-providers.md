@@ -12,7 +12,7 @@ This guide covers common patterns for connecting OpenClaw to self-hosted or alte
 Run Ollama alongside OpenClaw in the same pod. This is the simplest option when you want local model inference without network hops.
 
 ```yaml
-apiVersion: openclaw.rocks/v1alpha1
+apiVersion: openclaw.rocks/v1
 kind: OpenClawInstance
 metadata:
   name: local-llm
@@ -88,7 +88,7 @@ spec:
 When Ollama runs as a separate Deployment or on bare metal, point OpenClaw to it via config and allow egress to the service.
 
 ```yaml
-apiVersion: openclaw.rocks/v1alpha1
+apiVersion: openclaw.rocks/v1
 kind: OpenClawInstance
 metadata:
   name: external-ollama
@@ -125,7 +125,7 @@ spec:
 [vLLM](https://docs.vllm.ai/) exposes an OpenAI-compatible API. Configure it the same way as Ollama:
 
 ```yaml
-apiVersion: openclaw.rocks/v1alpha1
+apiVersion: openclaw.rocks/v1
 kind: OpenClawInstance
 metadata:
   name: vllm-instance

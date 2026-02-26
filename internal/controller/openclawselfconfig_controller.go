@@ -32,7 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1 "github.com/openclawrocks/k8s-operator/api/v1"
 )
 
 const (
@@ -56,7 +56,7 @@ func (r *OpenClawSelfConfigReconciler) Reconcile(ctx context.Context, req ctrl.R
 	logger := log.FromContext(ctx)
 
 	// Fetch the SelfConfig resource
-	sc := &openclawv1alpha1.OpenClawSelfConfig{}
+	sc := &openclawv1.OpenClawSelfConfig{}
 	if err := r.Get(ctx, req.NamespacedName, sc); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
@@ -65,9 +65,9 @@ func (r *OpenClawSelfConfigReconciler) Reconcile(ctx context.Context, req ctrl.R
 	}
 
 	// Terminal phases - check TTL for cleanup
-	if sc.Status.Phase == openclawv1alpha1.SelfConfigPhaseApplied ||
-		sc.Status.Phase == openclawv1alpha1.SelfConfigPhaseFailed ||
-		sc.Status.Phase == openclawv1alpha1.SelfConfigPhaseDenied {
+	if sc.Status.Phase == openclawv1.SelfConfigPhaseApplied ||
+		sc.Status.Phase == openclawv1.SelfConfigPhaseFailed ||
+		sc.Status.Phase == openclawv1.SelfConfigPhaseDenied {
 		if sc.Status.CompletionTime != nil {
 			age := time.Since(sc.Status.CompletionTime.Time)
 			if age >= SelfConfigTTL {
@@ -84,10 +84,10 @@ func (r *OpenClawSelfConfigReconciler) Reconcile(ctx context.Context, req ctrl.R
 	}
 
 	// Fetch parent instance
-	instance := &openclawv1alpha1.OpenClawInstance{}
+	instance := &openclawv1.OpenClawInstance{}
 	if err := r.Get(ctx, types.NamespacedName{Name: sc.Spec.InstanceRef, Namespace: sc.Namespace}, instance); err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.setTerminalStatus(ctx, sc, openclawv1alpha1.SelfConfigPhaseFailed,
+			return r.setTerminalStatus(ctx, sc, openclawv1.SelfConfigPhaseFailed,
 				fmt.Sprintf("instance %q not found", sc.Spec.InstanceRef))
 		}
 		return ctrl.Result{}, err
@@ -95,14 +95,14 @@ func (r *OpenClawSelfConfigReconciler) Reconcile(ctx context.Context, req ctrl.R
 
 	// Validate self-configure is enabled
 	if !instance.Spec.SelfConfigure.Enabled {
-		return r.setTerminalStatus(ctx, sc, openclawv1alpha1.SelfConfigPhaseDenied,
+		return r.setTerminalStatus(ctx, sc, openclawv1.SelfConfigPhaseDenied,
 			"self-configure is not enabled on the target instance")
 	}
 
 	// Determine which actions the request uses
 	requestedActions := determineActions(sc)
 	if len(requestedActions) == 0 {
-		return r.setTerminalStatus(ctx, sc, openclawv1alpha1.SelfConfigPhaseFailed,
+		return r.setTerminalStatus(ctx, sc, openclawv1.SelfConfigPhaseFailed,
 			"request contains no actions")
 	}
 
@@ -111,13 +111,13 @@ func (r *OpenClawSelfConfigReconciler) Reconcile(ctx context.Context, req ctrl.R
 	if len(denied) > 0 {
 		msg := fmt.Sprintf("denied actions: %v", denied)
 		r.Recorder.Event(instance, "Warning", "SelfConfigDenied", msg)
-		return r.setTerminalStatus(ctx, sc, openclawv1alpha1.SelfConfigPhaseDenied, msg)
+		return r.setTerminalStatus(ctx, sc, openclawv1.SelfConfigPhaseDenied, msg)
 	}
 
 	// Apply changes to the parent instance with optimistic concurrency retry
 	applyErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		// Re-fetch instance on each retry to get latest resourceVersion
-		freshInstance := &openclawv1alpha1.OpenClawInstance{}
+		freshInstance := &openclawv1.OpenClawInstance{}
 		if err := r.Get(ctx, types.NamespacedName{Name: sc.Spec.InstanceRef, Namespace: sc.Namespace}, freshInstance); err != nil {
 			return err
 		}
@@ -125,15 +125,15 @@ func (r *OpenClawSelfConfigReconciler) Reconcile(ctx context.Context, req ctrl.R
 		// Apply each action type
 		for _, action := range requestedActions {
 			switch action {
-			case openclawv1alpha1.SelfConfigActionSkills:
+			case openclawv1.SelfConfigActionSkills:
 				applySkillChanges(freshInstance, sc)
-			case openclawv1alpha1.SelfConfigActionConfig:
+			case openclawv1.SelfConfigActionConfig:
 				if err := applyConfigPatch(freshInstance, sc); err != nil {
 					return err
 				}
-			case openclawv1alpha1.SelfConfigActionWorkspaceFiles:
+			case openclawv1.SelfConfigActionWorkspaceFiles:
 				applyWorkspaceFileChanges(freshInstance, sc)
-			case openclawv1alpha1.SelfConfigActionEnvVars:
+			case openclawv1.SelfConfigActionEnvVars:
 				if err := applyEnvVarChanges(freshInstance, sc); err != nil {
 					return err
 				}
@@ -145,7 +145,7 @@ func (r *OpenClawSelfConfigReconciler) Reconcile(ctx context.Context, req ctrl.R
 
 	if applyErr != nil {
 		logger.Error(applyErr, "failed to apply self-config changes")
-		return r.setTerminalStatus(ctx, sc, openclawv1alpha1.SelfConfigPhaseFailed,
+		return r.setTerminalStatus(ctx, sc, openclawv1.SelfConfigPhaseFailed,
 			fmt.Sprintf("failed to apply changes: %v", applyErr))
 	}
 
@@ -164,14 +164,14 @@ func (r *OpenClawSelfConfigReconciler) Reconcile(ctx context.Context, req ctrl.R
 	r.Recorder.Event(instance, "Normal", "SelfConfigApplied",
 		fmt.Sprintf("self-config request %q applied", sc.Name))
 
-	return r.setTerminalStatus(ctx, sc, openclawv1alpha1.SelfConfigPhaseApplied, "changes applied successfully")
+	return r.setTerminalStatus(ctx, sc, openclawv1.SelfConfigPhaseApplied, "changes applied successfully")
 }
 
 // setTerminalStatus updates the SelfConfig status to a terminal phase.
 func (r *OpenClawSelfConfigReconciler) setTerminalStatus(
 	ctx context.Context,
-	sc *openclawv1alpha1.OpenClawSelfConfig,
-	phase openclawv1alpha1.SelfConfigPhase,
+	sc *openclawv1.OpenClawSelfConfig,
+	phase openclawv1.SelfConfigPhase,
 	message string,
 ) (ctrl.Result, error) {
 	now := metav1.Now()
@@ -190,6 +190,6 @@ func (r *OpenClawSelfConfigReconciler) setTerminalStatus(
 // SetupWithManager sets up the controller with the Manager.
 func (r *OpenClawSelfConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&openclawv1alpha1.OpenClawSelfConfig{}).
+		For(&openclawv1.OpenClawSelfConfig{}).
 		Complete(r)
 }
