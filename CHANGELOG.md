@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.8](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.7...v0.10.8) (2026-02-26)
+
+
+### Features
+
+* **chromium:** add extraArgs and extraEnv fields to ChromiumSpec ([#187](https://github.com/openclaw-rocks/k8s-operator/issues/187)) ([2878482](https://github.com/openclaw-rocks/k8s-operator/commit/2878482029cf0d4f4f4976cacbb594c66bb8a339))
+* **chromium:** add extraArgs/extraEnv to ChromiumSpec, fix issues [#189](https://github.com/openclaw-rocks/k8s-operator/issues/189)-[#193](https://github.com/openclaw-rocks/k8s-operator/issues/193) ([#194](https://github.com/openclaw-rocks/k8s-operator/issues/194)) ([cba8d1a](https://github.com/openclaw-rocks/k8s-operator/commit/cba8d1a66c972a434d182fd80e815a44e6e79990))
+
 ## [0.10.7](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.6...v0.10.7) (2026-02-25)
 
 
