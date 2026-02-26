@@ -270,6 +270,26 @@ var _ = Describe("OpenClawSelfConfig Controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
 
+			// Wait for initial reconciliation (StatefulSet proves instance is indexed in cache)
+			Eventually(func() string {
+				err := k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName,
+					Namespace: namespace,
+				}, &appsv1.StatefulSet{})
+				if err == nil {
+					return "found"
+				}
+				inst := &openclawv1alpha1.OpenClawInstance{}
+				phase := "unknown"
+				if getErr := k8sClient.Get(ctx, types.NamespacedName{
+					Name: instanceName, Namespace: namespace,
+				}, inst); getErr == nil {
+					phase = inst.Status.Phase
+				}
+				return "not found (instance phase: " + phase + ")"
+			}, timeout, interval).Should(Equal("found"),
+				"StatefulSet should be created by reconcile")
+
 			// Create a self-config request for config (not in allowedActions)
 			sc := &openclawv1alpha1.OpenClawSelfConfig{
 				ObjectMeta: metav1.ObjectMeta{
