@@ -687,6 +687,26 @@ High availability and scheduling configuration.
 | `autoScaling.targetCPUUtilization` | `*int32`           | `80`    | Target average CPU utilization (percentage).             |
 | `autoScaling.targetMemoryUtilization` | `*int32`        | --      | Target average memory utilization (percentage).          |
 
+### spec.backup
+
+Configures periodic scheduled backups to S3-compatible storage. Requires the `s3-backup-credentials` Secret in the operator namespace and persistence to be enabled.
+
+| Field                | Type     | Default | Description                                                                                       |
+|----------------------|----------|---------|---------------------------------------------------------------------------------------------------|
+| `schedule`           | `string` | --      | Cron expression for periodic backups (e.g., `"0 2 * * *"` for daily at 2 AM). When set, the operator creates a CronJob that runs rclone to sync PVC data to S3. |
+| `historyLimit`       | `*int32` | `3`     | Number of successful CronJob runs to retain.                                                       |
+| `failedHistoryLimit` | `*int32` | `1`     | Number of failed CronJob runs to retain.                                                           |
+
+The CronJob mounts the PVC read-only (hot backup - no downtime) and uses pod affinity to schedule on the same node as the StatefulSet pod (required for RWO PVCs). Each run stores data under a unique timestamped path: `backups/<tenantId>/<instanceName>/periodic/<timestamp>`.
+
+```yaml
+spec:
+  backup:
+    schedule: "0 2 * * *"   # Daily at 2 AM UTC
+    historyLimit: 5          # Keep last 5 successful runs
+    failedHistoryLimit: 2    # Keep last 2 failed runs
+```
+
 ### spec.restoreFrom
 
 | Field         | Type     | Default | Description                                                                                       |
@@ -779,6 +799,7 @@ Standard `metav1.Condition` array. Condition types:
 | `StorageReady`        | PVC has been provisioned and is bound.                         |
 | `BackupComplete`      | The backup job completed successfully.                         |
 | `RestoreComplete`     | The restore job completed successfully.                        |
+| `ScheduledBackupReady`| The periodic backup CronJob is configured and ready.           |
 | `AutoUpdateAvailable` | A newer version is available in the OCI registry.              |
 | `SecretsReady`        | All referenced Secrets exist and are accessible.               |
 
@@ -820,6 +841,7 @@ Standard `metav1.Condition` array. Condition types:
 | `grafanaDashboardOperator` | `string` | Name of the operator overview dashboard ConfigMap. |
 | `grafanaDashboardInstance` | `string` | Name of the instance detail dashboard ConfigMap. |
 | `horizontalPodAutoscaler` | `string` | Name of the managed HorizontalPodAutoscaler. |
+| `backupCronJob`      | `string` | Name of the managed periodic backup CronJob. |
 
 ### status.backup and restore
 
@@ -880,8 +902,9 @@ All four keys are required. The operator uses rclone's S3 backend (`--s3-provide
 |---------|-----------|
 | **Pre-delete backup** | Always runs when a CR is deleted, unless `openclaw.rocks/skip-backup: "true"` annotation is set or persistence is disabled. |
 | **Pre-update backup** | Runs before each auto-update when `spec.autoUpdate.backupBeforeUpdate: true` (the default). |
+| **Periodic (scheduled)** | Runs on a cron schedule when `spec.backup.schedule` is set. See [Periodic scheduled backups](#periodic--scheduled-backups) below. |
 
-If the `s3-backup-credentials` Secret does not exist, both pre-delete and pre-update backups are silently skipped - deletion and updates proceed normally.
+If the `s3-backup-credentials` Secret does not exist, pre-delete and pre-update backups are silently skipped (deletion and updates proceed normally), and the periodic backup CronJob is not created (a `ScheduledBackupReady=False` condition is set with reason `S3CredentialsMissing`).
 
 ### Backup path format
 
@@ -920,9 +943,27 @@ To find available backups, list the S3 bucket directly (e.g., `aws s3 ls s3://my
 
 ### Periodic / scheduled backups
 
-Periodic scheduled backups are **not yet supported**. Currently backups run on two triggers only: instance deletion and pre-update. Track [issue #193](https://github.com/openclaw-rocks/k8s-operator/issues/193) for scheduled backup support.
+Set `spec.backup.schedule` to a cron expression to enable periodic backups:
 
-As a workaround, you can trigger a manual backup by annotating `openclaw.rocks/trigger-backup: "true"` -- see the status conditions to check for `BackupComplete`.
+```yaml
+spec:
+  backup:
+    schedule: "0 2 * * *"     # Daily at 2 AM UTC
+    historyLimit: 3            # Successful job runs to retain (default: 3)
+    failedHistoryLimit: 1      # Failed job runs to retain (default: 1)
+```
+
+The operator creates a Kubernetes CronJob (`<instance>-backup-periodic`) that:
+
+- Mounts the PVC **read-only** (hot backup - no downtime or StatefulSet scale-down)
+- Uses **pod affinity** to co-locate on the same node as the StatefulSet pod (required for RWO PVCs)
+- Stores each run under a unique timestamped path: `backups/<tenantId>/<instanceName>/periodic/<YYYYMMDDTHHMMSSz>`
+- Uses `ConcurrencyPolicy: Forbid` to prevent overlapping backup runs
+- Runs with the same rclone image and security context (UID/GID 1000) as on-delete backups
+
+**Requirements:** persistence must be enabled and the `s3-backup-credentials` Secret must exist. If either is missing, the CronJob is not created and a `ScheduledBackupReady=False` condition is set.
+
+**Removing the schedule:** set `spec.backup.schedule` to an empty string (or remove the `backup` section entirely) and the CronJob is automatically deleted.
 
 ---
 

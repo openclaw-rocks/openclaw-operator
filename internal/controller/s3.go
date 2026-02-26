@@ -23,9 +23,13 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
 	"github.com/openclawrocks/k8s-operator/internal/resources"
@@ -245,4 +249,231 @@ func (r *OpenClawInstanceReconciler) getJob(ctx context.Context, name, namespace
 		return nil, err
 	}
 	return job, nil
+}
+
+// backupCronJobName returns a deterministic name for the periodic backup CronJob
+func backupCronJobName(instance *openclawv1alpha1.OpenClawInstance) string {
+	return instance.Name + "-backup-periodic"
+}
+
+// buildBackupCronJob creates a batch/v1 CronJob for periodic S3 backups.
+// The CronJob mounts the PVC read-only and uses pod affinity to co-locate
+// on the same node as the StatefulSet pod (required for RWO PVCs).
+func buildBackupCronJob(
+	instance *openclawv1alpha1.OpenClawInstance,
+	creds *s3Credentials,
+) *batchv1.CronJob {
+	name := backupCronJobName(instance)
+	labels := backupLabels(instance, "periodic-backup")
+	pvcName := pvcNameForInstance(instance)
+	tenantID := getTenantID(instance)
+
+	historyLimit := int32(3)
+	if instance.Spec.Backup.HistoryLimit != nil {
+		historyLimit = *instance.Spec.Backup.HistoryLimit
+	}
+	failedHistoryLimit := int32(1)
+	if instance.Spec.Backup.FailedHistoryLimit != nil {
+		failedHistoryLimit = *instance.Spec.Backup.FailedHistoryLimit
+	}
+
+	backoffLimit := int32(3)
+	ttl := int32(86400) // 24h
+	gracePeriod := int64(30)
+
+	// Shell command: compute timestamped S3 path and run rclone sync
+	// Uses $(date) for unique path per run under periodic/ prefix
+	rcloneCmd := fmt.Sprintf(
+		`TIMESTAMP=$(date -u +%%Y%%m%%dT%%H%%M%%SZ) && `+
+			`rclone sync /data/ ":s3:%s/backups/%s/%s/periodic/${TIMESTAMP}" `+
+			`--s3-provider=Other `+
+			`--s3-endpoint="${S3_ENDPOINT}" `+
+			`--s3-access-key-id="${S3_ACCESS_KEY_ID}" `+
+			`--s3-secret-access-key="${S3_SECRET_ACCESS_KEY}" `+
+			`--transfers=8 --checkers=16 -v`,
+		creds.Bucket, tenantID, instance.Name,
+	)
+
+	return &batchv1.CronJob{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: instance.Namespace,
+			Labels:    labels,
+		},
+		Spec: batchv1.CronJobSpec{
+			Schedule:                   instance.Spec.Backup.Schedule,
+			ConcurrencyPolicy:          batchv1.ForbidConcurrent,
+			SuccessfulJobsHistoryLimit: &historyLimit,
+			FailedJobsHistoryLimit:     &failedHistoryLimit,
+			JobTemplate: batchv1.JobTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: labels,
+				},
+				Spec: batchv1.JobSpec{
+					BackoffLimit:            &backoffLimit,
+					TTLSecondsAfterFinished: &ttl,
+					Template: corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Labels: labels,
+						},
+						Spec: corev1.PodSpec{
+							RestartPolicy:                 corev1.RestartPolicyOnFailure,
+							DNSPolicy:                     corev1.DNSClusterFirst,
+							SchedulerName:                 "default-scheduler",
+							TerminationGracePeriodSeconds: &gracePeriod,
+							SecurityContext: &corev1.PodSecurityContext{
+								RunAsUser:  int64Ptr(1000),
+								RunAsGroup: int64Ptr(1000),
+								FSGroup:    int64Ptr(1000),
+							},
+							// Pod affinity: require scheduling on the same node as the
+							// StatefulSet pod so the RWO PVC can be mounted read-only.
+							Affinity: &corev1.Affinity{
+								PodAffinity: &corev1.PodAffinity{
+									RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{
+										{
+											LabelSelector: &metav1.LabelSelector{
+												MatchLabels: map[string]string{
+													"app.kubernetes.io/name":     "openclaw",
+													"app.kubernetes.io/instance": instance.Name,
+												},
+											},
+											TopologyKey: "kubernetes.io/hostname",
+										},
+									},
+								},
+							},
+							Containers: []corev1.Container{
+								{
+									Name:            "rclone",
+									Image:           RcloneImage,
+									ImagePullPolicy: corev1.PullIfNotPresent,
+									Command:         []string{"sh", "-c", rcloneCmd},
+									Env: []corev1.EnvVar{
+										{Name: "S3_ENDPOINT", Value: creds.Endpoint},
+										{Name: "S3_ACCESS_KEY_ID", Value: creds.KeyID},
+										{Name: "S3_SECRET_ACCESS_KEY", Value: creds.AppKey},
+									},
+									VolumeMounts: []corev1.VolumeMount{
+										{
+											Name:      "data",
+											MountPath: "/data",
+											ReadOnly:  true,
+										},
+									},
+									TerminationMessagePath:   "/dev/termination-log",
+									TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+								},
+							},
+							Volumes: []corev1.Volume{
+								{
+									Name: "data",
+									VolumeSource: corev1.VolumeSource{
+										PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+											ClaimName: pvcName,
+											ReadOnly:  true,
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// reconcileBackupCronJob creates or deletes the periodic backup CronJob based on spec.backup.schedule.
+func (r *OpenClawInstanceReconciler) reconcileBackupCronJob(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) error {
+	logger := log.FromContext(ctx)
+
+	// If no schedule is set, delete any existing CronJob and clear condition
+	if instance.Spec.Backup.Schedule == "" {
+		return r.cleanupBackupCronJob(ctx, instance)
+	}
+
+	// Check persistence is enabled
+	if instance.Spec.Storage.Persistence.Enabled != nil && !*instance.Spec.Storage.Persistence.Enabled {
+		logger.Info("Scheduled backup requested but persistence is disabled, skipping CronJob creation")
+		meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+			Type:               openclawv1alpha1.ConditionTypeScheduledBackupReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             "PersistenceDisabled",
+			Message:            "Periodic backups require persistence to be enabled",
+			ObservedGeneration: instance.Generation,
+		})
+		return r.cleanupBackupCronJob(ctx, instance)
+	}
+
+	// Get S3 credentials
+	creds, err := r.getS3Credentials(ctx)
+	if err != nil {
+		logger.Info("Scheduled backup requested but S3 credentials not found, skipping CronJob creation", "error", err)
+		meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+			Type:               openclawv1alpha1.ConditionTypeScheduledBackupReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             "S3CredentialsMissing",
+			Message:            "S3 credentials secret not found in operator namespace - create s3-backup-credentials Secret to enable periodic backups",
+			ObservedGeneration: instance.Generation,
+		})
+		return nil
+	}
+
+	// Build desired CronJob
+	desired := buildBackupCronJob(instance, creds)
+
+	// CreateOrUpdate the CronJob
+	obj := &batchv1.CronJob{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      backupCronJobName(instance),
+			Namespace: instance.Namespace,
+		},
+	}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, obj, func() error {
+		obj.Labels = desired.Labels
+		obj.Spec = desired.Spec
+		return controllerutil.SetControllerReference(instance, obj, r.Scheme)
+	}); err != nil {
+		return fmt.Errorf("failed to reconcile backup CronJob: %w", err)
+	}
+
+	instance.Status.ManagedResources.BackupCronJob = obj.Name
+
+	meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+		Type:               openclawv1alpha1.ConditionTypeScheduledBackupReady,
+		Status:             metav1.ConditionTrue,
+		Reason:             "CronJobReady",
+		Message:            fmt.Sprintf("Periodic backup CronJob %q created with schedule %q", obj.Name, instance.Spec.Backup.Schedule),
+		ObservedGeneration: instance.Generation,
+	})
+
+	logger.V(1).Info("Backup CronJob reconciled", "name", obj.Name, "schedule", instance.Spec.Backup.Schedule)
+	return nil
+}
+
+// cleanupBackupCronJob deletes the backup CronJob if it exists and clears status.
+func (r *OpenClawInstanceReconciler) cleanupBackupCronJob(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) error {
+	cronJob := &batchv1.CronJob{}
+	err := r.Get(ctx, client.ObjectKey{
+		Name:      backupCronJobName(instance),
+		Namespace: instance.Namespace,
+	}, cronJob)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			// Already gone, clear status
+			instance.Status.ManagedResources.BackupCronJob = ""
+			meta.RemoveStatusCondition(&instance.Status.Conditions, openclawv1alpha1.ConditionTypeScheduledBackupReady)
+			return nil
+		}
+		return fmt.Errorf("failed to get backup CronJob for cleanup: %w", err)
+	}
+
+	if err := r.Delete(ctx, cronJob); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete backup CronJob: %w", err)
+	}
+
+	instance.Status.ManagedResources.BackupCronJob = ""
+	meta.RemoveStatusCondition(&instance.Status.Conditions, openclawv1alpha1.ConditionTypeScheduledBackupReady)
+	return nil
 }
