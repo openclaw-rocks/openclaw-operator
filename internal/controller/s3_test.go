@@ -112,6 +112,12 @@ var _ = Describe("S3 Helpers", func() {
 				envNames = append(envNames, e.Name)
 			}
 			Expect(envNames).To(ContainElements("S3_ENDPOINT", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"))
+			Expect(envNames).NotTo(ContainElement("S3_REGION"))
+
+			// Verify no --s3-region flag when Region is empty
+			for _, arg := range container.Args {
+				Expect(arg).NotTo(HavePrefix("--s3-region"))
+			}
 		})
 
 		It("Should build a restore Job with S3 as source", func() {
@@ -131,6 +137,34 @@ var _ = Describe("S3 Helpers", func() {
 
 			vol := job.Spec.Template.Spec.Volumes[0]
 			Expect(vol.PersistentVolumeClaim.ClaimName).To(Equal("myinst-data"))
+		})
+
+		It("Should include --s3-region flag and S3_REGION env var when Region is set", func() {
+			creds.Region = "eu-west-1"
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "myinst",
+					Namespace: "oc-tenant-t1",
+				},
+			}
+			labels := backupLabels(instance, "backup")
+			job := buildRcloneJob("myinst-backup", "oc-tenant-t1", "myinst-data", "backups/t1/myinst/2026-01-01T000000Z", labels, creds, true)
+
+			container := job.Spec.Template.Spec.Containers[0]
+
+			// Verify --s3-region flag is present
+			Expect(container.Args).To(ContainElement("--s3-region=$(S3_REGION)"))
+
+			// Verify S3_REGION env var is present with correct value
+			var regionEnv *corev1.EnvVar
+			for i, e := range container.Env {
+				if e.Name == "S3_REGION" {
+					regionEnv = &container.Env[i]
+					break
+				}
+			}
+			Expect(regionEnv).NotTo(BeNil())
+			Expect(regionEnv.Value).To(Equal("eu-west-1"))
 		})
 	})
 

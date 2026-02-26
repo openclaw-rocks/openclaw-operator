@@ -616,6 +616,7 @@ stringData:
   S3_BUCKET: "my-openclaw-backups"
   S3_ACCESS_KEY_ID: "<key-id>"
   S3_SECRET_ACCESS_KEY: "<secret-key>"
+  # S3_REGION: "us-east-1"  # optional - needed for MinIO or providers with custom regions
 ```
 
 Compatible with AWS S3, Backblaze B2, Cloudflare R2, MinIO, Wasabi, and any S3-compatible API.

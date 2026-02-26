@@ -57,6 +57,7 @@ type s3Credentials struct {
 	KeyID    string
 	AppKey   string
 	Endpoint string
+	Region   string // optional - only needed for S3 providers with custom regions (e.g., MinIO)
 }
 
 // getTenantID extracts the tenant ID from the instance label or falls back to namespace
@@ -107,11 +108,15 @@ func (r *OpenClawInstanceReconciler) getS3Credentials(ctx context.Context) (*s3C
 		return nil, err
 	}
 
+	// S3_REGION is optional - only needed for providers with custom regions (e.g., MinIO)
+	region := string(secret.Data["S3_REGION"])
+
 	return &s3Credentials{
 		Bucket:   bucket,
 		KeyID:    keyID,
 		AppKey:   appKey,
 		Endpoint: endpoint,
+		Region:   region,
 	}, nil
 }
 
@@ -139,6 +144,19 @@ func buildRcloneJob(
 	} else {
 		// S3 -> PVC
 		args = []string{"sync", rcloneRemotePath, "/data/", "--s3-provider=Other", "--s3-endpoint=$(S3_ENDPOINT)", "--s3-access-key-id=$(S3_ACCESS_KEY_ID)", "--s3-secret-access-key=$(S3_SECRET_ACCESS_KEY)", "--transfers=8", "--checkers=16", "-v"}
+	}
+
+	if creds.Region != "" {
+		args = append(args, "--s3-region=$(S3_REGION)")
+	}
+
+	env := []corev1.EnvVar{
+		{Name: "S3_ENDPOINT", Value: creds.Endpoint},
+		{Name: "S3_ACCESS_KEY_ID", Value: creds.KeyID},
+		{Name: "S3_SECRET_ACCESS_KEY", Value: creds.AppKey},
+	}
+	if creds.Region != "" {
+		env = append(env, corev1.EnvVar{Name: "S3_REGION", Value: creds.Region})
 	}
 
 	return &batchv1.Job{
@@ -169,11 +187,7 @@ func buildRcloneJob(
 							Image:   RcloneImage,
 							Command: []string{"rclone"},
 							Args:    args,
-							Env: []corev1.EnvVar{
-								{Name: "S3_ENDPOINT", Value: creds.Endpoint},
-								{Name: "S3_ACCESS_KEY_ID", Value: creds.KeyID},
-								{Name: "S3_SECRET_ACCESS_KEY", Value: creds.AppKey},
-							},
+							Env:     env,
 							VolumeMounts: []corev1.VolumeMount{
 								{
 									Name:      "data",

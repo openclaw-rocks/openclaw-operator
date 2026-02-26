@@ -871,9 +871,18 @@ stringData:
   S3_BUCKET: "my-openclaw-backups"
   S3_ACCESS_KEY_ID: "<key-id>"
   S3_SECRET_ACCESS_KEY: "<secret-key>"
+  # S3_REGION: "us-east-1"  # optional - see below
 ```
 
-All four keys are required. The operator uses rclone's S3 backend (`--s3-provider=Other`), which is compatible with AWS S3, Backblaze B2, MinIO, Cloudflare R2, Wasabi, and any other S3-compatible service.
+The first four keys are required. The operator uses rclone's S3 backend (`--s3-provider=Other`), which is compatible with AWS S3, Backblaze B2, MinIO, Cloudflare R2, Wasabi, and any other S3-compatible service.
+
+| Key | Required | Description |
+|-----|----------|-------------|
+| `S3_ENDPOINT` | Yes | S3-compatible endpoint URL (e.g., `https://s3.us-east-1.amazonaws.com`) |
+| `S3_BUCKET` | Yes | Bucket name for backups |
+| `S3_ACCESS_KEY_ID` | Yes | Access key ID |
+| `S3_SECRET_ACCESS_KEY` | Yes | Secret access key |
+| `S3_REGION` | No | S3 region (e.g., `us-east-1`). Required for MinIO instances configured with a custom region. Without this, rclone defaults to `us-east-1`, which causes authentication failures on providers using a different region. |
 
 ### When backups run automatically
 
