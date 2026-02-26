@@ -17,7 +17,7 @@ limitations under the License.
 package resources
 
 import (
-	"crypto/sha1" // #nosec G401 -- htpasswd {SHA} format requires SHA-1; this is not a security-sensitive use
+	"crypto/sha1" // #nosec G505 -- htpasswd {SHA} format requires SHA-1; this is not a security-sensitive use
 	"encoding/base64"
 	"fmt"
 
@@ -30,7 +30,7 @@ import (
 // HtpasswdEntry returns a single htpasswd line in {SHA} format for the given username and password.
 // {SHA} uses base64-encoded SHA-1 and is widely supported by nginx-ingress and other ingress controllers.
 func HtpasswdEntry(username, password string) string {
-	// #nosec G401 -- htpasswd {SHA} format requires SHA-1
+	// #nosec G505 -- htpasswd {SHA} format requires SHA-1
 	h := sha1.New()
 	h.Write([]byte(password))
 	digest := base64.StdEncoding.EncodeToString(h.Sum(nil))
@@ -40,7 +40,7 @@ func HtpasswdEntry(username, password string) string {
 // BuildBasicAuthSecret creates a Secret containing htpasswd content for Ingress Basic Authentication.
 // The Secret holds an "auth" key whose value is an htpasswd-formatted line.
 func BuildBasicAuthSecret(instance *openclawv1alpha1.OpenClawInstance, password string) *corev1.Secret {
-	username := "openclaw"
+	username := AppName
 	if instance.Spec.Networking.Ingress.Security.BasicAuth != nil &&
 		instance.Spec.Networking.Ingress.Security.BasicAuth.Username != "" {
 		username = instance.Spec.Networking.Ingress.Security.BasicAuth.Username
