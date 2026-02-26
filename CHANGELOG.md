@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.11](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.10...v0.10.11) (2026-02-26)
+
+
+### Bug Fixes
+
+* store plaintext username and password in auto-generated basic auth secret ([#208](https://github.com/openclaw-rocks/k8s-operator/issues/208)) ([179b4a6](https://github.com/openclaw-rocks/k8s-operator/commit/179b4a60b94cf2e7fae5ddb293c9bfcc534f40ea)), closes [#201](https://github.com/openclaw-rocks/k8s-operator/issues/201)
+
 ## [0.10.10](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.9...v0.10.10) (2026-02-26)
 
 
