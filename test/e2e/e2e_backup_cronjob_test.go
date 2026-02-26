@@ -72,6 +72,20 @@ var _ = Describe("Periodic Backup CronJob", func() {
 		})
 
 		AfterEach(func() {
+			// Clean up the S3 credentials Secret so other tests that expect
+			// "no S3 credentials" are not affected by our setup.
+			operatorNS := os.Getenv("OPERATOR_NAMESPACE")
+			if operatorNS == "" {
+				operatorNS = "openclaw-operator-system"
+			}
+			secret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "s3-backup-credentials",
+					Namespace: operatorNS,
+				},
+			}
+			_ = k8sClient.Delete(ctx, secret)
+
 			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
 			_ = k8sClient.Delete(ctx, ns)
 		})
