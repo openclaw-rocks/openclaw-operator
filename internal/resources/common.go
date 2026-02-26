@@ -205,6 +205,11 @@ func GatewayTokenSecretName(instance *openclawv1alpha1.OpenClawInstance) string 
 	return instance.Name + "-gateway-token"
 }
 
+// BasicAuthSecretName returns the name of the auto-generated Ingress Basic Auth Secret
+func BasicAuthSecretName(instance *openclawv1alpha1.OpenClawInstance) string {
+	return instance.Name + "-basic-auth"
+}
+
 // GetImageRepository returns the image repository with defaults
 func GetImageRepository(instance *openclawv1alpha1.OpenClawInstance) string {
 	if instance.Spec.Image.Repository != "" {

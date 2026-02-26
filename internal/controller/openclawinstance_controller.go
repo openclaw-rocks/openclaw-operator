@@ -39,6 +39,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -966,7 +967,7 @@ func (r *OpenClawInstanceReconciler) reconcileService(ctx context.Context, insta
 	return nil
 }
 
-// reconcileIngress reconciles the Ingress
+// reconcileIngress reconciles the Ingress and its supporting resources (basic auth Secret, Traefik Middleware).
 func (r *OpenClawInstanceReconciler) reconcileIngress(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) error {
 	if !instance.Spec.Networking.Ingress.Enabled {
 		// Delete existing Ingress if it exists
@@ -977,6 +978,18 @@ func (r *OpenClawInstanceReconciler) reconcileIngress(ctx context.Context, insta
 			return err
 		}
 		return nil
+	}
+
+	// Reconcile Basic Auth Secret (before Ingress so the annotation reference is valid)
+	if err := r.reconcileBasicAuthSecret(ctx, instance); err != nil {
+		return fmt.Errorf("failed to reconcile basic auth secret: %w", err)
+	}
+
+	// Reconcile Traefik BasicAuth Middleware (no-op if not Traefik or basic auth disabled)
+	if err := r.reconcileTraefikBasicAuthMiddleware(ctx, instance); err != nil {
+		// Non-fatal: Traefik CRD may not be installed; log a warning but continue
+		logger := log.FromContext(ctx)
+		logger.Info("Could not reconcile Traefik BasicAuth Middleware (CRD may not be installed)", "error", err.Error())
 	}
 
 	ingress := &networkingv1.Ingress{
@@ -995,6 +1008,111 @@ func (r *OpenClawInstanceReconciler) reconcileIngress(ctx context.Context, insta
 		return err
 	}
 
+	return nil
+}
+
+// reconcileBasicAuthSecret ensures the htpasswd Secret for Ingress Basic Auth exists.
+// If spec.networking.ingress.security.basicAuth.existingSecret is set, no secret is created.
+// Otherwise a random 20-byte password is generated once and stored in a managed Secret.
+func (r *OpenClawInstanceReconciler) reconcileBasicAuthSecret(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) error {
+	ba := instance.Spec.Networking.Ingress.Security.BasicAuth
+	if ba == nil {
+		return nil
+	}
+	enabled := ba.Enabled == nil || *ba.Enabled
+	if !enabled {
+		return nil
+	}
+	// User provided their own secret - nothing to generate
+	if ba.ExistingSecret != "" {
+		instance.Status.ManagedResources.BasicAuthSecret = ba.ExistingSecret
+		return nil
+	}
+
+	secretName := resources.BasicAuthSecretName(instance)
+	existing := &corev1.Secret{}
+	err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: instance.Namespace}, existing)
+	if err == nil {
+		instance.Status.ManagedResources.BasicAuthSecret = existing.Name
+		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("failed to get basic auth secret: %w", err)
+	}
+
+	// Generate a random 20-byte password
+	pwdBytes := make([]byte, 20)
+	if _, err := rand.Read(pwdBytes); err != nil {
+		return fmt.Errorf("failed to generate basic auth password: %w", err)
+	}
+	password := hex.EncodeToString(pwdBytes)
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: instance.Namespace,
+		},
+	}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
+		desired := resources.BuildBasicAuthSecret(instance, password)
+		secret.Labels = desired.Labels
+		if secret.Data == nil {
+			secret.Data = desired.Data
+		}
+		return controllerutil.SetControllerReference(instance, secret, r.Scheme)
+	}); err != nil {
+		return fmt.Errorf("failed to create basic auth secret: %w", err)
+	}
+
+	instance.Status.ManagedResources.BasicAuthSecret = secret.Name
+	r.Recorder.Event(instance, corev1.EventTypeNormal, "BasicAuthSecretCreated",
+		"Auto-generated Ingress Basic Auth htpasswd Secret")
+	return nil
+}
+
+// reconcileTraefikBasicAuthMiddleware creates a Traefik Middleware CRD instance for BasicAuth
+// when the ingress class is Traefik and basic auth is enabled.
+// Uses unstructured so the operator doesn't require the Traefik CRDs to be installed to build/run.
+func (r *OpenClawInstanceReconciler) reconcileTraefikBasicAuthMiddleware(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) error {
+	ba := instance.Spec.Networking.Ingress.Security.BasicAuth
+	if ba == nil {
+		return nil
+	}
+	enabled := ba.Enabled == nil || *ba.Enabled
+	if !enabled {
+		return nil
+	}
+	if resources.DetectIngressProvider(instance.Spec.Networking.Ingress.ClassName) != resources.IngressProviderTraefik {
+		return nil
+	}
+
+	secretName := resources.BasicAuthSecretName(instance)
+	if ba.ExistingSecret != "" {
+		secretName = ba.ExistingSecret
+	}
+
+	middlewareName := instance.Name + "-basic-auth"
+	mw := &unstructured.Unstructured{}
+	mw.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "traefik.io",
+		Version: "v1alpha1",
+		Kind:    "Middleware",
+	})
+	mw.SetName(middlewareName)
+	mw.SetNamespace(instance.Namespace)
+
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, mw, func() error {
+		mw.Object["spec"] = map[string]interface{}{
+			"basicAuth": map[string]interface{}{
+				"secret": secretName,
+			},
+		}
+		labels := resources.Labels(instance)
+		mw.SetLabels(labels)
+		return controllerutil.SetControllerReference(instance, mw, r.Scheme)
+	}); err != nil {
+		return err
+	}
 	return nil
 }
 

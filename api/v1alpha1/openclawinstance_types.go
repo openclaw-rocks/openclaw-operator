@@ -101,6 +101,7 @@ type OpenClawInstanceSpec struct {
 
 	// Probes configures health probes for the OpenClaw container
 	// +optional
+	// +nullable
 	Probes *ProbesSpec `json:"probes,omitempty"`
 
 	// Observability configures metrics and logging
@@ -433,6 +434,14 @@ type PersistenceSpec struct {
 	// ExistingClaim is the name of an existing PVC to use
 	// +optional
 	ExistingClaim string `json:"existingClaim,omitempty"`
+
+	// Orphan controls whether the PVC is retained when the OpenClawInstance is deleted.
+	// When true (the default), the operator removes the owner reference from the PVC
+	// before deleting the CR so Kubernetes does not garbage-collect it.
+	// Set to false if you want the PVC deleted together with the CR.
+	// +kubebuilder:default=true
+	// +optional
+	Orphan *bool `json:"orphan,omitempty"`
 }
 
 // ChromiumSpec defines the Chromium sidecar configuration
@@ -793,6 +802,38 @@ type IngressSecuritySpec struct {
 	// RateLimiting configures rate limiting
 	// +optional
 	RateLimiting *RateLimitingSpec `json:"rateLimiting,omitempty"`
+
+	// BasicAuth configures HTTP Basic Authentication for the Ingress.
+	// Disabled by default. When enabled without an existingSecret, the operator
+	// auto-generates a random password and stores it in a managed Secret.
+	// +optional
+	BasicAuth *IngressBasicAuthSpec `json:"basicAuth,omitempty"`
+}
+
+// IngressBasicAuthSpec configures HTTP Basic Authentication for the Ingress.
+type IngressBasicAuthSpec struct {
+	// Enabled enables basic authentication.
+	// +kubebuilder:default=false
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// ExistingSecret is the name of an existing Secret that already contains
+	// htpasswd-formatted content in a key named "auth".
+	// When set, the operator uses this Secret instead of generating one.
+	// +optional
+	ExistingSecret string `json:"existingSecret,omitempty"`
+
+	// Username for the auto-generated htpasswd Secret.
+	// Ignored when existingSecret is set.
+	// +kubebuilder:default="openclaw"
+	// +kubebuilder:validation:MaxLength=64
+	// +optional
+	Username string `json:"username,omitempty"`
+
+	// Realm is the authentication realm shown in browser prompts.
+	// +kubebuilder:default="OpenClaw"
+	// +optional
+	Realm string `json:"realm,omitempty"`
 }
 
 // RateLimitingSpec defines rate limiting configuration
@@ -1239,6 +1280,10 @@ type ManagedResourcesStatus struct {
 	// HorizontalPodAutoscaler is the name of the managed HPA
 	// +optional
 	HorizontalPodAutoscaler string `json:"horizontalPodAutoscaler,omitempty"`
+
+	// BasicAuthSecret is the name of the auto-generated Ingress Basic Auth htpasswd Secret
+	// +optional
+	BasicAuthSecret string `json:"basicAuthSecret,omitempty"`
 }
 
 // +kubebuilder:object:root=true

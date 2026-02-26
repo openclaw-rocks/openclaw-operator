@@ -1,6 +1,6 @@
 # Roadmap
 
-> Current version: **0.9.x** — tracking toward 1.0 stable release.
+> Current version: **0.10.x** -- tracking toward 1.0 stable release.
 
 ## Shipped
 
@@ -49,17 +49,16 @@
 
 ## Planned
 
+### v0.11.0
+- Topology spread constraints (`spec.availability.topologySpreadConstraints`)
+- Operator SDK scorecard compliance (config + CI job)
+- Performance benchmarks for reconciliation and resource builders
+
 ### v1.0.0 (Stable)
-- API graduation to `v1`
-- Comprehensive conformance test suite
-- Performance benchmarks and optimization
-- Operator SDK scorecard compliance
+- API graduation to `v1` (clean break from `v1alpha1`)
+- Comprehensive conformance test suite (negative tests, idempotency, upgrade paths, coverage matrix)
 
 ### Future
 - Multi-cluster federation
-- GitOps-native configuration management
-- Advanced scheduling (topology spread constraints)
-- Certificate management integration (cert-manager)
 - AI provider health monitoring
 - Cost optimization recommendations
-- Multi-tenancy support

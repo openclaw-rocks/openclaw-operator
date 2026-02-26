@@ -424,6 +424,31 @@ The operator validates the request, applies it to the parent `OpenClawInstance`,
 
 See the [API reference](docs/api-reference.md) for the full `OpenClawSelfConfig` CRD spec and `spec.selfConfigure` fields.
 
+### Persistent storage
+
+By default the operator creates a 10Gi PVC and retains it when the CR is deleted (orphan behavior). Override size, storage class, or retention:
+
+```yaml
+spec:
+  storage:
+    persistence:
+      size: 20Gi
+      storageClass: fast-ssd
+      orphan: true   # default -- PVC is RETAINED when the CR is deleted
+      # orphan: false  -- PVC is deleted with the CR (garbage collected)
+```
+
+To reuse an existing PVC (e.g., after restoring from a backup):
+
+```yaml
+spec:
+  storage:
+    persistence:
+      existingClaim: my-agent-data
+```
+
+> **Retention is stateful data protection.** Because agent workspaces contain irreplaceable data such as memory, notebooks, and conversation history, the default is `orphan: true`. To re-attach a retained PVC to a new instance, set `existingClaim` to its name.
+
 ### Runtime dependencies
 
 Enable built-in init containers that install pnpm or Python/uv to the data PVC for MCP servers and skills:
@@ -476,6 +501,39 @@ spec:
     - name: shared-data
       mountPath: /shared
 ```
+
+### Ingress Basic Auth
+
+Add HTTP Basic Authentication to the Ingress. The operator auto-generates a random password and stores it in a managed Secret:
+
+```yaml
+spec:
+  networking:
+    ingress:
+      enabled: true
+      className: nginx
+      hosts:
+        - host: my-agent.example.com
+      security:
+        basicAuth:
+          enabled: true
+          username: admin          # default: "openclaw"
+          realm: "My Agent"        # default: "OpenClaw"
+```
+
+The generated htpasswd Secret is named `<name>-basic-auth` and tracked in `status.managedResources.basicAuthSecret`. To use your own credentials, provide a pre-formatted htpasswd Secret:
+
+```yaml
+spec:
+  networking:
+    ingress:
+      security:
+        basicAuth:
+          enabled: true
+          existingSecret: my-htpasswd-secret  # must contain key "auth"
+```
+
+For Traefik ingress, a `Middleware` CRD resource is created automatically (requires Traefik CRDs installed).
 
 ### Custom service ports
 
@@ -542,6 +600,46 @@ When enabled, the operator resolves `latest` to the highest stable semver tag on
 Safety mechanisms include failed-version tracking (skips versions that failed health checks), a circuit breaker (pauses after 3 consecutive rollbacks), and full data restore when `backupBeforeUpdate` is enabled. Auto-update is a no-op for digest-pinned images (`spec.image.digest`).
 
 See `status.autoUpdate` for update progress: `kubectl get openclawinstance my-agent -o jsonpath='{.status.autoUpdate}'`
+
+### Backup and restore
+
+The operator uses [rclone](https://rclone.org/) to back up and restore PVC data to/from S3-compatible storage. All backup operations require a Secret named `s3-backup-credentials` in the **operator namespace**:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: s3-backup-credentials
+  namespace: openclaw-operator-system
+stringData:
+  S3_ENDPOINT: "https://s3.us-east-1.amazonaws.com"
+  S3_BUCKET: "my-openclaw-backups"
+  S3_ACCESS_KEY_ID: "<key-id>"
+  S3_SECRET_ACCESS_KEY: "<secret-key>"
+```
+
+Compatible with AWS S3, Backblaze B2, Cloudflare R2, MinIO, Wasabi, and any S3-compatible API.
+
+**When backups run automatically:**
+
+- **On delete** - the operator backs up the PVC before removing any resources. Add the annotation `openclaw.rocks/skip-backup: "true"` to skip and delete immediately.
+- **Before auto-update** - when `spec.autoUpdate.backupBeforeUpdate: true` (the default).
+
+If the Secret does not exist, backups are silently skipped and operations proceed normally.
+
+**Restoring from backup:**
+
+```yaml
+spec:
+  # Path recorded in status.lastBackupPath of the source instance
+  restoreFrom: "backups/my-tenant/my-agent/2026-01-15T10:30:00Z"
+```
+
+The operator runs a restore job to populate the PVC before starting the StatefulSet, then clears `restoreFrom` automatically. Backup paths follow the format `backups/<tenantId>/<instanceName>/<timestamp>`.
+
+> **Note:** Periodic scheduled backups are not yet supported. Backups run on deletion and pre-update only.
+
+For full details see the [Backup and Restore section](docs/api-reference.md#backup-and-restore) in the API reference.
 
 ### What the operator manages automatically
 

@@ -17,11 +17,45 @@ limitations under the License.
 package resources
 
 import (
+	"crypto/sha1" // #nosec G401 -- htpasswd {SHA} format requires SHA-1; this is not a security-sensitive use
+	"encoding/base64"
+	"fmt"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
 )
+
+// HtpasswdEntry returns a single htpasswd line in {SHA} format for the given username and password.
+// {SHA} uses base64-encoded SHA-1 and is widely supported by nginx-ingress and other ingress controllers.
+func HtpasswdEntry(username, password string) string {
+	// #nosec G401 -- htpasswd {SHA} format requires SHA-1
+	h := sha1.New()
+	h.Write([]byte(password))
+	digest := base64.StdEncoding.EncodeToString(h.Sum(nil))
+	return fmt.Sprintf("%s:{SHA}%s", username, digest)
+}
+
+// BuildBasicAuthSecret creates a Secret containing htpasswd content for Ingress Basic Authentication.
+// The Secret holds an "auth" key whose value is an htpasswd-formatted line.
+func BuildBasicAuthSecret(instance *openclawv1alpha1.OpenClawInstance, password string) *corev1.Secret {
+	username := "openclaw"
+	if instance.Spec.Networking.Ingress.Security.BasicAuth != nil &&
+		instance.Spec.Networking.Ingress.Security.BasicAuth.Username != "" {
+		username = instance.Spec.Networking.Ingress.Security.BasicAuth.Username
+	}
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      BasicAuthSecretName(instance),
+			Namespace: instance.Namespace,
+			Labels:    Labels(instance),
+		},
+		Data: map[string][]byte{
+			"auth": []byte(HtpasswdEntry(username, password)),
+		},
+	}
+}
 
 // BuildGatewayTokenSecret creates a Secret containing the gateway authentication token.
 // The token is used to configure gateway.auth.mode=token so that Bonjour/mDNS pairing

@@ -8420,3 +8420,116 @@ func TestBuildNetworkPolicy_DefaultUsesProxyPorts(t *testing.T) {
 		t.Errorf("NetworkPolicy should allow port %d (canvas proxy)", CanvasProxyPort)
 	}
 }
+
+func TestHtpasswdEntry_Format(t *testing.T) {
+	entry := HtpasswdEntry("admin", "secret")
+	if !strings.HasPrefix(entry, "admin:{SHA}") {
+		t.Errorf("htpasswd entry should start with 'admin:{SHA}', got %q", entry)
+	}
+}
+
+func TestBuildBasicAuthSecret(t *testing.T) {
+	instance := newTestInstance("ba-test")
+	instance.Spec.Networking.Ingress.Security.BasicAuth = &openclawv1alpha1.IngressBasicAuthSpec{
+		Username: "testuser",
+	}
+	secret := BuildBasicAuthSecret(instance, "mypassword")
+
+	if secret.Name != BasicAuthSecretName(instance) {
+		t.Errorf("secret name = %q, want %q", secret.Name, BasicAuthSecretName(instance))
+	}
+	auth, ok := secret.Data["auth"]
+	if !ok {
+		t.Fatal("secret missing 'auth' key")
+	}
+	if !strings.HasPrefix(string(auth), "testuser:{SHA}") {
+		t.Errorf("auth value should start with 'testuser:{SHA}', got %q", string(auth))
+	}
+}
+
+func TestBuildIngress_BasicAuth_Nginx(t *testing.T) {
+	enabled := true
+	nginxClass := "nginx"
+	instance := newTestInstance("ba-nginx")
+	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+		Enabled:   true,
+		ClassName: &nginxClass,
+		Hosts:     []openclawv1alpha1.IngressHost{{Host: "test.example.com"}},
+		Security: openclawv1alpha1.IngressSecuritySpec{
+			ForceHTTPS: &enabled,
+			EnableHSTS: Ptr(false),
+			BasicAuth: &openclawv1alpha1.IngressBasicAuthSpec{
+				Enabled:  &enabled,
+				Username: "admin",
+				Realm:    "My Realm",
+			},
+		},
+	}
+
+	ing := BuildIngress(instance)
+	anns := ing.Annotations
+
+	if anns["nginx.ingress.kubernetes.io/auth-type"] != "basic" {
+		t.Errorf("auth-type annotation = %q, want %q", anns["nginx.ingress.kubernetes.io/auth-type"], "basic")
+	}
+	if anns["nginx.ingress.kubernetes.io/auth-secret"] != BasicAuthSecretName(instance) {
+		t.Errorf("auth-secret annotation = %q, want %q", anns["nginx.ingress.kubernetes.io/auth-secret"], BasicAuthSecretName(instance))
+	}
+	if anns["nginx.ingress.kubernetes.io/auth-realm"] != "My Realm" {
+		t.Errorf("auth-realm annotation = %q, want %q", anns["nginx.ingress.kubernetes.io/auth-realm"], "My Realm")
+	}
+}
+
+func TestBuildIngress_BasicAuth_ExistingSecret(t *testing.T) {
+	enabled := true
+	nginxClass := "nginx"
+	instance := newTestInstance("ba-existing")
+	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+		Enabled:   true,
+		ClassName: &nginxClass,
+		Hosts:     []openclawv1alpha1.IngressHost{{Host: "test.example.com"}},
+		Security: openclawv1alpha1.IngressSecuritySpec{
+			BasicAuth: &openclawv1alpha1.IngressBasicAuthSpec{
+				Enabled:        &enabled,
+				ExistingSecret: "my-custom-auth",
+			},
+		},
+	}
+
+	ing := BuildIngress(instance)
+	anns := ing.Annotations
+
+	if anns["nginx.ingress.kubernetes.io/auth-secret"] != "my-custom-auth" {
+		t.Errorf("auth-secret annotation = %q, want %q", anns["nginx.ingress.kubernetes.io/auth-secret"], "my-custom-auth")
+	}
+}
+
+func TestBuildIngress_BasicAuth_Traefik(t *testing.T) {
+	enabled := true
+	traefikClass := "traefik"
+	instance := newTestInstance("ba-traefik")
+	instance.Namespace = "myns"
+	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+		Enabled:   true,
+		ClassName: &traefikClass,
+		Hosts:     []openclawv1alpha1.IngressHost{{Host: "test.example.com"}},
+		Security: openclawv1alpha1.IngressSecuritySpec{
+			BasicAuth: &openclawv1alpha1.IngressBasicAuthSpec{
+				Enabled: &enabled,
+			},
+		},
+	}
+
+	ing := BuildIngress(instance)
+	anns := ing.Annotations
+
+	expectedMiddleware := "myns-ba-traefik-basic-auth@kubernetescrd"
+	if anns["traefik.ingress.kubernetes.io/router.middlewares"] != expectedMiddleware {
+		t.Errorf("traefik middleware annotation = %q, want %q",
+			anns["traefik.ingress.kubernetes.io/router.middlewares"], expectedMiddleware)
+	}
+	// Should not have nginx auth annotations
+	if anns["nginx.ingress.kubernetes.io/auth-type"] != "" {
+		t.Errorf("nginx auth-type should be empty for Traefik, got %q", anns["nginx.ingress.kubernetes.io/auth-type"])
+	}
+}

@@ -213,6 +213,7 @@ Persistent storage configuration.
 | `size`          | `string`                        | `10Gi`             | PVC size.                                            |
 | `accessModes`   | `[]PersistentVolumeAccessMode`  | `[ReadWriteOnce]`  | PVC access modes.                                    |
 | `existingClaim` | `string`                        | --                 | Name of an existing PVC to use instead of creating one. |
+| `orphan`        | `*bool`                         | `true`             | When `true` (the default), the operator removes the owner reference from the managed PVC before deleting the CR so the PVC is **retained** after deletion. Set to `false` to have the PVC garbage-collected with the CR. Has no effect when `existingClaim` is set (user-managed PVCs are never touched). |
 
 ### spec.chromium
 
@@ -545,12 +546,40 @@ networking:
 
 **IngressSecuritySpec:**
 
-| Field                       | Type     | Default | Description                                    |
-|-----------------------------|----------|---------|------------------------------------------------|
-| `forceHTTPS`                | `*bool`  | `true`  | Redirect HTTP to HTTPS.                        |
-| `enableHSTS`                | `*bool`  | `true`  | Add HSTS headers.                              |
-| `rateLimiting.enabled`      | `*bool`  | `true`  | Enable rate limiting.                          |
-| `rateLimiting.requestsPerSecond` | `*int32` | `10` | Maximum requests per second.              |
+| Field                            | Type                      | Default | Description                                    |
+|----------------------------------|---------------------------|---------|------------------------------------------------|
+| `forceHTTPS`                     | `*bool`                   | `true`  | Redirect HTTP to HTTPS.                        |
+| `enableHSTS`                     | `*bool`                   | `true`  | Add HSTS headers.                              |
+| `rateLimiting.enabled`           | `*bool`                   | `true`  | Enable rate limiting.                          |
+| `rateLimiting.requestsPerSecond` | `*int32`                  | `10`    | Maximum requests per second.                   |
+| `basicAuth`                      | `*IngressBasicAuthSpec`   | --      | Optional HTTP Basic Authentication. See below. |
+
+**IngressBasicAuthSpec:**
+
+| Field            | Type     | Default     | Description                                                                                       |
+|------------------|----------|-------------|---------------------------------------------------------------------------------------------------|
+| `enabled`        | `*bool`  | `false`     | Enable HTTP Basic Authentication on the Ingress.                                                  |
+| `existingSecret` | `string` | --          | Name of an existing Secret containing htpasswd content in a key named `auth`. When set, no new Secret is generated. |
+| `username`       | `string` | `openclaw`  | Username for the auto-generated htpasswd Secret. Ignored when `existingSecret` is set.            |
+| `realm`          | `string` | `OpenClaw`  | Authentication realm shown in browser prompts.                                                    |
+
+When `enabled: true` and no `existingSecret` is provided, the operator:
+- Generates a random 40-hex-character password
+- Creates a `<name>-basic-auth` Secret with an htpasswd-formatted `auth` key
+- Tracks the secret name in `status.managedResources.basicAuthSecret`
+
+**nginx-ingress:** The `auth-type`, `auth-secret`, and `auth-realm` annotations are set automatically.
+
+**Traefik:** A `traefik.io/v1alpha1/Middleware` resource named `<name>-basic-auth` is created in the same namespace (requires Traefik CRDs to be installed), and the `traefik.ingress.kubernetes.io/router.middlewares` annotation is set to reference it.
+
+**Retrieve the auto-generated password:**
+
+```bash
+kubectl get secret my-agent-basic-auth -o jsonpath='{.data.auth}' | base64 -d
+# admin:{SHA}UaJat...  (htpasswd format — the plaintext password is not recoverable)
+```
+
+To rotate credentials, delete the Secret and the operator will generate a new one on next reconcile.
 
 The operator automatically adds WebSocket-related annotations for nginx-ingress (proxy timeouts, HTTP/1.1 upgrade).
 
@@ -662,7 +691,9 @@ High availability and scheduling configuration.
 
 | Field         | Type     | Default | Description                                                                                       |
 |---------------|----------|---------|---------------------------------------------------------------------------------------------------|
-| `restoreFrom` | `string` | --      | Remote backup path to restore data from (e.g., `backups/{tenantId}/{instanceId}/{timestamp}`). When set, the operator restores PVC data from this S3 path before creating the StatefulSet. Cleared automatically after successful restore. |
+| `restoreFrom` | `string` | --      | S3 path to restore data from (e.g., `backups/{tenantId}/{instanceId}/{timestamp}`). When set, the operator restores PVC data from this path before creating the StatefulSet. Cleared automatically after successful restore. Requires the `s3-backup-credentials` Secret to be present in the operator namespace. |
+
+See [Backup and Restore](#backup-and-restore) for full setup instructions.
 
 ### spec.runtimeDeps
 
@@ -820,94 +851,86 @@ Tracks the state of automatic version updates.
 
 ---
 
+## Backup and Restore
+
+The operator uses [rclone](https://rclone.org/) to sync PVC data to and from an S3-compatible backend. All backup operations are driven by a single Secret named `s3-backup-credentials` in the **operator namespace** (the namespace where the operator pod runs, typically `openclaw-operator-system`).
+
+### S3 Credentials Secret
+
+Create the Secret before enabling any backup or restore feature:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: s3-backup-credentials
+  namespace: openclaw-operator-system  # must match the operator namespace
+stringData:
+  S3_ENDPOINT: "https://s3.us-east-1.amazonaws.com"   # or any S3-compatible URL
+  S3_BUCKET: "my-openclaw-backups"
+  S3_ACCESS_KEY_ID: "<key-id>"
+  S3_SECRET_ACCESS_KEY: "<secret-key>"
+```
+
+All four keys are required. The operator uses rclone's S3 backend (`--s3-provider=Other`), which is compatible with AWS S3, Backblaze B2, MinIO, Cloudflare R2, Wasabi, and any other S3-compatible service.
+
+### When backups run automatically
+
+| Trigger | Condition |
+|---------|-----------|
+| **Pre-delete backup** | Always runs when a CR is deleted, unless `openclaw.rocks/skip-backup: "true"` annotation is set or persistence is disabled. |
+| **Pre-update backup** | Runs before each auto-update when `spec.autoUpdate.backupBeforeUpdate: true` (the default). |
+
+If the `s3-backup-credentials` Secret does not exist, both pre-delete and pre-update backups are silently skipped - deletion and updates proceed normally.
+
+### Backup path format
+
+Backups are stored at:
+
+```
+s3://<bucket>/backups/<tenantId>/<instanceName>/<timestamp>
+```
+
+Where:
+- `<tenantId>` is the value of the `openclaw.rocks/tenant` label on the instance, or derived from the namespace (e.g., namespace `oc-tenant-abc` yields `abc`), or the namespace name itself.
+- `<instanceName>` is `metadata.name` of the `OpenClawInstance`.
+- `<timestamp>` is an RFC3339 timestamp at the time the backup job runs.
+
+The path of the last successful backup is recorded in `status.lastBackupPath`.
+
+### Skip backup on delete
+
+To delete an instance without waiting for a backup (e.g., the S3 backend is unavailable):
+
+```bash
+kubectl annotate openclawinstance my-agent openclaw.rocks/skip-backup=true
+kubectl delete openclawinstance my-agent
+```
+
+### Restoring an instance
+
+Set `spec.restoreFrom` to an existing backup path. The operator runs an rclone restore job to populate the PVC before starting the StatefulSet, then clears the field automatically:
+
+```yaml
+spec:
+  restoreFrom: "backups/my-tenant/my-agent/2026-01-15T10:30:00Z"
+```
+
+To find available backups, list the S3 bucket directly (e.g., `aws s3 ls s3://my-openclaw-backups/backups/`). The `status.lastBackupPath` field on any existing instance shows its last backup path.
+
+### Periodic / scheduled backups
+
+Periodic scheduled backups are **not yet supported**. Currently backups run on two triggers only: instance deletion and pre-update. Track [issue #193](https://github.com/openclaw-rocks/k8s-operator/issues/193) for scheduled backup support.
+
+As a workaround, you can trigger a manual backup by annotating `openclaw.rocks/trigger-backup: "true"` -- see the status conditions to check for `BackupComplete`.
+
+---
+
 ## Related Guides
 
 - [Model Fallback Chains](model-fallback.md) - configure multi-provider fallback with `llmConfig`
 - [Custom AI Providers](custom-providers.md) - Ollama sidecar, vLLM, and other self-hosted models
 - [External Secrets Operator Integration](external-secrets.md) - sync API keys from AWS, Vault, GCP, etc.
-
----
-
-## OpenClawSelfConfig (v1alpha1)
-
-**Group**: `openclaw.rocks`
-**Version**: `v1alpha1`
-**Kind**: `OpenClawSelfConfig`
-**Scope**: Namespaced
-**Short name**: `ocsc`
-
-An `OpenClawSelfConfig` represents a request from an agent to modify its own `OpenClawInstance` spec. The operator validates the request against the parent instance's `selfConfigure.allowedActions` policy and applies approved changes.
-
-### Print Columns
-
-| Column    | JSON Path                          |
-|-----------|------------------------------------|
-| Instance  | `.spec.instanceRef`                |
-| Phase     | `.status.phase`                    |
-| Age       | `.metadata.creationTimestamp`      |
-
-### Spec Fields
-
-| Field                | Type                      | Default | Description                                                                   |
-|----------------------|---------------------------|---------|-------------------------------------------------------------------------------|
-| `instanceRef`        | `string`                  | (required) | Name of the parent `OpenClawInstance` in the same namespace.               |
-| `addSkills`          | `[]string`                | --      | Skills to add. Max 10 items.                                                  |
-| `removeSkills`       | `[]string`                | --      | Skills to remove. Max 10 items.                                               |
-| `configPatch`        | `RawConfig`               | --      | Partial JSON to deep-merge into `spec.config.raw`. Protected keys under `gateway` are rejected. |
-| `addWorkspaceFiles`  | `map[string]string`       | --      | Filenames to content to add to workspace. Max 10 entries.                     |
-| `removeWorkspaceFiles` | `[]string`              | --      | Workspace filenames to remove. Max 10 items.                                  |
-| `addEnvVars`         | `[]SelfConfigEnvVar`      | --      | Environment variables to add (plain values only, no secret refs). Max 10 items. |
-| `removeEnvVars`      | `[]string`                | --      | Environment variable names to remove. Max 10 items.                           |
-
-**SelfConfigEnvVar:**
-
-| Field   | Type     | Description                   |
-|---------|----------|-------------------------------|
-| `name`  | `string` | Environment variable name.    |
-| `value` | `string` | Environment variable value.   |
-
-### Status Fields
-
-| Field            | Type          | Description                                                  |
-|------------------|---------------|--------------------------------------------------------------|
-| `phase`          | `string`      | Processing state: `Pending`, `Applied`, `Failed`, `Denied`.  |
-| `message`        | `string`      | Human-readable details about the current phase.              |
-| `completionTime` | `*metav1.Time`| Timestamp when the request reached a terminal phase.         |
-
-### Lifecycle
-
-1. Agent creates an `OpenClawSelfConfig` resource -- status starts as `Pending`
-2. Operator fetches the parent `OpenClawInstance` and validates:
-   - `selfConfigure.enabled` must be `true` (otherwise: `Denied`)
-   - All requested action categories must be in `allowedActions` (otherwise: `Denied`)
-   - Protected config keys (`gateway.*`) and env var names are rejected (otherwise: `Failed`)
-3. Operator applies changes to the parent instance spec
-4. Status transitions to `Applied` (success) or `Failed` (error)
-5. An owner reference is set to the parent instance for garbage collection
-6. Terminal requests are auto-deleted after 1 hour
-
-### Protected Resources
-
-The following are protected and cannot be modified via self-configure:
-
-- **Config keys**: `gateway` (entire subtree) -- prevents breaking gateway auth
-- **Environment variables**: `HOME`, `PATH`, `OPENCLAW_GATEWAY_TOKEN`, `OPENCLAW_INSTANCE_NAME`, `OPENCLAW_NAMESPACE`, `OPENCLAW_DISABLE_BONJOUR`, `CHROMIUM_URL`, `OLLAMA_HOST`, `TS_AUTHKEY`, `TS_HOSTNAME`, `NODE_EXTRA_CA_CERTS`, `NPM_CONFIG_CACHE`, `NPM_CONFIG_IGNORE_SCRIPTS`
-
-### Example
-
-```yaml
-apiVersion: openclaw.rocks/v1alpha1
-kind: OpenClawSelfConfig
-metadata:
-  name: add-fetch-skill
-spec:
-  instanceRef: my-agent
-  addSkills:
-    - "@anthropic/mcp-server-fetch"
-  addEnvVars:
-    - name: MY_CUSTOM_VAR
-      value: "hello"
-```
 
 ---
 

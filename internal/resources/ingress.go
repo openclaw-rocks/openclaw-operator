@@ -131,6 +131,33 @@ func buildIngressAnnotations(instance *openclawv1alpha1.OpenClawInstance) map[st
 		annotations["nginx.ingress.kubernetes.io/upstream-hash-by"] = "$binary_remote_addr"
 	}
 
+	// Basic Auth
+	if security.BasicAuth != nil {
+		basicAuthEnabled := security.BasicAuth.Enabled == nil || *security.BasicAuth.Enabled
+		if basicAuthEnabled {
+			secretName := BasicAuthSecretName(instance)
+			if security.BasicAuth.ExistingSecret != "" {
+				secretName = security.BasicAuth.ExistingSecret
+			}
+			realm := "OpenClaw"
+			if security.BasicAuth.Realm != "" {
+				realm = security.BasicAuth.Realm
+			}
+			if emitNginx {
+				annotations["nginx.ingress.kubernetes.io/auth-type"] = "basic"
+				annotations["nginx.ingress.kubernetes.io/auth-secret"] = secretName
+				annotations["nginx.ingress.kubernetes.io/auth-realm"] = realm
+			}
+			if emitTraefik {
+				// For Traefik, a BasicAuth Middleware must be created alongside the Ingress.
+				// The annotation references it as <namespace>-<name>@kubernetescrd.
+				middlewareName := instance.Name + "-basic-auth"
+				annotations["traefik.ingress.kubernetes.io/router.middlewares"] =
+					instance.Namespace + "-" + middlewareName + "@kubernetescrd"
+			}
+		}
+	}
+
 	return annotations
 }
 

@@ -4875,6 +4875,35 @@ spec:
                       security:
                         description: Security configures ingress security settings
                         properties:
+                          basicAuth:
+                            description: |-
+                              BasicAuth configures HTTP Basic Authentication for the Ingress.
+                              Disabled by default. When enabled without an existingSecret, the operator
+                              auto-generates a random password and stores it in a managed Secret.
+                            properties:
+                              enabled:
+                                default: false
+                                description: Enabled enables basic authentication.
+                                type: boolean
+                              existingSecret:
+                                description: |-
+                                  ExistingSecret is the name of an existing Secret that already contains
+                                  htpasswd-formatted content in a key named "auth".
+                                  When set, the operator uses this Secret instead of generating one.
+                                type: string
+                              realm:
+                                default: OpenClaw
+                                description: Realm is the authentication realm shown
+                                  in browser prompts.
+                                type: string
+                              username:
+                                default: openclaw
+                                description: |-
+                                  Username for the auto-generated htpasswd Secret.
+                                  Ignored when existingSecret is set.
+                                maxLength: 64
+                                type: string
+                            type: object
                           enableHSTS:
                             default: true
                             description: EnableHSTS enables HTTP Strict Transport
@@ -5153,6 +5182,7 @@ spec:
                 type: object
               probes:
                 description: Probes configures health probes for the OpenClaw container
+                nullable: true
                 properties:
                   liveness:
                     description: Liveness probe configuration
@@ -8901,6 +8931,14 @@ spec:
                         description: ExistingClaim is the name of an existing PVC
                           to use
                         type: string
+                      orphan:
+                        default: true
+                        description: |-
+                          Orphan controls whether the PVC is retained when the OpenClawInstance is deleted.
+                          When true (the default), the operator removes the owner reference from the PVC
+                          before deleting the CR so Kubernetes does not garbage-collect it.
+                          Set to false if you want the PVC deleted together with the CR.
+                        type: boolean
                       size:
                         default: 10Gi
                         description: Size is the size of the PVC (e.g., "10Gi")
@@ -9255,6 +9293,10 @@ spec:
                 description: ManagedResources tracks the resources created by the
                   operator
                 properties:
+                  basicAuthSecret:
+                    description: BasicAuthSecret is the name of the auto-generated
+                      Ingress Basic Auth htpasswd Secret
+                    type: string
                   configMap:
                     description: ConfigMap is the name of the managed ConfigMap
                     type: string

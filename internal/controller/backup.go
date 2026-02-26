@@ -223,9 +223,23 @@ func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Conte
 	return r.removeFinalizer(ctx, instance)
 }
 
-// removeFinalizer removes the operator finalizer, allowing K8s to GC the resource
+// removeFinalizer removes the operator finalizer, allowing K8s to GC the resource.
+// When spec.storage.persistence.orphan is true (the default), the PVC owner reference
+// is removed first so K8s does not garbage-collect the PVC with the CR.
 func (r *OpenClawInstanceReconciler) removeFinalizer(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
+
+	// Orphan the PVC unless the user explicitly set orphan=false.
+	// Only applies to operator-managed PVCs (not existingClaim).
+	orphan := instance.Spec.Storage.Persistence.Orphan == nil || *instance.Spec.Storage.Persistence.Orphan
+	persistenceEnabled := instance.Spec.Storage.Persistence.Enabled == nil || *instance.Spec.Storage.Persistence.Enabled
+	usingExistingClaim := instance.Spec.Storage.Persistence.ExistingClaim != ""
+	if orphan && persistenceEnabled && !usingExistingClaim {
+		if err := r.orphanPVC(ctx, instance); err != nil {
+			logger.Error(err, "Failed to orphan PVC - proceeding with finalizer removal")
+		}
+	}
+
 	controllerutil.RemoveFinalizer(instance, FinalizerName)
 	if err := r.Update(ctx, instance); err != nil {
 		return ctrl.Result{}, err
@@ -240,4 +254,37 @@ func (r *OpenClawInstanceReconciler) removeFinalizer(ctx context.Context, instan
 
 	logger.Info("Finalizer removed, cleanup complete")
 	return ctrl.Result{}, nil
+}
+
+// orphanPVC removes the owner reference pointing to instance from the managed PVC
+// so that Kubernetes does not garbage-collect it when the CR is deleted.
+func (r *OpenClawInstanceReconciler) orphanPVC(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) error {
+	logger := log.FromContext(ctx)
+
+	pvc := &corev1.PersistentVolumeClaim{}
+	pvcKey := client.ObjectKey{Name: resources.PVCName(instance), Namespace: instance.Namespace}
+	if err := r.Get(ctx, pvcKey, pvc); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil // nothing to orphan
+		}
+		return fmt.Errorf("failed to get PVC %s: %w", pvcKey.Name, err)
+	}
+
+	// Filter out any owner reference that points to this instance
+	refs := pvc.OwnerReferences[:0]
+	for _, ref := range pvc.OwnerReferences {
+		if ref.UID != instance.UID {
+			refs = append(refs, ref)
+		}
+	}
+	if len(refs) == len(pvc.OwnerReferences) {
+		return nil // owner reference already absent
+	}
+
+	pvc.OwnerReferences = refs
+	if err := r.Update(ctx, pvc); err != nil {
+		return fmt.Errorf("failed to remove owner reference from PVC %s: %w", pvcKey.Name, err)
+	}
+	logger.Info("PVC orphaned - owner reference removed, PVC will be retained after CR deletion", "pvc", pvcKey.Name)
+	return nil
 }
