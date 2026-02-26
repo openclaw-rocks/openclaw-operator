@@ -521,7 +521,7 @@ spec:
           realm: "My Agent"        # default: "OpenClaw"
 ```
 
-The generated htpasswd Secret is named `<name>-basic-auth` and tracked in `status.managedResources.basicAuthSecret`. To use your own credentials, provide a pre-formatted htpasswd Secret:
+The generated Secret is named `<name>-basic-auth` and contains three keys: `auth` (htpasswd format for ingress controllers), `username`, and `password` (plaintext, for retrieving the auto-generated credentials). It is tracked in `status.managedResources.basicAuthSecret`. To use your own credentials, provide a pre-formatted htpasswd Secret:
 
 ```yaml
 spec:

@@ -38,7 +38,13 @@ func HtpasswdEntry(username, password string) string {
 }
 
 // BuildBasicAuthSecret creates a Secret containing htpasswd content for Ingress Basic Authentication.
-// The Secret holds an "auth" key whose value is an htpasswd-formatted line.
+// The Secret holds three keys:
+//   - "auth": htpasswd-formatted line (used by ingress controllers)
+//   - "username": plaintext username
+//   - "password": plaintext password
+//
+// The plaintext keys allow users to retrieve the auto-generated credentials,
+// since the hashed htpasswd value in "auth" cannot be reversed.
 func BuildBasicAuthSecret(instance *openclawv1alpha1.OpenClawInstance, password string) *corev1.Secret {
 	username := AppName
 	if instance.Spec.Networking.Ingress.Security.BasicAuth != nil &&
@@ -52,7 +58,9 @@ func BuildBasicAuthSecret(instance *openclawv1alpha1.OpenClawInstance, password 
 			Labels:    Labels(instance),
 		},
 		Data: map[string][]byte{
-			"auth": []byte(HtpasswdEntry(username, password)),
+			"auth":     []byte(HtpasswdEntry(username, password)),
+			"username": []byte(username),
+			"password": []byte(password),
 		},
 	}
 }

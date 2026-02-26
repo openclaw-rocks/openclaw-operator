@@ -8489,6 +8489,35 @@ func TestBuildBasicAuthSecret(t *testing.T) {
 	if !strings.HasPrefix(string(auth), "testuser:{SHA}") {
 		t.Errorf("auth value should start with 'testuser:{SHA}', got %q", string(auth))
 	}
+
+	// Verify plaintext username and password keys
+	username, ok := secret.Data["username"]
+	if !ok {
+		t.Fatal("secret missing 'username' key")
+	}
+	if string(username) != "testuser" {
+		t.Errorf("username = %q, want %q", string(username), "testuser")
+	}
+	pw, ok := secret.Data["password"]
+	if !ok {
+		t.Fatal("secret missing 'password' key")
+	}
+	if string(pw) != "mypassword" {
+		t.Errorf("password = %q, want %q", string(pw), "mypassword")
+	}
+}
+
+func TestBuildBasicAuthSecret_DefaultUsername(t *testing.T) {
+	instance := newTestInstance("ba-default")
+	instance.Spec.Networking.Ingress.Security.BasicAuth = &openclawv1alpha1.IngressBasicAuthSpec{}
+	secret := BuildBasicAuthSecret(instance, "randompw")
+
+	if string(secret.Data["username"]) != AppName {
+		t.Errorf("username = %q, want default %q", string(secret.Data["username"]), AppName)
+	}
+	if string(secret.Data["password"]) != "randompw" {
+		t.Errorf("password = %q, want %q", string(secret.Data["password"]), "randompw")
+	}
 }
 
 func TestBuildIngress_BasicAuth_Nginx(t *testing.T) {

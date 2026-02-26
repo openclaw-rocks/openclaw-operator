@@ -565,18 +565,21 @@ networking:
 
 When `enabled: true` and no `existingSecret` is provided, the operator:
 - Generates a random 40-hex-character password
-- Creates a `<name>-basic-auth` Secret with an htpasswd-formatted `auth` key
+- Creates a `<name>-basic-auth` Secret with three keys:
+  - `auth` - htpasswd-formatted line (used by ingress controllers)
+  - `username` - plaintext username
+  - `password` - plaintext password
 - Tracks the secret name in `status.managedResources.basicAuthSecret`
 
 **nginx-ingress:** The `auth-type`, `auth-secret`, and `auth-realm` annotations are set automatically.
 
 **Traefik:** A `traefik.io/v1alpha1/Middleware` resource named `<name>-basic-auth` is created in the same namespace (requires Traefik CRDs to be installed), and the `traefik.ingress.kubernetes.io/router.middlewares` annotation is set to reference it.
 
-**Retrieve the auto-generated password:**
+**Retrieve the auto-generated credentials:**
 
 ```bash
-kubectl get secret my-agent-basic-auth -o jsonpath='{.data.auth}' | base64 -d
-# admin:{SHA}UaJat...  (htpasswd format — the plaintext password is not recoverable)
+kubectl get secret my-agent-basic-auth -o jsonpath='{.data.username}' | base64 -d
+kubectl get secret my-agent-basic-auth -o jsonpath='{.data.password}' | base64 -d
 ```
 
 To rotate credentials, delete the Secret and the operator will generate a new one on next reconcile.
