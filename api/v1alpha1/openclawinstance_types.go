@@ -112,6 +112,11 @@ type OpenClawInstanceSpec struct {
 	// +optional
 	Availability AvailabilitySpec `json:"availability,omitempty"`
 
+	// Backup configures periodic scheduled backups to S3-compatible storage.
+	// Requires the s3-backup-credentials Secret in the operator namespace and persistence enabled.
+	// +optional
+	Backup BackupSpec `json:"backup,omitempty"`
+
 	// RestoreFrom is the remote backup path to restore data from (e.g. "backups/{tenantId}/{instanceId}/{timestamp}").
 	// When set, the operator restores PVC data from this path before creating the StatefulSet.
 	// Cleared automatically after successful restore.
@@ -442,6 +447,28 @@ type PersistenceSpec struct {
 	// +kubebuilder:default=true
 	// +optional
 	Orphan *bool `json:"orphan,omitempty"`
+}
+
+// BackupSpec configures periodic scheduled backups to S3-compatible storage.
+type BackupSpec struct {
+	// Schedule is a cron expression for periodic backups (e.g., "0 2 * * *" for daily at 2 AM).
+	// When set, the operator creates a CronJob that runs rclone to sync PVC data to S3.
+	// Requires persistence to be enabled and the s3-backup-credentials Secret
+	// in the operator namespace.
+	// +optional
+	Schedule string `json:"schedule,omitempty"`
+
+	// HistoryLimit is the number of successful CronJob runs to retain.
+	// +kubebuilder:default=3
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	HistoryLimit *int32 `json:"historyLimit,omitempty"`
+
+	// FailedHistoryLimit is the number of failed CronJob runs to retain.
+	// +kubebuilder:default=1
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	FailedHistoryLimit *int32 `json:"failedHistoryLimit,omitempty"`
 }
 
 // ChromiumSpec defines the Chromium sidecar configuration
@@ -1288,6 +1315,10 @@ type ManagedResourcesStatus struct {
 	// BasicAuthSecret is the name of the auto-generated Ingress Basic Auth htpasswd Secret
 	// +optional
 	BasicAuthSecret string `json:"basicAuthSecret,omitempty"`
+
+	// BackupCronJob is the name of the managed periodic backup CronJob
+	// +optional
+	BackupCronJob string `json:"backupCronJob,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -1353,6 +1384,9 @@ const (
 
 	// ConditionTypeAutoUpdateAvailable indicates a newer version is available
 	ConditionTypeAutoUpdateAvailable = "AutoUpdateAvailable"
+
+	// ConditionTypeScheduledBackupReady indicates the periodic backup CronJob is configured
+	ConditionTypeScheduledBackupReady = "ScheduledBackupReady"
 
 	// ConditionTypeSecretsReady indicates all referenced secrets exist
 	ConditionTypeSecretsReady = "SecretsReady"

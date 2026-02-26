@@ -1290,6 +1290,33 @@ spec:
                       type: object
                     type: array
                 type: object
+              backup:
+                description: |-
+                  Backup configures periodic scheduled backups to S3-compatible storage.
+                  Requires the s3-backup-credentials Secret in the operator namespace and persistence enabled.
+                properties:
+                  failedHistoryLimit:
+                    default: 1
+                    description: FailedHistoryLimit is the number of failed CronJob
+                      runs to retain.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  historyLimit:
+                    default: 3
+                    description: HistoryLimit is the number of successful CronJob
+                      runs to retain.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  schedule:
+                    description: |-
+                      Schedule is a cron expression for periodic backups (e.g., "0 2 * * *" for daily at 2 AM).
+                      When set, the operator creates a CronJob that runs rclone to sync PVC data to S3.
+                      Requires persistence to be enabled and the s3-backup-credentials Secret
+                      in the operator namespace.
+                    type: string
+                type: object
               chromium:
                 description: Chromium enables the Chromium sidecar for browser automation
                 properties:
@@ -9470,6 +9497,10 @@ spec:
                 description: ManagedResources tracks the resources created by the
                   operator
                 properties:
+                  backupCronJob:
+                    description: BackupCronJob is the name of the managed periodic
+                      backup CronJob
+                    type: string
                   basicAuthSecret:
                     description: BasicAuthSecret is the name of the auto-generated
                       Ingress Basic Auth htpasswd Secret
