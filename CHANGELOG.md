@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.9](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.8...v0.10.9) (2026-02-26)
+
+
+### Features
+
+* add Operator SDK scorecard testing ([#198](https://github.com/openclaw-rocks/k8s-operator/issues/198)) ([3b44d9a](https://github.com/openclaw-rocks/k8s-operator/commit/3b44d9a4f4533988be44cca2f809ab70a2c93fc7))
+* add topology spread constraints support ([#196](https://github.com/openclaw-rocks/k8s-operator/issues/196)) ([98ba176](https://github.com/openclaw-rocks/k8s-operator/commit/98ba176822bc72e1a27497ab66f122715ac024fc))
+
 ## [0.10.8](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.7...v0.10.8) (2026-02-26)
 
 
