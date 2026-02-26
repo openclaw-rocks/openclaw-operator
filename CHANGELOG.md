@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.12](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.11...v0.10.12) (2026-02-26)
+
+
+### Features
+
+* add periodic scheduled backups via CronJob ([#207](https://github.com/openclaw-rocks/k8s-operator/issues/207)) ([bf29965](https://github.com/openclaw-rocks/k8s-operator/commit/bf299650b8aad631fdfa6c3427f414bda9b7d511))
+
+
+### Bug Fixes
+
+* add optional S3_REGION support for MinIO backups ([#212](https://github.com/openclaw-rocks/k8s-operator/issues/212)) ([c5e96c8](https://github.com/openclaw-rocks/k8s-operator/commit/c5e96c89660566d5b35a137d8a098ca18cf51234)), closes [#205](https://github.com/openclaw-rocks/k8s-operator/issues/205)
+* **chromium:** pass extraArgs via DEFAULT_LAUNCH_ARGS env instead of container Args ([#211](https://github.com/openclaw-rocks/k8s-operator/issues/211)) ([ec79758](https://github.com/openclaw-rocks/k8s-operator/commit/ec797581aa068ebd48cb55c11de048f41024c826)), closes [#209](https://github.com/openclaw-rocks/k8s-operator/issues/209)
+
 ## [0.10.11](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.10...v0.10.11) (2026-02-26)
 
 
