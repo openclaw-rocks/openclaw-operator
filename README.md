@@ -78,7 +78,7 @@ Every request is validated against the instance's allowlist policy. Protected co
 | **Auto-Update** | OCI registry polling | Opt-in version tracking: checks the registry for new semver releases, backs up first, rolls out, and auto-rolls back if the new version fails health checks |
 | **Scalable** | Auto-scaling | HPA integration with CPU and memory metrics, min/max replica bounds, automatic StatefulSet replica management |
 | **Resilient** | Self-healing lifecycle | PodDisruptionBudgets, health probes, automatic config rollouts via content hashing, 5-minute drift detection |
-| **Backup/Restore** | S3-backed snapshots | Automatic backup to S3-compatible storage on instance deletion; restore into a new instance from any snapshot |
+| **Backup/Restore** | S3-backed snapshots | Automatic backup to S3-compatible storage on deletion, pre-update, and on a cron schedule; restore into a new instance from any snapshot |
 | **Workspace Seeding** | Initial files & dirs | Pre-populate the workspace with files and directories before the agent starts |
 | **Gateway Auth** | Auto-generated tokens | Automatic gateway token Secret per instance, bypassing mDNS pairing (unusable in k8s) |
 | **Tailscale** | Tailnet access | Expose via Tailscale Serve or Funnel with SSO auth - no Ingress needed |
@@ -521,7 +521,7 @@ spec:
           realm: "My Agent"        # default: "OpenClaw"
 ```
 
-The generated htpasswd Secret is named `<name>-basic-auth` and tracked in `status.managedResources.basicAuthSecret`. To use your own credentials, provide a pre-formatted htpasswd Secret:
+The generated Secret is named `<name>-basic-auth` and contains three keys: `auth` (htpasswd format for ingress controllers), `username`, and `password` (plaintext, for retrieving the auto-generated credentials). It is tracked in `status.managedResources.basicAuthSecret`. To use your own credentials, provide a pre-formatted htpasswd Secret:
 
 ```yaml
 spec:
@@ -616,6 +616,7 @@ stringData:
   S3_BUCKET: "my-openclaw-backups"
   S3_ACCESS_KEY_ID: "<key-id>"
   S3_SECRET_ACCESS_KEY: "<secret-key>"
+  # S3_REGION: "us-east-1"  # optional - needed for MinIO or providers with custom regions
 ```
 
 Compatible with AWS S3, Backblaze B2, Cloudflare R2, MinIO, Wasabi, and any S3-compatible API.
@@ -624,8 +625,21 @@ Compatible with AWS S3, Backblaze B2, Cloudflare R2, MinIO, Wasabi, and any S3-c
 
 - **On delete** - the operator backs up the PVC before removing any resources. Add the annotation `openclaw.rocks/skip-backup: "true"` to skip and delete immediately.
 - **Before auto-update** - when `spec.autoUpdate.backupBeforeUpdate: true` (the default).
+- **On a schedule** - when `spec.backup.schedule` is set (cron expression).
 
 If the Secret does not exist, backups are silently skipped and operations proceed normally.
+
+**Periodic scheduled backups:**
+
+```yaml
+spec:
+  backup:
+    schedule: "0 2 * * *"   # Daily at 2 AM UTC
+    historyLimit: 3          # Successful job runs to retain (default: 3)
+    failedHistoryLimit: 1    # Failed job runs to retain (default: 1)
+```
+
+The operator creates a Kubernetes CronJob that runs rclone to sync PVC data to S3. The CronJob mounts the PVC read-only (hot backup - no downtime) and uses pod affinity to co-locate on the same node as the StatefulSet pod (required for RWO PVCs). Each run stores data under a unique timestamped path: `backups/<tenantId>/<instanceName>/periodic/<timestamp>`.
 
 **Restoring from backup:**
 
@@ -636,8 +650,6 @@ spec:
 ```
 
 The operator runs a restore job to populate the PVC before starting the StatefulSet, then clears `restoreFrom` automatically. Backup paths follow the format `backups/<tenantId>/<instanceName>/<timestamp>`.
-
-> **Note:** Periodic scheduled backups are not yet supported. Backups run on deletion and pre-update only.
 
 For full details see the [Backup and Restore section](docs/api-reference.md#backup-and-restore) in the API reference.
 

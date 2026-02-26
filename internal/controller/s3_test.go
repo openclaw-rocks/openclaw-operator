@@ -112,6 +112,12 @@ var _ = Describe("S3 Helpers", func() {
 				envNames = append(envNames, e.Name)
 			}
 			Expect(envNames).To(ContainElements("S3_ENDPOINT", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"))
+			Expect(envNames).NotTo(ContainElement("S3_REGION"))
+
+			// Verify no --s3-region flag when Region is empty
+			for _, arg := range container.Args {
+				Expect(arg).NotTo(HavePrefix("--s3-region"))
+			}
 		})
 
 		It("Should build a restore Job with S3 as source", func() {
@@ -131,6 +137,34 @@ var _ = Describe("S3 Helpers", func() {
 
 			vol := job.Spec.Template.Spec.Volumes[0]
 			Expect(vol.PersistentVolumeClaim.ClaimName).To(Equal("myinst-data"))
+		})
+
+		It("Should include --s3-region flag and S3_REGION env var when Region is set", func() {
+			creds.Region = "eu-west-1"
+			instance := &openclawv1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "myinst",
+					Namespace: "oc-tenant-t1",
+				},
+			}
+			labels := backupLabels(instance, "backup")
+			job := buildRcloneJob("myinst-backup", "oc-tenant-t1", "myinst-data", "backups/t1/myinst/2026-01-01T000000Z", labels, creds, true)
+
+			container := job.Spec.Template.Spec.Containers[0]
+
+			// Verify --s3-region flag is present
+			Expect(container.Args).To(ContainElement("--s3-region=$(S3_REGION)"))
+
+			// Verify S3_REGION env var is present with correct value
+			var regionEnv *corev1.EnvVar
+			for i, e := range container.Env {
+				if e.Name == "S3_REGION" {
+					regionEnv = &container.Env[i]
+					break
+				}
+			}
+			Expect(regionEnv).NotTo(BeNil())
+			Expect(regionEnv.Value).To(Equal("eu-west-1"))
 		})
 	})
 
@@ -194,6 +228,146 @@ var _ = Describe("S3 Helpers", func() {
 			Expect(labels[LabelInstance]).To(Equal("myinst"))
 			Expect(labels["openclaw.rocks/job-type"]).To(Equal("backup"))
 			Expect(labels[LabelManagedBy]).To(Equal("openclaw-operator"))
+		})
+	})
+
+	Context("backupCronJobName", func() {
+		It("Should return instance name with -backup-periodic suffix", func() {
+			instance := &openclawv1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: "my-agent"},
+			}
+			Expect(backupCronJobName(instance)).To(Equal("my-agent-backup-periodic"))
+		})
+	})
+
+	Context("buildBackupCronJob", func() {
+		var creds *s3Credentials
+		var instance *openclawv1.OpenClawInstance
+
+		BeforeEach(func() {
+			creds = &s3Credentials{
+				Bucket:   "test-bucket",
+				KeyID:    "key123",
+				AppKey:   "secret456",
+				Endpoint: "https://s3.us-west-000.backblazeb2.com",
+			}
+			instance = &openclawv1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "myinst",
+					Namespace: "oc-tenant-t1",
+					Labels: map[string]string{
+						LabelTenant: "cus_123",
+					},
+				},
+				Spec: openclawv1.OpenClawInstanceSpec{
+					Backup: openclawv1.BackupSpec{
+						Schedule: "0 2 * * *",
+					},
+				},
+			}
+		})
+
+		It("Should set the cron schedule from spec", func() {
+			cronJob := buildBackupCronJob(instance, creds)
+			Expect(cronJob.Spec.Schedule).To(Equal("0 2 * * *"))
+		})
+
+		It("Should set ConcurrencyPolicy to Forbid", func() {
+			cronJob := buildBackupCronJob(instance, creds)
+			Expect(cronJob.Spec.ConcurrencyPolicy).To(Equal(batchv1.ForbidConcurrent))
+		})
+
+		It("Should use default history limits when not specified", func() {
+			cronJob := buildBackupCronJob(instance, creds)
+			Expect(*cronJob.Spec.SuccessfulJobsHistoryLimit).To(Equal(int32(3)))
+			Expect(*cronJob.Spec.FailedJobsHistoryLimit).To(Equal(int32(1)))
+		})
+
+		It("Should use custom history limits when specified", func() {
+			historyLimit := int32(5)
+			failedLimit := int32(2)
+			instance.Spec.Backup.HistoryLimit = &historyLimit
+			instance.Spec.Backup.FailedHistoryLimit = &failedLimit
+
+			cronJob := buildBackupCronJob(instance, creds)
+			Expect(*cronJob.Spec.SuccessfulJobsHistoryLimit).To(Equal(int32(5)))
+			Expect(*cronJob.Spec.FailedJobsHistoryLimit).To(Equal(int32(2)))
+		})
+
+		It("Should mount PVC read-only", func() {
+			cronJob := buildBackupCronJob(instance, creds)
+			container := cronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0]
+			Expect(container.VolumeMounts).To(HaveLen(1))
+			Expect(container.VolumeMounts[0].ReadOnly).To(BeTrue())
+			Expect(container.VolumeMounts[0].MountPath).To(Equal("/data"))
+
+			vol := cronJob.Spec.JobTemplate.Spec.Template.Spec.Volumes[0]
+			Expect(vol.PersistentVolumeClaim.ReadOnly).To(BeTrue())
+		})
+
+		It("Should set pod affinity for co-location with StatefulSet pod", func() {
+			cronJob := buildBackupCronJob(instance, creds)
+			affinity := cronJob.Spec.JobTemplate.Spec.Template.Spec.Affinity
+			Expect(affinity).NotTo(BeNil())
+			Expect(affinity.PodAffinity).NotTo(BeNil())
+			Expect(affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution).To(HaveLen(1))
+
+			term := affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution[0]
+			Expect(term.TopologyKey).To(Equal("kubernetes.io/hostname"))
+			Expect(term.LabelSelector.MatchLabels).To(HaveKeyWithValue("app.kubernetes.io/name", "openclaw"))
+			Expect(term.LabelSelector.MatchLabels).To(HaveKeyWithValue("app.kubernetes.io/instance", "myinst"))
+		})
+
+		It("Should use shell command with timestamped S3 path under periodic/ prefix", func() {
+			cronJob := buildBackupCronJob(instance, creds)
+			container := cronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0]
+			Expect(container.Command).To(HaveLen(3))
+			Expect(container.Command[0]).To(Equal("sh"))
+			Expect(container.Command[1]).To(Equal("-c"))
+			// Verify the shell script references periodic/ path with timestamp
+			Expect(container.Command[2]).To(ContainSubstring("periodic/${TIMESTAMP}"))
+			Expect(container.Command[2]).To(ContainSubstring("TIMESTAMP=$(date -u"))
+			Expect(container.Command[2]).To(ContainSubstring("rclone sync /data/"))
+			Expect(container.Command[2]).To(ContainSubstring(":s3:test-bucket/backups/cus_123/myinst/periodic/"))
+		})
+
+		It("Should set security context with UID/GID 1000", func() {
+			cronJob := buildBackupCronJob(instance, creds)
+			podSC := cronJob.Spec.JobTemplate.Spec.Template.Spec.SecurityContext
+			Expect(*podSC.RunAsUser).To(Equal(int64(1000)))
+			Expect(*podSC.RunAsGroup).To(Equal(int64(1000)))
+			Expect(*podSC.FSGroup).To(Equal(int64(1000)))
+		})
+
+		It("Should use rclone image and set S3 env vars", func() {
+			cronJob := buildBackupCronJob(instance, creds)
+			container := cronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0]
+			Expect(container.Image).To(Equal(RcloneImage))
+			Expect(container.ImagePullPolicy).To(Equal(corev1.PullIfNotPresent))
+
+			var envNames []string
+			for _, e := range container.Env {
+				envNames = append(envNames, e.Name)
+			}
+			Expect(envNames).To(ContainElements("S3_ENDPOINT", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"))
+		})
+
+		It("Should set periodic-backup label", func() {
+			cronJob := buildBackupCronJob(instance, creds)
+			Expect(cronJob.Labels["openclaw.rocks/job-type"]).To(Equal("periodic-backup"))
+		})
+
+		It("Should set explicit Kubernetes default fields", func() {
+			cronJob := buildBackupCronJob(instance, creds)
+			spec := cronJob.Spec.JobTemplate.Spec.Template.Spec
+			Expect(spec.RestartPolicy).To(Equal(corev1.RestartPolicyOnFailure))
+			Expect(spec.DNSPolicy).To(Equal(corev1.DNSClusterFirst))
+			Expect(spec.SchedulerName).To(Equal("default-scheduler"))
+			Expect(spec.TerminationGracePeriodSeconds).NotTo(BeNil())
+
+			container := spec.Containers[0]
+			Expect(container.TerminationMessagePath).To(Equal("/dev/termination-log"))
+			Expect(container.TerminationMessagePolicy).To(Equal(corev1.TerminationMessageReadFile))
 		})
 	})
 })

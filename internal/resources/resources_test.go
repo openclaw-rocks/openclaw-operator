@@ -580,14 +580,23 @@ func TestBuildStatefulSet_ChromiumExtraArgs(t *testing.T) {
 		t.Fatal("chromium container not found")
 	}
 
-	if len(chromium.Args) != 2 {
-		t.Fatalf("expected 2 Args, got %d: %v", len(chromium.Args), chromium.Args)
+	// ExtraArgs must NOT be set as container Args - that overwrites the image CMD
+	// and causes the first flag to be executed as a binary (issue #209).
+	if len(chromium.Args) != 0 {
+		t.Errorf("expected no container Args (ExtraArgs must use DEFAULT_LAUNCH_ARGS env), got %v", chromium.Args)
 	}
-	if chromium.Args[0] != "--disable-blink-features=AutomationControlled" {
-		t.Errorf("Args[0] = %q, want --disable-blink-features=AutomationControlled", chromium.Args[0])
+
+	// ExtraArgs must be encoded as DEFAULT_LAUNCH_ARGS JSON env var for browserless v2
+	var launchArgs string
+	for _, env := range chromium.Env {
+		if env.Name == "DEFAULT_LAUNCH_ARGS" {
+			launchArgs = env.Value
+			break
+		}
 	}
-	if chromium.Args[1] != "--window-size=1920,1080" {
-		t.Errorf("Args[1] = %q, want --window-size=1920,1080", chromium.Args[1])
+	const wantLaunchArgs = `["--disable-blink-features=AutomationControlled","--window-size=1920,1080"]`
+	if launchArgs != wantLaunchArgs {
+		t.Errorf("DEFAULT_LAUNCH_ARGS = %q, want %q", launchArgs, wantLaunchArgs)
 	}
 }
 
@@ -646,7 +655,7 @@ func TestBuildStatefulSet_ChromiumExtraEnv(t *testing.T) {
 func TestBuildStatefulSet_ChromiumNoExtraArgs(t *testing.T) {
 	instance := newTestInstance("chromium-no-args")
 	instance.Spec.Chromium.Enabled = true
-	// ExtraArgs not set - Args should be nil/empty
+	// ExtraArgs not set - DEFAULT_LAUNCH_ARGS should not be injected
 
 	sts := BuildStatefulSet(instance)
 
@@ -662,7 +671,12 @@ func TestBuildStatefulSet_ChromiumNoExtraArgs(t *testing.T) {
 	}
 
 	if len(chromium.Args) != 0 {
-		t.Errorf("expected no Args when ExtraArgs not set, got %v", chromium.Args)
+		t.Errorf("expected no container Args, got %v", chromium.Args)
+	}
+	for _, env := range chromium.Env {
+		if env.Name == "DEFAULT_LAUNCH_ARGS" {
+			t.Errorf("expected no DEFAULT_LAUNCH_ARGS env when ExtraArgs not set, got %q", env.Value)
+		}
 	}
 }
 
@@ -8488,6 +8502,35 @@ func TestBuildBasicAuthSecret(t *testing.T) {
 	}
 	if !strings.HasPrefix(string(auth), "testuser:{SHA}") {
 		t.Errorf("auth value should start with 'testuser:{SHA}', got %q", string(auth))
+	}
+
+	// Verify plaintext username and password keys
+	username, ok := secret.Data["username"]
+	if !ok {
+		t.Fatal("secret missing 'username' key")
+	}
+	if string(username) != "testuser" {
+		t.Errorf("username = %q, want %q", string(username), "testuser")
+	}
+	pw, ok := secret.Data["password"]
+	if !ok {
+		t.Fatal("secret missing 'password' key")
+	}
+	if string(pw) != "mypassword" {
+		t.Errorf("password = %q, want %q", string(pw), "mypassword")
+	}
+}
+
+func TestBuildBasicAuthSecret_DefaultUsername(t *testing.T) {
+	instance := newTestInstance("ba-default")
+	instance.Spec.Networking.Ingress.Security.BasicAuth = &openclawv1.IngressBasicAuthSpec{}
+	secret := BuildBasicAuthSecret(instance, "randompw")
+
+	if string(secret.Data["username"]) != AppName {
+		t.Errorf("username = %q, want default %q", string(secret.Data["username"]), AppName)
+	}
+	if string(secret.Data["password"]) != "randompw" {
+		t.Errorf("password = %q, want %q", string(secret.Data["password"]), "randompw")
 	}
 }
 

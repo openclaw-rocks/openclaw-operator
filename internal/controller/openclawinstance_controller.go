@@ -98,6 +98,7 @@ type OpenClawInstanceReconciler struct {
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=list
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch;create;update;patch;delete
@@ -343,6 +344,12 @@ func (r *OpenClawInstanceReconciler) reconcileResources(ctx context.Context, ins
 		return fmt.Errorf("failed to reconcile StatefulSet: %w", err)
 	}
 	logger.V(1).Info("StatefulSet reconciled")
+
+	// 6b. Reconcile periodic backup CronJob (after StatefulSet so pod affinity labels exist)
+	if err := r.reconcileBackupCronJob(ctx, instance); err != nil {
+		return fmt.Errorf("failed to reconcile backup CronJob: %w", err)
+	}
+	logger.V(1).Info("Backup CronJob reconciled")
 
 	// 7. Reconcile Service
 	if err := r.reconcileService(ctx, instance); err != nil {
@@ -1381,6 +1388,7 @@ func (r *OpenClawInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&appsv1.Deployment{}). // temporary: watch legacy Deployments during migration
 		Owns(&batchv1.Job{}).       // backup/restore Jobs
+		Owns(&batchv1.CronJob{}).   // periodic backup CronJobs
 		Owns(&corev1.Service{}).
 		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
