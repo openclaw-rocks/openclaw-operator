@@ -30,7 +30,7 @@ import (
 // HtpasswdEntry returns a single htpasswd line in {SHA} format for the given username and password.
 // {SHA} uses base64-encoded SHA-1 and is widely supported by nginx-ingress and other ingress controllers.
 func HtpasswdEntry(username, password string) string {
-	// #nosec G505 -- htpasswd {SHA} format requires SHA-1
+	// #nosec G401 -- htpasswd {SHA} format requires SHA-1
 	h := sha1.New()
 	h.Write([]byte(password))
 	digest := base64.StdEncoding.EncodeToString(h.Sum(nil))
