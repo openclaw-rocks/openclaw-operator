@@ -22,6 +22,9 @@ import (
 	"testing"
 )
 
+// Note: ConfigMap-based ResolveSkillPacks tests removed — resolution is now
+// handled by the skillpacks.Resolver (GitHub-based) with its own test suite.
+
 func TestExtractPackSkills(t *testing.T) {
 	skills := []string{
 		"@anthropic/mcp-server-fetch",
@@ -77,115 +80,6 @@ func TestSkillPackCMKey(t *testing.T) {
 	}
 }
 
-func TestResolveSkillPacks(t *testing.T) {
-	cmData := map[string]string{
-		"registry.json": `{
-			"image-gen": {
-				"files": {
-					"skills/image-gen/SKILL.md": "image-gen.SKILL.md",
-					"skills/image-gen/scripts/generate.py": "image-gen.scripts.generate.py"
-				},
-				"directories": ["skills/image-gen/scripts"],
-				"config": {
-					"image-gen": {"enabled": true},
-					"openai-image-gen": {"enabled": false}
-				}
-			}
-		}`,
-		"image-gen.SKILL.md":              "---\nname: image-gen\n---\n",
-		"image-gen.scripts.generate.py":   "#!/usr/bin/env python3\nprint('hello')\n",
-	}
-
-	resolved, err := ResolveSkillPacks([]string{"image-gen"}, cmData)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if resolved == nil {
-		t.Fatal("expected resolved skill packs, got nil")
-	}
-
-	// Check files
-	if len(resolved.Files) != 2 {
-		t.Errorf("expected 2 files, got %d", len(resolved.Files))
-	}
-	skillMDKey := SkillPackCMKey("skills/image-gen/SKILL.md")
-	if resolved.Files[skillMDKey] != "---\nname: image-gen\n---\n" {
-		t.Errorf("unexpected SKILL.md content: %q", resolved.Files[skillMDKey])
-	}
-	genPyKey := SkillPackCMKey("skills/image-gen/scripts/generate.py")
-	if resolved.Files[genPyKey] != "#!/usr/bin/env python3\nprint('hello')\n" {
-		t.Errorf("unexpected generate.py content: %q", resolved.Files[genPyKey])
-	}
-
-	// Check path mapping
-	if resolved.PathMapping[skillMDKey] != "skills/image-gen/SKILL.md" {
-		t.Errorf("unexpected path mapping for SKILL.md: %q", resolved.PathMapping[skillMDKey])
-	}
-	if resolved.PathMapping[genPyKey] != "skills/image-gen/scripts/generate.py" {
-		t.Errorf("unexpected path mapping for generate.py: %q", resolved.PathMapping[genPyKey])
-	}
-
-	// Check directories
-	if len(resolved.Directories) != 1 || resolved.Directories[0] != "skills/image-gen/scripts" {
-		t.Errorf("unexpected directories: %v", resolved.Directories)
-	}
-
-	// Check config entries
-	if len(resolved.SkillEntries) != 2 {
-		t.Errorf("expected 2 skill entries, got %d", len(resolved.SkillEntries))
-	}
-	imgGen, ok := resolved.SkillEntries["image-gen"].(map[string]interface{})
-	if !ok || imgGen["enabled"] != true {
-		t.Errorf("expected image-gen enabled: %v", resolved.SkillEntries["image-gen"])
-	}
-	oaiGen, ok := resolved.SkillEntries["openai-image-gen"].(map[string]interface{})
-	if !ok || oaiGen["enabled"] != false {
-		t.Errorf("expected openai-image-gen disabled: %v", resolved.SkillEntries["openai-image-gen"])
-	}
-}
-
-func TestResolveSkillPacks_Empty(t *testing.T) {
-	resolved, err := ResolveSkillPacks(nil, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if resolved != nil {
-		t.Errorf("expected nil for empty pack names, got %v", resolved)
-	}
-}
-
-func TestResolveSkillPacks_MissingPack(t *testing.T) {
-	cmData := map[string]string{
-		"registry.json": `{}`,
-	}
-	_, err := ResolveSkillPacks([]string{"nonexistent"}, cmData)
-	if err == nil {
-		t.Fatal("expected error for missing pack")
-	}
-	if !strings.Contains(err.Error(), "not found") {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-func TestResolveSkillPacks_MissingFileKey(t *testing.T) {
-	cmData := map[string]string{
-		"registry.json": `{
-			"image-gen": {
-				"files": {"skills/image-gen/SKILL.md": "missing-key"},
-				"directories": [],
-				"config": {}
-			}
-		}`,
-	}
-	_, err := ResolveSkillPacks([]string{"image-gen"}, cmData)
-	if err == nil {
-		t.Fatal("expected error for missing file key")
-	}
-	if !strings.Contains(err.Error(), "missing ConfigMap key") {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
 func TestHasSkillPackFiles(t *testing.T) {
 	if HasSkillPackFiles(nil) {
 		t.Error("expected false for nil")
@@ -233,12 +127,12 @@ func TestBuildInitScript_WithSkillPacks(t *testing.T) {
 
 	resolved := &ResolvedSkillPacks{
 		Files: map[string]string{
-			"skills--image-gen--SKILL.md":              "skill content",
-			"skills--image-gen--scripts--generate.py":  "script content",
+			"skills--image-gen--SKILL.md":             "skill content",
+			"skills--image-gen--scripts--generate.py": "script content",
 		},
 		PathMapping: map[string]string{
-			"skills--image-gen--SKILL.md":              "skills/image-gen/SKILL.md",
-			"skills--image-gen--scripts--generate.py":  "skills/image-gen/scripts/generate.py",
+			"skills--image-gen--SKILL.md":             "skills/image-gen/SKILL.md",
+			"skills--image-gen--scripts--generate.py": "skills/image-gen/scripts/generate.py",
 		},
 		Directories: []string{"skills/image-gen/scripts"},
 	}
@@ -280,7 +174,7 @@ func TestBuildWorkspaceConfigMap_WithSkillPacks(t *testing.T) {
 func TestEnrichConfigWithSkillPacks(t *testing.T) {
 	config := `{"skills": {"entries": {"web-search": {"enabled": true}}}}`
 	skillEntries := map[string]interface{}{
-		"image-gen":       map[string]interface{}{"enabled": true},
+		"image-gen":        map[string]interface{}{"enabled": true},
 		"openai-image-gen": map[string]interface{}{"enabled": false},
 	}
 

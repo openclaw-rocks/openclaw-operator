@@ -43,6 +43,7 @@ import (
 	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
 	"github.com/openclawrocks/k8s-operator/internal/controller"
 	"github.com/openclawrocks/k8s-operator/internal/registry"
+	"github.com/openclawrocks/k8s-operator/internal/skillpacks"
 )
 
 var (
@@ -132,6 +133,7 @@ func main() {
 	}
 
 	versionResolver := registry.NewResolver(5 * time.Minute)
+	skillPackResolver := skillpacks.NewResolver(5*time.Minute, os.Getenv("GITHUB_TOKEN"))
 
 	if err = (&controller.OpenClawInstanceReconciler{
 		Client:            mgr.GetClient(),
@@ -139,6 +141,7 @@ func main() {
 		Recorder:          mgr.GetEventRecorderFor("openclawinstance-controller"),
 		OperatorNamespace: operatorNamespace,
 		VersionResolver:   versionResolver,
+		SkillPackResolver: skillPackResolver,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "OpenClawInstance")
 		os.Exit(1)

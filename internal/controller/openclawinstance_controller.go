@@ -52,6 +52,7 @@ import (
 	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
 	"github.com/openclawrocks/k8s-operator/internal/registry"
 	"github.com/openclawrocks/k8s-operator/internal/resources"
+	"github.com/openclawrocks/k8s-operator/internal/skillpacks"
 )
 
 const (
@@ -79,6 +80,7 @@ type OpenClawInstanceReconciler struct {
 	Recorder          record.EventRecorder
 	OperatorNamespace string
 	VersionResolver   *registry.Resolver
+	SkillPackResolver *skillpacks.Resolver
 }
 
 // +kubebuilder:rbac:groups=openclaw.rocks,resources=openclawinstances,verbs=get;list;watch;create;update;patch;delete
@@ -295,19 +297,11 @@ func (r *OpenClawInstanceReconciler) reconcileResources(ctx context.Context, ins
 	}
 	logger.V(1).Info("Gateway token secret reconciled")
 
-	// 2c. Resolve skill packs from registry ConfigMap (if any pack: skills defined)
+	// 2c. Resolve skill packs from GitHub (if any pack: skills defined)
 	var skillPacks *resources.ResolvedSkillPacks
 	packNames := resources.ExtractPackSkills(instance.Spec.Skills)
-	if len(packNames) > 0 {
-		registryCM := &corev1.ConfigMap{}
-		if err := r.Get(ctx, client.ObjectKey{
-			Namespace: r.OperatorNamespace,
-			Name:      resources.SkillPackConfigMapName,
-		}, registryCM); err != nil {
-			return fmt.Errorf("failed to read skill pack registry ConfigMap %q in namespace %q: %w",
-				resources.SkillPackConfigMapName, r.OperatorNamespace, err)
-		}
-		resolved, err := resources.ResolveSkillPacks(packNames, registryCM.Data)
+	if len(packNames) > 0 && r.SkillPackResolver != nil {
+		resolved, err := r.SkillPackResolver.Resolve(ctx, packNames)
 		if err != nil {
 			return fmt.Errorf("failed to resolve skill packs: %w", err)
 		}
