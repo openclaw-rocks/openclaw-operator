@@ -31,14 +31,14 @@ import (
 // access) and optionally injects gateway.auth credentials when gatewayToken
 // is non-empty. Also includes the nginx stream config for the proxy sidecar.
 // Uses the inline raw config from the instance spec as the base.
-func BuildConfigMap(instance *openclawv1alpha1.OpenClawInstance, gatewayToken string) *corev1.ConfigMap {
+func BuildConfigMap(instance *openclawv1alpha1.OpenClawInstance, gatewayToken string, skillPacks *ResolvedSkillPacks) *corev1.ConfigMap {
 	// Start with empty config, overlay raw config if present
 	configBytes := []byte("{}")
 	if instance.Spec.Config.Raw != nil && len(instance.Spec.Config.Raw.Raw) > 0 {
 		configBytes = instance.Spec.Config.Raw.Raw
 	}
 
-	return BuildConfigMapFromBytes(instance, configBytes, gatewayToken)
+	return BuildConfigMapFromBytes(instance, configBytes, gatewayToken, skillPacks)
 }
 
 // BuildConfigMapFromBytes creates a ConfigMap for the OpenClawInstance using
@@ -46,7 +46,7 @@ func BuildConfigMap(instance *openclawv1alpha1.OpenClawInstance, gatewayToken st
 // from any source (inline raw, external ConfigMap, or empty default).
 // The enrichment pipeline (gateway auth, tailscale, browser, gateway bind)
 // always runs on the provided bytes.
-func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseConfig []byte, gatewayToken string) *corev1.ConfigMap {
+func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseConfig []byte, gatewayToken string, skillPacks *ResolvedSkillPacks) *corev1.ConfigMap {
 	labels := Labels(instance)
 
 	configBytes := baseConfig
@@ -72,6 +72,11 @@ func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseCo
 	}
 	if enriched, err := enrichConfigWithGatewayBind(configBytes, instance); err == nil {
 		configBytes = enriched
+	}
+	if skillPacks != nil && len(skillPacks.SkillEntries) > 0 {
+		if enriched, err := enrichConfigWithSkillPacks(configBytes, skillPacks.SkillEntries); err == nil {
+			configBytes = enriched
+		}
 	}
 
 	configContent := string(configBytes)
@@ -315,6 +320,38 @@ func enrichConfigWithGatewayBind(configJSON []byte, instance *openclawv1alpha1.O
 
 	gw["bind"] = GatewayBindLoopback
 	config["gateway"] = gw
+
+	return json.Marshal(config)
+}
+
+// enrichConfigWithSkillPacks injects skills.entries from resolved skill packs
+// into the config JSON. Skill pack entries are set first, then any existing
+// user-defined entries are overlaid, so user overrides always win.
+func enrichConfigWithSkillPacks(configJSON []byte, skillEntries map[string]interface{}) ([]byte, error) {
+	var config map[string]interface{}
+	if err := json.Unmarshal(configJSON, &config); err != nil {
+		return configJSON, nil
+	}
+
+	skills, _ := config["skills"].(map[string]interface{})
+	if skills == nil {
+		skills = make(map[string]interface{})
+	}
+
+	entries, _ := skills["entries"].(map[string]interface{})
+	if entries == nil {
+		entries = make(map[string]interface{})
+	}
+
+	// Set skill pack entries (only if user hasn't already set them)
+	for name, value := range skillEntries {
+		if _, exists := entries[name]; !exists {
+			entries[name] = value
+		}
+	}
+
+	skills["entries"] = entries
+	config["skills"] = skills
 
 	return json.Marshal(config)
 }

@@ -36,18 +36,14 @@ import (
 // BuildStatefulSet creates a StatefulSet for the OpenClawInstance.
 // If gatewayTokenSecretName is non-empty and the user hasn't already set
 // OPENCLAW_GATEWAY_TOKEN in spec.env, the env var is injected via SecretKeyRef.
-func BuildStatefulSet(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecretName ...string) *appsv1.StatefulSet {
+func BuildStatefulSet(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecretName string, skillPacks *ResolvedSkillPacks) *appsv1.StatefulSet {
 	labels := Labels(instance)
 	selectorLabels := SelectorLabels(instance)
 
 	// Calculate config hash for rollout trigger
 	configHash := calculateConfigHash(instance)
 
-	// Resolve optional gateway token secret name
-	var gwSecretName string
-	if len(gatewayTokenSecretName) > 0 {
-		gwSecretName = gatewayTokenSecretName[0]
-	}
+	gwSecretName := gatewayTokenSecretName
 
 	sts := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
@@ -82,9 +78,9 @@ func BuildStatefulSet(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenS
 					DeprecatedServiceAccount:      ServiceAccountName(instance),
 					AutomountServiceAccountToken:  Ptr(instance.Spec.SelfConfigure.Enabled),
 					SecurityContext:               buildPodSecurityContext(instance),
-					InitContainers:                buildInitContainers(instance),
+					InitContainers:                buildInitContainers(instance, skillPacks),
 					Containers:                    buildContainers(instance, gwSecretName),
-					Volumes:                       buildVolumes(instance),
+					Volumes:                       buildVolumes(instance, skillPacks),
 					NodeSelector:                  instance.Spec.Availability.NodeSelector,
 					Tolerations:                   instance.Spec.Availability.Tolerations,
 					Affinity:                      instance.Spec.Availability.Affinity,
@@ -435,11 +431,11 @@ func hasUserEnv(instance *openclawv1alpha1.OpenClawInstance, name string) bool {
 // files into the data volume. Config is always overwritten (operator-managed),
 // while workspace files use seed-once semantics (only copied if not present).
 // Skills are installed via a separate init container using the OpenClaw image.
-func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance) []corev1.Container {
+func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance, skillPacks *ResolvedSkillPacks) []corev1.Container {
 	var initContainers []corev1.Container
 
 	// Config/workspace init container (only if there's something to do)
-	if script := BuildInitScript(instance); script != "" {
+	if script := BuildInitScript(instance, skillPacks); script != "" {
 		mounts := []corev1.VolumeMount{
 			{Name: "data", MountPath: "/data"},
 		}
@@ -455,7 +451,7 @@ func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance) []corev1.C
 		}
 
 		// Workspace volume mount (only if workspace files exist)
-		if hasWorkspaceFiles(instance) {
+		if hasWorkspaceFiles(instance, skillPacks) {
 			mounts = append(mounts, corev1.VolumeMount{Name: "workspace-init", MountPath: "/workspace-init", ReadOnly: true})
 		}
 
@@ -541,9 +537,9 @@ func shellQuote(s string) string {
 
 // BuildInitScript generates the shell script for the init container.
 // It handles config copy or merge, directory creation (idempotent),
-// and workspace file seeding (only if not present).
+// workspace file seeding (only if not present), and skill pack file mapping.
 // Returns "" if there is nothing to do.
-func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance) string {
+func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance, skillPacks *ResolvedSkillPacks) string {
 	var lines []string
 
 	// 1. Config handling — overwrite or merge, with optional JSON5 conversion
@@ -589,9 +585,17 @@ func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance) string {
 		}
 	}
 
+	// Skill pack directories
+	if skillPacks != nil {
+		for _, dir := range skillPacks.Directories {
+			lines = append(lines, fmt.Sprintf("mkdir -p /data/workspace/%s", shellQuote(dir)))
+		}
+	}
+
 	// 3. Seed workspace files (only if not present)
 	// Collect all workspace file names from both user-defined and operator-injected sources
-	if hasWorkspaceFiles(instance) {
+	hasFiles := hasWorkspaceFiles(instance, skillPacks)
+	if hasFiles {
 		allFiles := make(map[string]bool)
 		if ws != nil {
 			for name := range ws.InitialFiles {
@@ -615,6 +619,20 @@ func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance) string {
 			q := shellQuote(name)
 			lines = append(lines, fmt.Sprintf("[ -f /data/workspace/%s ] || cp /workspace-init/%s /data/workspace/%s", q, q, q))
 		}
+
+		// Skill pack files use mapped paths (ConfigMap key differs from workspace path)
+		if HasSkillPackFiles(skillPacks) {
+			mappedKeys := make([]string, 0, len(skillPacks.PathMapping))
+			for cmKey := range skillPacks.PathMapping {
+				mappedKeys = append(mappedKeys, cmKey)
+			}
+			sort.Strings(mappedKeys)
+			for _, cmKey := range mappedKeys {
+				wsPath := skillPacks.PathMapping[cmKey]
+				lines = append(lines, fmt.Sprintf("[ -f /data/workspace/%s ] || cp /workspace-init/%s /data/workspace/%s",
+					shellQuote(wsPath), shellQuote(cmKey), shellQuote(wsPath)))
+			}
+		}
 	}
 
 	if len(lines) == 0 {
@@ -636,15 +654,16 @@ func parseSkillEntry(entry string) string {
 
 // BuildSkillsScript generates the shell script for the skills init container.
 // Each entry produces either a `clawhub install` (default) or `npm install`
-// (when prefixed with "npm:") command. Entries are sorted for determinism.
-// Returns "" if no skills are defined.
+// (when prefixed with "npm:") command. Entries prefixed with "pack:" are
+// handled by workspace seeding and are excluded here.
+// Entries are sorted for determinism. Returns "" if no installable skills are defined.
 func BuildSkillsScript(instance *openclawv1alpha1.OpenClawInstance) string {
-	if len(instance.Spec.Skills) == 0 {
+	// Filter out pack: entries — those are handled by workspace seeding, not npm/clawhub
+	skills := FilterNonPackSkills(instance.Spec.Skills)
+	if len(skills) == 0 {
 		return ""
 	}
 
-	skills := make([]string, len(instance.Spec.Skills))
-	copy(skills, instance.Spec.Skills)
 	sort.Strings(skills)
 
 	var lines []string
@@ -844,8 +863,11 @@ uv --version`
 
 // hasWorkspaceFiles returns true if the instance has workspace files to seed,
 // either from user-defined workspace files or operator-injected self-configure files.
-func hasWorkspaceFiles(instance *openclawv1alpha1.OpenClawInstance) bool {
+func hasWorkspaceFiles(instance *openclawv1alpha1.OpenClawInstance, skillPacks *ResolvedSkillPacks) bool {
 	if instance.Spec.SelfConfigure.Enabled {
+		return true
+	}
+	if HasSkillPackFiles(skillPacks) {
 		return true
 	}
 	return instance.Spec.Workspace != nil && len(instance.Spec.Workspace.InitialFiles) > 0
@@ -1480,7 +1502,7 @@ func buildOllamaModelPullInitContainer(instance *openclawv1alpha1.OpenClawInstan
 }
 
 // buildVolumes creates the volume specs
-func buildVolumes(instance *openclawv1alpha1.OpenClawInstance) []corev1.Volume {
+func buildVolumes(instance *openclawv1alpha1.OpenClawInstance, skillPacks *ResolvedSkillPacks) []corev1.Volume {
 	volumes := []corev1.Volume{}
 
 	// Data volume (PVC or emptyDir)
@@ -1524,7 +1546,7 @@ func buildVolumes(instance *openclawv1alpha1.OpenClawInstance) []corev1.Volume {
 	})
 
 	// Workspace init volume (ConfigMap with seed files)
-	if hasWorkspaceFiles(instance) {
+	if hasWorkspaceFiles(instance, skillPacks) {
 		volumes = append(volumes, corev1.Volume{
 			Name: "workspace-init",
 			VolumeSource: corev1.VolumeSource{

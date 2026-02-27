@@ -24,8 +24,10 @@ import (
 )
 
 // BuildWorkspaceConfigMap creates a ConfigMap containing workspace seed files.
-// Returns nil if the instance has no workspace files (user-defined or operator-injected).
-func BuildWorkspaceConfigMap(instance *openclawv1alpha1.OpenClawInstance) *corev1.ConfigMap {
+// Returns nil if the instance has no workspace files (user-defined, operator-injected, or skill packs).
+// Skill pack files use ConfigMap-safe keys (/ replaced with --); the init script
+// maps them back to the correct workspace paths.
+func BuildWorkspaceConfigMap(instance *openclawv1alpha1.OpenClawInstance, skillPacks *ResolvedSkillPacks) *corev1.ConfigMap {
 	files := make(map[string]string)
 
 	// User-defined workspace files
@@ -39,6 +41,13 @@ func BuildWorkspaceConfigMap(instance *openclawv1alpha1.OpenClawInstance) *corev
 	if instance.Spec.SelfConfigure.Enabled {
 		files["SELFCONFIG.md"] = SelfConfigureSkillContent
 		files["selfconfig.sh"] = SelfConfigureHelperScript
+	}
+
+	// Skill pack files (ConfigMap-safe keys)
+	if skillPacks != nil {
+		for cmKey, content := range skillPacks.Files {
+			files[cmKey] = content
+		}
 	}
 
 	if len(files) == 0 {

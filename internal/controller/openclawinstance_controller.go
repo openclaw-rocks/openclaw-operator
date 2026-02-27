@@ -295,14 +295,34 @@ func (r *OpenClawInstanceReconciler) reconcileResources(ctx context.Context, ins
 	}
 	logger.V(1).Info("Gateway token secret reconciled")
 
+	// 2c. Resolve skill packs from registry ConfigMap (if any pack: skills defined)
+	var skillPacks *resources.ResolvedSkillPacks
+	packNames := resources.ExtractPackSkills(instance.Spec.Skills)
+	if len(packNames) > 0 {
+		registryCM := &corev1.ConfigMap{}
+		if err := r.Get(ctx, client.ObjectKey{
+			Namespace: r.OperatorNamespace,
+			Name:      resources.SkillPackConfigMapName,
+		}, registryCM); err != nil {
+			return fmt.Errorf("failed to read skill pack registry ConfigMap %q in namespace %q: %w",
+				resources.SkillPackConfigMapName, r.OperatorNamespace, err)
+		}
+		resolved, err := resources.ResolveSkillPacks(packNames, registryCM.Data)
+		if err != nil {
+			return fmt.Errorf("failed to resolve skill packs: %w", err)
+		}
+		skillPacks = resolved
+		logger.V(1).Info("Skill packs resolved", "packs", packNames)
+	}
+
 	// 3. Reconcile ConfigMap (always - enrichment pipeline runs on all config sources)
-	if err := r.reconcileConfigMap(ctx, instance, gatewayToken); err != nil {
+	if err := r.reconcileConfigMap(ctx, instance, gatewayToken, skillPacks); err != nil {
 		return fmt.Errorf("failed to reconcile ConfigMap: %w", err)
 	}
 	logger.V(1).Info("ConfigMap reconciled")
 
 	// 3b. Reconcile Workspace ConfigMap (seed files for workspace)
-	if err := r.reconcileWorkspaceConfigMap(ctx, instance); err != nil {
+	if err := r.reconcileWorkspaceConfigMap(ctx, instance, skillPacks); err != nil {
 		return fmt.Errorf("failed to reconcile Workspace ConfigMap: %w", err)
 	}
 	logger.V(1).Info("Workspace ConfigMap reconciled")
@@ -340,7 +360,7 @@ func (r *OpenClawInstanceReconciler) reconcileResources(ctx context.Context, ins
 	if err := r.migrateDeploymentToStatefulSet(ctx, instance); err != nil {
 		return fmt.Errorf("failed to migrate Deployment to StatefulSet: %w", err)
 	}
-	if err := r.reconcileStatefulSet(ctx, instance, gatewayToken); err != nil {
+	if err := r.reconcileStatefulSet(ctx, instance, gatewayToken, skillPacks); err != nil {
 		return fmt.Errorf("failed to reconcile StatefulSet: %w", err)
 	}
 	logger.V(1).Info("StatefulSet reconciled")
@@ -571,7 +591,7 @@ func (r *OpenClawInstanceReconciler) reconcileGatewayTokenSecret(ctx context.Con
 // It always creates the enriched ConfigMap regardless of config source (raw,
 // configMapRef, or none). When configMapRef is set, the external ConfigMap is
 // read and its content is used as the base for the enrichment pipeline.
-func (r *OpenClawInstanceReconciler) reconcileConfigMap(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance, gatewayToken string) error {
+func (r *OpenClawInstanceReconciler) reconcileConfigMap(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance, gatewayToken string, skillPacks *resources.ResolvedSkillPacks) error {
 	var desired *corev1.ConfigMap
 
 	if instance.Spec.Config.ConfigMapRef != nil {
@@ -606,9 +626,9 @@ func (r *OpenClawInstanceReconciler) reconcileConfigMap(ctx context.Context, ins
 			return fmt.Errorf("key %q not found in ConfigMap %q", key, ref.Name)
 		}
 
-		desired = resources.BuildConfigMapFromBytes(instance, []byte(data), gatewayToken)
+		desired = resources.BuildConfigMapFromBytes(instance, []byte(data), gatewayToken, skillPacks)
 	} else {
-		desired = resources.BuildConfigMap(instance, gatewayToken)
+		desired = resources.BuildConfigMap(instance, gatewayToken, skillPacks)
 	}
 
 	cm := &corev1.ConfigMap{
@@ -638,8 +658,8 @@ func (r *OpenClawInstanceReconciler) reconcileConfigMap(ctx context.Context, ins
 
 // reconcileWorkspaceConfigMap reconciles the ConfigMap containing workspace seed files.
 // If the instance has no workspace files, any existing workspace ConfigMap is cleaned up.
-func (r *OpenClawInstanceReconciler) reconcileWorkspaceConfigMap(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) error {
-	desired := resources.BuildWorkspaceConfigMap(instance)
+func (r *OpenClawInstanceReconciler) reconcileWorkspaceConfigMap(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance, skillPacks *resources.ResolvedSkillPacks) error {
+	desired := resources.BuildWorkspaceConfigMap(instance, skillPacks)
 
 	if desired == nil {
 		// No workspace files — clean up existing ConfigMap if present
@@ -834,7 +854,7 @@ func (r *OpenClawInstanceReconciler) migrateDeploymentToStatefulSet(ctx context.
 }
 
 // reconcileStatefulSet reconciles the StatefulSet
-func (r *OpenClawInstanceReconciler) reconcileStatefulSet(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance, gatewayToken string) error {
+func (r *OpenClawInstanceReconciler) reconcileStatefulSet(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance, gatewayToken string, skillPacks *resources.ResolvedSkillPacks) error {
 	// Compute secret hash for rollout trigger on secret rotation
 	secretHash, missingSecrets, err := r.computeSecretHash(ctx, instance)
 	if err != nil {
@@ -879,7 +899,7 @@ func (r *OpenClawInstanceReconciler) reconcileStatefulSet(ctx context.Context, i
 				gwSecretName = resources.GatewayTokenSecretName(instance)
 			}
 		}
-		desired := resources.BuildStatefulSet(instance, gwSecretName)
+		desired := resources.BuildStatefulSet(instance, gwSecretName, skillPacks)
 		resources.NormalizeStatefulSet(desired)
 		sts.Labels = desired.Labels
 		// Preserve current replica count when HPA manages scaling

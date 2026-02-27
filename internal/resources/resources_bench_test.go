@@ -136,7 +136,7 @@ func BenchmarkBuildStatefulSet_Minimal(b *testing.B) {
 	instance := newBenchInstance()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		BuildStatefulSet(instance)
+		BuildStatefulSet(instance, "", nil)
 	}
 }
 
@@ -144,7 +144,7 @@ func BenchmarkBuildStatefulSet_FullyLoaded(b *testing.B) {
 	instance := newFullBenchInstance()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		BuildStatefulSet(instance)
+		BuildStatefulSet(instance, "", nil)
 	}
 }
 
@@ -156,7 +156,7 @@ func BenchmarkBuildConfigMap_Minimal(b *testing.B) {
 	instance := newBenchInstance()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		BuildConfigMap(instance, "")
+		BuildConfigMap(instance, "", nil)
 	}
 }
 
@@ -164,7 +164,7 @@ func BenchmarkBuildConfigMap_WithRawConfig(b *testing.B) {
 	instance := newFullBenchInstance()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		BuildConfigMap(instance, "test-token-hex")
+		BuildConfigMap(instance, "test-token-hex", nil)
 	}
 }
 

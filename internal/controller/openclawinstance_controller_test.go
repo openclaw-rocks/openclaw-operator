@@ -175,7 +175,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				Spec: openclawv1alpha1.OpenClawInstanceSpec{},
 			}
 
-			sts := resources.BuildStatefulSet(instance)
+			sts := resources.BuildStatefulSet(instance, "", nil)
 
 			// Verify pod security context
 			Expect(sts.Spec.Template.Spec.SecurityContext).NotTo(BeNil())
