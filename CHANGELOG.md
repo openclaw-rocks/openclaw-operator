@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.13](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.12...v0.10.13) (2026-02-27)
+
+
+### Bug Fixes
+
+* use Node.js TCP connect for health probes instead of wget ([#215](https://github.com/openclaw-rocks/k8s-operator/issues/215)) ([ecb7474](https://github.com/openclaw-rocks/k8s-operator/commit/ecb7474c2ea40775b3a5df5f008b299d319f0d75))
+
 ## [0.10.12](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.11...v0.10.12) (2026-02-26)
 
 
