@@ -8825,7 +8825,7 @@ func TestBuildIngress_NoHosts_ReturnsEmpty(t *testing.T) {
 
 func TestNormalizeStatefulSet_DeprecatedServiceAccount(t *testing.T) {
 	instance := newTestInstance("norm-test")
-	sts := BuildStatefulSet(instance, "")
+	sts := BuildStatefulSet(instance, "", nil)
 	NormalizeStatefulSet(sts)
 
 	podSpec := sts.Spec.Template.Spec
@@ -8841,7 +8841,7 @@ func TestNormalizeStatefulSet_DeprecatedServiceAccount(t *testing.T) {
 func TestNormalizeStatefulSet_FieldRefAPIVersion(t *testing.T) {
 	instance := newTestInstance("norm-fieldref")
 	instance.Spec.Chromium.Enabled = true
-	sts := BuildStatefulSet(instance, "")
+	sts := BuildStatefulSet(instance, "", nil)
 	NormalizeStatefulSet(sts)
 
 	for _, c := range sts.Spec.Template.Spec.Containers {
@@ -8860,7 +8860,7 @@ func TestNormalizeStatefulSet_Idempotent(t *testing.T) {
 	// Verifies that normalizing twice produces the same result (stability).
 	instance := newTestInstance("norm-idem")
 	instance.Spec.Chromium.Enabled = true
-	sts := BuildStatefulSet(instance, "gw-secret")
+	sts := BuildStatefulSet(instance, "gw-secret", nil)
 	NormalizeStatefulSet(sts)
 
 	// JSON-serialize as first snapshot
@@ -8883,7 +8883,7 @@ func TestNormalizeStatefulSet_NoSpuriousDiff(t *testing.T) {
 	instance.Spec.Chromium.Enabled = true
 
 	// First build (simulates "existing" after initial create + K8s defaulting)
-	sts1 := BuildStatefulSet(instance, "gw-secret")
+	sts1 := BuildStatefulSet(instance, "gw-secret", nil)
 	NormalizeStatefulSet(sts1)
 
 	// Simulate K8s round-trip: JSON marshal/unmarshal (like reading from API)
@@ -8897,7 +8897,7 @@ func TestNormalizeStatefulSet_NoSpuriousDiff(t *testing.T) {
 	}
 
 	// Second build (simulates next reconcile's "desired")
-	sts2 := BuildStatefulSet(instance, "gw-secret")
+	sts2 := BuildStatefulSet(instance, "gw-secret", nil)
 	NormalizeStatefulSet(sts2)
 
 	// Apply mutation like the controller does: replace spec
@@ -8918,7 +8918,7 @@ func TestNormalizeStatefulSet_NoSpuriousDiff(t *testing.T) {
 
 func TestNormalizeStatefulSet_ProbeDefaults(t *testing.T) {
 	instance := newTestInstance("norm-probe")
-	sts := BuildStatefulSet(instance, "")
+	sts := BuildStatefulSet(instance, "", nil)
 	NormalizeStatefulSet(sts)
 
 	main := sts.Spec.Template.Spec.Containers[0]
