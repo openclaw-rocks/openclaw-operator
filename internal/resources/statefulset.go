@@ -78,9 +78,9 @@ func BuildStatefulSet(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenS
 					},
 				},
 				Spec: corev1.PodSpec{
-					ServiceAccountName:           ServiceAccountName(instance),
-					DeprecatedServiceAccount:     ServiceAccountName(instance),
-					AutomountServiceAccountToken: Ptr(instance.Spec.SelfConfigure.Enabled),
+					ServiceAccountName:            ServiceAccountName(instance),
+					DeprecatedServiceAccount:      ServiceAccountName(instance),
+					AutomountServiceAccountToken:  Ptr(instance.Spec.SelfConfigure.Enabled),
 					SecurityContext:               buildPodSecurityContext(instance),
 					InitContainers:                buildInitContainers(instance),
 					Containers:                    buildContainers(instance, gwSecretName),
