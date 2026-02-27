@@ -1787,12 +1787,16 @@ func buildChromiumResourceRequirements(instance *openclawv1alpha1.OpenClawInstan
 // sidecar handles external access), which is unreachable from the kubelet
 // via TCPSocket probes (they connect to the pod IP). Exec probes run inside
 // the container and can reach localhost.
+//
+// Uses a Node.js TCP connect check instead of wget because the gateway
+// returns 404 on GET / (no HTTP health endpoint). Node.js is always
+// available in the OpenClaw container.
 func buildProbeHandler(_ *openclawv1alpha1.OpenClawInstance) corev1.ProbeHandler {
 	return corev1.ProbeHandler{
 		Exec: &corev1.ExecAction{
 			Command: []string{
-				"sh", "-c",
-				fmt.Sprintf("wget -q --spider --timeout=2 http://127.0.0.1:%d/", GatewayPort),
+				"node", "-e",
+				fmt.Sprintf("require('net').connect(%d,'127.0.0.1',()=>process.exit(0)).on('error',()=>process.exit(1));setTimeout(()=>process.exit(1),2000)", GatewayPort),
 			},
 		},
 	}
