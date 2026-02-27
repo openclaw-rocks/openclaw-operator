@@ -78,8 +78,9 @@ func BuildStatefulSet(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenS
 					},
 				},
 				Spec: corev1.PodSpec{
-					ServiceAccountName:            ServiceAccountName(instance),
-					AutomountServiceAccountToken:  Ptr(instance.Spec.SelfConfigure.Enabled),
+					ServiceAccountName:           ServiceAccountName(instance),
+					DeprecatedServiceAccount:     ServiceAccountName(instance),
+					AutomountServiceAccountToken: Ptr(instance.Spec.SelfConfigure.Enabled),
 					SecurityContext:               buildPodSecurityContext(instance),
 					InitContainers:                buildInitContainers(instance),
 					Containers:                    buildContainers(instance, gwSecretName),
@@ -350,7 +351,8 @@ func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecre
 				Name: "POD_IP",
 				ValueFrom: &corev1.EnvVarSource{
 					FieldRef: &corev1.ObjectFieldSelector{
-						FieldPath: "status.podIP",
+						APIVersion: "v1",
+						FieldPath:  "status.podIP",
 					},
 				},
 			},
@@ -1987,6 +1989,84 @@ func calculateConfigHash(instance *openclawv1alpha1.OpenClawInstance) string {
 		h.Write(tsData)
 	}
 	return hex.EncodeToString(h.Sum(nil)[:8])
+}
+
+// NormalizeStatefulSet applies the same defaults that the Kubernetes API server
+// admission controller would apply. This prevents CreateOrUpdate from detecting
+// spurious diffs between the desired spec (built by the operator) and the
+// existing spec (read from the API server with defaults applied).
+//
+// Without this, the operator issues an Update on every reconcile. K8s re-applies
+// defaults, so the stored spec doesn't actually change, but the unnecessary
+// Update calls waste API server resources and can interfere with rolling updates.
+func NormalizeStatefulSet(sts *appsv1.StatefulSet) {
+	spec := &sts.Spec.Template.Spec
+
+	// K8s defaults DeprecatedServiceAccount from ServiceAccountName
+	if spec.ServiceAccountName != "" && spec.DeprecatedServiceAccount == "" {
+		spec.DeprecatedServiceAccount = spec.ServiceAccountName
+	}
+
+	// Normalize all containers (init + regular)
+	for i := range spec.InitContainers {
+		normalizeContainer(&spec.InitContainers[i])
+	}
+	for i := range spec.Containers {
+		normalizeContainer(&spec.Containers[i])
+	}
+}
+
+// normalizeContainer applies K8s admission defaults to a single container.
+func normalizeContainer(c *corev1.Container) {
+	// K8s defaults FieldRef.APIVersion to "v1" in env var sources
+	for i := range c.Env {
+		if c.Env[i].ValueFrom != nil && c.Env[i].ValueFrom.FieldRef != nil {
+			if c.Env[i].ValueFrom.FieldRef.APIVersion == "" {
+				c.Env[i].ValueFrom.FieldRef.APIVersion = "v1"
+			}
+		}
+	}
+
+	// K8s defaults TerminationMessagePath and TerminationMessagePolicy
+	if c.TerminationMessagePath == "" {
+		c.TerminationMessagePath = corev1.TerminationMessagePathDefault
+	}
+	if c.TerminationMessagePolicy == "" {
+		c.TerminationMessagePolicy = corev1.TerminationMessageReadFile
+	}
+
+	// K8s defaults ImagePullPolicy based on image tag
+	if c.ImagePullPolicy == "" {
+		if strings.HasSuffix(c.Image, ":latest") || !strings.Contains(c.Image, ":") {
+			c.ImagePullPolicy = corev1.PullAlways
+		} else {
+			c.ImagePullPolicy = corev1.PullIfNotPresent
+		}
+	}
+
+	// K8s defaults probe fields when probes are non-nil
+	normalizeProbe(c.LivenessProbe)
+	normalizeProbe(c.ReadinessProbe)
+	normalizeProbe(c.StartupProbe)
+}
+
+// normalizeProbe applies K8s admission defaults to probe fields.
+func normalizeProbe(p *corev1.Probe) {
+	if p == nil {
+		return
+	}
+	if p.TimeoutSeconds == 0 {
+		p.TimeoutSeconds = 1
+	}
+	if p.PeriodSeconds == 0 {
+		p.PeriodSeconds = 10
+	}
+	if p.SuccessThreshold == 0 {
+		p.SuccessThreshold = 1
+	}
+	if p.FailureThreshold == 0 {
+		p.FailureThreshold = 3
+	}
 }
 
 // statefulSetReplicas returns the replica count for the StatefulSet.

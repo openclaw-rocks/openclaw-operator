@@ -26,6 +26,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -8819,6 +8820,116 @@ func TestBuildIngress_NoHosts_ReturnsEmpty(t *testing.T) {
 	}
 	if len(ing.Spec.Rules) != 0 {
 		t.Errorf("expected 0 rules, got %d", len(ing.Spec.Rules))
+	}
+}
+
+func TestNormalizeStatefulSet_DeprecatedServiceAccount(t *testing.T) {
+	instance := newTestInstance("norm-test")
+	sts := BuildStatefulSet(instance, "")
+	NormalizeStatefulSet(sts)
+
+	podSpec := sts.Spec.Template.Spec
+	if podSpec.DeprecatedServiceAccount == "" {
+		t.Error("NormalizeStatefulSet should set DeprecatedServiceAccount")
+	}
+	if podSpec.DeprecatedServiceAccount != podSpec.ServiceAccountName {
+		t.Errorf("DeprecatedServiceAccount = %q, want %q (same as ServiceAccountName)",
+			podSpec.DeprecatedServiceAccount, podSpec.ServiceAccountName)
+	}
+}
+
+func TestNormalizeStatefulSet_FieldRefAPIVersion(t *testing.T) {
+	instance := newTestInstance("norm-fieldref")
+	instance.Spec.Chromium.Enabled = true
+	sts := BuildStatefulSet(instance, "")
+	NormalizeStatefulSet(sts)
+
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		for _, e := range c.Env {
+			if e.ValueFrom != nil && e.ValueFrom.FieldRef != nil {
+				if e.ValueFrom.FieldRef.APIVersion != "v1" {
+					t.Errorf("container %q env %q: FieldRef.APIVersion = %q, want %q",
+						c.Name, e.Name, e.ValueFrom.FieldRef.APIVersion, "v1")
+				}
+			}
+		}
+	}
+}
+
+func TestNormalizeStatefulSet_Idempotent(t *testing.T) {
+	// Verifies that normalizing twice produces the same result (stability).
+	instance := newTestInstance("norm-idem")
+	instance.Spec.Chromium.Enabled = true
+	sts := BuildStatefulSet(instance, "gw-secret")
+	NormalizeStatefulSet(sts)
+
+	// JSON-serialize as first snapshot
+	snap1, _ := json.Marshal(sts.Spec)
+
+	// Normalize again
+	NormalizeStatefulSet(sts)
+	snap2, _ := json.Marshal(sts.Spec)
+
+	if !bytes.Equal(snap1, snap2) {
+		t.Error("NormalizeStatefulSet is not idempotent: second normalize changed the spec")
+	}
+}
+
+func TestNormalizeStatefulSet_NoSpuriousDiff(t *testing.T) {
+	// Simulates the CreateOrUpdate round-trip: build desired, normalize,
+	// then build again and normalize. The two should be equal via
+	// equality.Semantic.DeepEqual (same comparison controller-runtime uses).
+	instance := newTestInstance("norm-roundtrip")
+	instance.Spec.Chromium.Enabled = true
+
+	// First build (simulates "existing" after initial create + K8s defaulting)
+	sts1 := BuildStatefulSet(instance, "gw-secret")
+	NormalizeStatefulSet(sts1)
+
+	// Simulate K8s round-trip: JSON marshal/unmarshal (like reading from API)
+	data, err := json.Marshal(sts1)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	existing := &appsv1.StatefulSet{}
+	if err := json.Unmarshal(data, existing); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// Second build (simulates next reconcile's "desired")
+	sts2 := BuildStatefulSet(instance, "gw-secret")
+	NormalizeStatefulSet(sts2)
+
+	// Apply mutation like the controller does: replace spec
+	mutated := existing.DeepCopy()
+	mutated.Labels = sts2.Labels
+	mutated.Spec = sts2.Spec
+
+	if !equality.Semantic.DeepEqual(existing, mutated) {
+		// Find the difference for a useful error message
+		d1, _ := json.MarshalIndent(existing.Spec, "", "  ")
+		d2, _ := json.MarshalIndent(mutated.Spec, "", "  ")
+		t.Errorf("spurious diff detected between reconcile cycles.\n"+
+			"This would cause a reconciliation loop in production.\n"+
+			"Existing spec (from K8s):\n%s\n\nDesired spec (from builder):\n%s",
+			string(d1), string(d2))
+	}
+}
+
+func TestNormalizeStatefulSet_ProbeDefaults(t *testing.T) {
+	instance := newTestInstance("norm-probe")
+	sts := BuildStatefulSet(instance, "")
+	NormalizeStatefulSet(sts)
+
+	main := sts.Spec.Template.Spec.Containers[0]
+	if main.StartupProbe == nil {
+		t.Fatal("expected startup probe to be set")
+	}
+	if main.StartupProbe.TimeoutSeconds == 0 {
+		t.Error("startup probe TimeoutSeconds should not be 0 after normalization")
+	}
+	if main.StartupProbe.PeriodSeconds == 0 {
+		t.Error("startup probe PeriodSeconds should not be 0 after normalization")
 	}
 }
 

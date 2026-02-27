@@ -880,6 +880,7 @@ func (r *OpenClawInstanceReconciler) reconcileStatefulSet(ctx context.Context, i
 			}
 		}
 		desired := resources.BuildStatefulSet(instance, gwSecretName)
+		resources.NormalizeStatefulSet(desired)
 		sts.Labels = desired.Labels
 		// Preserve current replica count when HPA manages scaling
 		existingReplicas := sts.Spec.Replicas
