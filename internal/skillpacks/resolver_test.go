@@ -38,8 +38,8 @@ func ghFile(content string) string {
 }
 
 // newTestResolver creates a resolver pointing at the httptest server.
-func newTestResolver(server *httptest.Server, token string, ttl time.Duration) *Resolver {
-	r := NewResolver(ttl, token)
+func newTestResolver(server *httptest.Server, token string) *Resolver {
+	r := NewResolver(5*time.Minute, token)
 	r.baseURL = server.URL
 	return r
 }
@@ -101,18 +101,18 @@ func TestResolve_Success(t *testing.T) {
 		path := r.URL.Path
 		switch {
 		case strings.HasSuffix(path, "image-gen/skillpack.json"):
-			w.Write([]byte(ghFile(manifestJSON)))
+			_, _ = w.Write([]byte(ghFile(manifestJSON)))
 		case strings.HasSuffix(path, "image-gen/SKILL.md"):
-			w.Write([]byte(ghFile(skillMD)))
+			_, _ = w.Write([]byte(ghFile(skillMD)))
 		case strings.HasSuffix(path, "image-gen/scripts/generate.py"):
-			w.Write([]byte(ghFile(generatePy)))
+			_, _ = w.Write([]byte(ghFile(generatePy)))
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	defer server.Close()
 
-	resolver := newTestResolver(server, "", 5*time.Minute)
+	resolver := newTestResolver(server, "")
 
 	resolved, err := resolver.Resolve(context.Background(), []string{"test-owner/test-repo/image-gen"})
 	if err != nil {
@@ -175,7 +175,7 @@ func TestResolve_MissingManifest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	resolver := newTestResolver(server, "", 5*time.Minute)
+	resolver := newTestResolver(server, "")
 
 	_, err := resolver.Resolve(context.Background(), []string{"owner/repo/missing-pack"})
 	if err == nil {
@@ -195,14 +195,14 @@ func TestResolve_MissingFile(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "skillpack.json") {
-			w.Write([]byte(ghFile(manifestJSON)))
+			_, _ = w.Write([]byte(ghFile(manifestJSON)))
 			return
 		}
 		http.NotFound(w, r)
 	}))
 	defer server.Close()
 
-	resolver := newTestResolver(server, "", 5*time.Minute)
+	resolver := newTestResolver(server, "")
 
 	_, err := resolver.Resolve(context.Background(), []string{"owner/repo/test-pack"})
 	if err == nil {
@@ -219,11 +219,11 @@ func TestResolve_Caching(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
-		w.Write([]byte(ghFile(manifestJSON)))
+		_, _ = w.Write([]byte(ghFile(manifestJSON)))
 	}))
 	defer server.Close()
 
-	resolver := newTestResolver(server, "", 5*time.Minute)
+	resolver := newTestResolver(server, "")
 
 	// First call
 	_, err := resolver.Resolve(context.Background(), []string{"owner/repo/test"})
@@ -248,11 +248,11 @@ func TestResolve_AuthHeader(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
-		w.Write([]byte(ghFile(manifestJSON)))
+		_, _ = w.Write([]byte(ghFile(manifestJSON)))
 	}))
 	defer server.Close()
 
-	resolver := newTestResolver(server, "ghp_test_token_123", 5*time.Minute)
+	resolver := newTestResolver(server, "ghp_test_token_123")
 
 	_, err := resolver.Resolve(context.Background(), []string{"owner/repo/test"})
 	if err != nil {
@@ -270,11 +270,11 @@ func TestResolve_NoAuthWhenTokenEmpty(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
-		w.Write([]byte(ghFile(manifestJSON)))
+		_, _ = w.Write([]byte(ghFile(manifestJSON)))
 	}))
 	defer server.Close()
 
-	resolver := newTestResolver(server, "", 5*time.Minute)
+	resolver := newTestResolver(server, "")
 
 	_, err := resolver.Resolve(context.Background(), []string{"owner/repo/test"})
 	if err != nil {
@@ -292,11 +292,11 @@ func TestResolve_WithRef(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotRef = r.URL.Query().Get("ref")
-		w.Write([]byte(ghFile(manifestJSON)))
+		_, _ = w.Write([]byte(ghFile(manifestJSON)))
 	}))
 	defer server.Close()
 
-	resolver := newTestResolver(server, "", 5*time.Minute)
+	resolver := newTestResolver(server, "")
 
 	_, err := resolver.Resolve(context.Background(), []string{"owner/repo/test@v1.2.3"})
 	if err != nil {

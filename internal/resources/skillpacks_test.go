@@ -217,7 +217,9 @@ func TestEnrichConfigWithSkillPacks_UserOverrideWins(t *testing.T) {
 	}
 
 	var result map[string]interface{}
-	json.Unmarshal(enriched, &result)
+	if err := json.Unmarshal(enriched, &result); err != nil {
+		t.Fatalf("failed to parse enriched config: %v", err)
+	}
 	entries := result["skills"].(map[string]interface{})["entries"].(map[string]interface{})
 	ig := entries["image-gen"].(map[string]interface{})
 	if ig["enabled"] != false {

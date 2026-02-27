@@ -229,8 +229,8 @@ func (r *Resolver) fetchFile(ctx context.Context, owner, repo, path, ref string)
 	}
 
 	var cr contentsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
-		return nil, fmt.Errorf("decoding response: %w", err)
+	if decErr := json.NewDecoder(resp.Body).Decode(&cr); decErr != nil {
+		return nil, fmt.Errorf("decoding response: %w", decErr)
 	}
 
 	if cr.Encoding != "base64" {
