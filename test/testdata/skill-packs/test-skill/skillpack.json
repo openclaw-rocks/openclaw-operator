@@ -1,0 +1,10 @@
+{
+  "files": {
+    "skills/test-skill/SKILL.md": "SKILL.md",
+    "skills/test-skill/scripts/hello.sh": "scripts/hello.sh"
+  },
+  "directories": ["skills/test-skill/scripts"],
+  "config": {
+    "test-skill": {"enabled": true}
+  }
+}

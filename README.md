@@ -73,7 +73,7 @@ Every request is validated against the instance's allowlist policy. Protected co
 | **Observable** | Built-in metrics | Prometheus metrics, ServiceMonitor integration, structured JSON logging, Kubernetes events |
 | **Flexible** | Provider-agnostic config | Use any AI provider (Anthropic, OpenAI, or others) via environment variables and inline or external config |
 | **Config Modes** | Merge or overwrite | `overwrite` replaces config on restart; `merge` deep-merges with PVC config, preserving runtime changes. Config is restored on every container restart via init container. |
-| **Skills** | Declarative install | Install ClawHub skills or npm packages via `spec.skills` - supports `npm:` prefix for npmjs.com packages |
+| **Skills** | Declarative install | Install ClawHub skills, npm packages, or GitHub-hosted skill packs via `spec.skills` - supports `npm:` and `pack:` prefixes |
 | **Runtime Deps** | pnpm & Python/uv | Built-in init containers install pnpm (via corepack) or Python 3.12 + uv for MCP servers and skills |
 | **Auto-Update** | OCI registry polling | Opt-in version tracking: checks the registry for new semver releases, backs up first, rolls out, and auto-rolls back if the new version fails health checks |
 | **Scalable** | Auto-scaling | HPA integration with CPU and memory metrics, min/max replica bounds, automatic StatefulSet replica management |
@@ -386,6 +386,35 @@ spec:
 
 npm lifecycle scripts are disabled globally on the init container (`NPM_CONFIG_IGNORE_SCRIPTS=true`) to mitigate supply chain attacks.
 
+### Skill packs
+
+Skill packs bundle multiple files (SKILL.md, scripts, config) into a single installable unit hosted on GitHub. Use the `pack:` prefix with `owner/repo/path` format:
+
+```yaml
+spec:
+  skills:
+    - "pack:openclaw-rocks/skills/image-gen"            # latest from default branch
+    - "pack:openclaw-rocks/skills/image-gen@v1.0.0"     # pinned to tag
+    - "pack:myorg/private-skills/custom-tool@main"       # private repo (requires GITHUB_TOKEN)
+```
+
+Each pack directory must contain a `skillpack.json` manifest:
+
+```json
+{
+  "files": {
+    "skills/image-gen/SKILL.md": "SKILL.md",
+    "skills/image-gen/scripts/generate.py": "scripts/generate.py"
+  },
+  "directories": ["skills/image-gen/scripts"],
+  "config": {
+    "image-gen": {"enabled": true}
+  }
+}
+```
+
+The operator resolves packs via the GitHub Contents API (cached for 5 minutes), seeds files into the workspace via the init container, and injects config entries into `config.raw.skills.entries` (user overrides take precedence). Set `GITHUB_TOKEN` on the operator deployment for private repo access.
+
 ### Self-configure
 
 Allow agents to modify their own configuration by creating `OpenClawSelfConfig` resources via the K8s API. The operator validates each request against the instance's `allowedActions` policy before applying changes:
@@ -690,7 +719,7 @@ The operator follows a **secure-by-default** philosophy. Every instance ships wi
 |-------|----------|----------|
 | `runAsUser: 0` | Error | Blocked: root execution not allowed |
 | Reserved init container name | Error | `init-config`, `init-pnpm`, `init-python`, `init-skills`, `init-ollama` are reserved |
-| Invalid skill name | Error | Only alphanumeric, `-`, `_`, `/`, `.`, `@` allowed (max 128 chars). `npm:` prefix is allowed for npm packages; bare `npm:` is rejected |
+| Invalid skill name | Error | Only alphanumeric, `-`, `_`, `/`, `.`, `@` allowed (max 128 chars). `npm:` prefix for npm packages, `pack:` prefix for skill packs; bare `npm:` or `pack:` is rejected |
 | Invalid CA bundle config | Error | Exactly one of `configMapName` or `secretName` must be set |
 | JSON5 with inline raw config | Error | JSON5 requires `configMapRef` (inline must be valid JSON) |
 | JSON5 with merge mode | Error | JSON5 is not compatible with `mergeMode: merge` |

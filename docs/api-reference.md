@@ -82,14 +82,18 @@ spec:
 
 | Field    | Type       | Default | Description                                                                                       |
 |----------|------------|---------|---------------------------------------------------------------------------------------------------|
-| `skills` | `[]string` | --      | Skills to install via init container. Each entry is a ClawHub skill identifier (e.g., `@anthropic/mcp-server-fetch`) or an npm package prefixed with `npm:` (e.g., `npm:@openclaw/matrix`). npm lifecycle scripts are disabled for security. Max 20 items. |
+| `skills` | `[]string` | --      | Skills to install. Three formats supported: ClawHub identifiers (e.g., `@anthropic/mcp-server-fetch`), npm packages with `npm:` prefix (e.g., `npm:@openclaw/matrix`), and GitHub-hosted skill packs with `pack:` prefix (e.g., `pack:openclaw-rocks/skills/image-gen`). npm lifecycle scripts are disabled for security. Max 20 items. |
 
 ```yaml
 spec:
   skills:
-    - "@anthropic/mcp-server-fetch"
-    - "npm:@openclaw/matrix"
+    - "@anthropic/mcp-server-fetch"                         # ClawHub
+    - "npm:@openclaw/matrix"                                # npm package
+    - "pack:openclaw-rocks/skills/image-gen"                # skill pack (latest)
+    - "pack:openclaw-rocks/skills/image-gen@v1.0.0"         # skill pack (pinned)
 ```
+
+**Skill packs** (`pack:owner/repo/path[@ref]`) are resolved from GitHub repos containing a `skillpack.json` manifest. The manifest declares files to seed into the workspace, directories to create, and config entries to inject into `config.raw.skills.entries`. User-defined config entries take precedence over pack defaults. The operator caches resolved packs for 5 minutes. Set `GITHUB_TOKEN` on the operator for private repo access.
 
 ### spec.envFrom
 
