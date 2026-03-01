@@ -133,6 +133,8 @@ func buildRcloneJob(
 	labels map[string]string,
 	creds *s3Credentials,
 	isBackup bool,
+	nodeSelector map[string]string,
+	tolerations []corev1.Toleration,
 ) *batchv1.Job {
 	backoffLimit := int32(3)
 	ttl := int32(86400) // 24h
@@ -178,6 +180,8 @@ func buildRcloneJob(
 				},
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyOnFailure,
+					NodeSelector:  nodeSelector,
+					Tolerations:   tolerations,
 					// Match the fsGroup/runAsUser from the OpenClaw StatefulSet
 					// so the rclone container can read/write the PVC data
 					SecurityContext: &corev1.PodSecurityContext{

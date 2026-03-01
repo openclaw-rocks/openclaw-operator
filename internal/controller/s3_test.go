@@ -83,7 +83,7 @@ var _ = Describe("S3 Helpers", func() {
 				},
 			}
 			labels := backupLabels(instance, "backup")
-			job := buildRcloneJob("myinst-backup", "oc-tenant-t1", "myinst-data", "backups/t1/myinst/2026-01-01T000000Z", labels, creds, true)
+			job := buildRcloneJob("myinst-backup", "oc-tenant-t1", "myinst-data", "backups/t1/myinst/2026-01-01T000000Z", labels, creds, true, nil, nil)
 
 			Expect(job.Name).To(Equal("myinst-backup"))
 			Expect(job.Namespace).To(Equal("oc-tenant-t1"))
@@ -128,7 +128,7 @@ var _ = Describe("S3 Helpers", func() {
 				},
 			}
 			labels := backupLabels(instance, "restore")
-			job := buildRcloneJob("myinst-restore", "oc-tenant-t1", "myinst-data", "backups/t1/myinst/2026-01-01T000000Z", labels, creds, false)
+			job := buildRcloneJob("myinst-restore", "oc-tenant-t1", "myinst-data", "backups/t1/myinst/2026-01-01T000000Z", labels, creds, false, nil, nil)
 
 			container := job.Spec.Template.Spec.Containers[0]
 			Expect(container.Args[0]).To(Equal("sync"))
@@ -137,6 +137,31 @@ var _ = Describe("S3 Helpers", func() {
 
 			vol := job.Spec.Template.Spec.Volumes[0]
 			Expect(vol.PersistentVolumeClaim.ClaimName).To(Equal("myinst-data"))
+		})
+
+		It("Should propagate nodeSelector and tolerations to Job pod", func() {
+			nodeSelector := map[string]string{"openclaw.rocks/nodepool": "openclaw"}
+			tolerations := []corev1.Toleration{
+				{
+					Key:      "openclaw.rocks/dedicated",
+					Operator: corev1.TolerationOpEqual,
+					Value:    "openclaw",
+					Effect:   corev1.TaintEffectNoSchedule,
+				},
+			}
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "myinst",
+					Namespace: "oc-tenant-t1",
+				},
+			}
+			labels := backupLabels(instance, "backup")
+			job := buildRcloneJob("myinst-backup", "oc-tenant-t1", "myinst-data", "backups/t1/myinst/2026-01-01T000000Z", labels, creds, true, nodeSelector, tolerations)
+
+			Expect(job.Spec.Template.Spec.NodeSelector).To(Equal(nodeSelector))
+			Expect(job.Spec.Template.Spec.Tolerations).To(HaveLen(1))
+			Expect(job.Spec.Template.Spec.Tolerations[0].Key).To(Equal("openclaw.rocks/dedicated"))
+			Expect(job.Spec.Template.Spec.Tolerations[0].Value).To(Equal("openclaw"))
 		})
 
 		It("Should include --s3-region flag and S3_REGION env var when Region is set", func() {
@@ -148,7 +173,7 @@ var _ = Describe("S3 Helpers", func() {
 				},
 			}
 			labels := backupLabels(instance, "backup")
-			job := buildRcloneJob("myinst-backup", "oc-tenant-t1", "myinst-data", "backups/t1/myinst/2026-01-01T000000Z", labels, creds, true)
+			job := buildRcloneJob("myinst-backup", "oc-tenant-t1", "myinst-data", "backups/t1/myinst/2026-01-01T000000Z", labels, creds, true, nil, nil)
 
 			container := job.Spec.Template.Spec.Containers[0]
 
