@@ -380,16 +380,15 @@ func TestBuildStatefulSet_Defaults(t *testing.T) {
 		t.Error("startup probe should not be nil by default")
 	}
 
-	// Liveness probe defaults (always exec since gateway binds to loopback)
-	if main.LivenessProbe.Exec == nil {
-		t.Fatal("liveness probe should use exec handler")
+	// Liveness probe defaults (HTTPGet via proxy sidecar)
+	if main.LivenessProbe.HTTPGet == nil {
+		t.Fatal("liveness probe should use HTTPGet handler")
 	}
-	cmd := strings.Join(main.LivenessProbe.Exec.Command, " ")
-	if !strings.Contains(cmd, "127.0.0.1") {
-		t.Errorf("liveness probe should target 127.0.0.1, got command: %s", cmd)
+	if main.LivenessProbe.HTTPGet.Path != "/healthz" {
+		t.Errorf("liveness probe path = %q, want %q", main.LivenessProbe.HTTPGet.Path, "/healthz")
 	}
-	if !strings.Contains(cmd, fmt.Sprintf("%d", GatewayPort)) {
-		t.Errorf("liveness probe should target port %d, got command: %s", GatewayPort, cmd)
+	if main.LivenessProbe.HTTPGet.Port.IntValue() != int(GatewayProxyPort) {
+		t.Errorf("liveness probe port = %d, want %d", main.LivenessProbe.HTTPGet.Port.IntValue(), GatewayProxyPort)
 	}
 	if main.LivenessProbe.InitialDelaySeconds != 30 {
 		t.Errorf("liveness probe initialDelaySeconds = %d, want 30", main.LivenessProbe.InitialDelaySeconds)
@@ -6143,8 +6142,8 @@ func TestBuildConfigMap_TailscaleLoopback_UserOverridePreserved(t *testing.T) {
 	}
 }
 
-func TestBuildStatefulSet_TailscaleServe_UsesExecProbes(t *testing.T) {
-	instance := newTestInstance("ts-exec-probes")
+func TestBuildStatefulSet_TailscaleServe_UsesHTTPProbes(t *testing.T) {
+	instance := newTestInstance("ts-http-probes")
 	instance.Spec.Tailscale.Enabled = true
 	instance.Spec.Tailscale.Mode = "serve"
 
@@ -6154,40 +6153,36 @@ func TestBuildStatefulSet_TailscaleServe_UsesExecProbes(t *testing.T) {
 	if container.LivenessProbe == nil {
 		t.Fatal("liveness probe should not be nil")
 	}
-	if container.LivenessProbe.Exec == nil {
-		t.Fatal("liveness probe should use exec handler when Tailscale serve is enabled")
+	if container.LivenessProbe.HTTPGet == nil {
+		t.Fatal("liveness probe should use HTTPGet handler when Tailscale serve is enabled")
 	}
-	if container.LivenessProbe.TCPSocket != nil {
-		t.Error("liveness probe should not use TCPSocket when Tailscale serve is enabled")
+	if container.LivenessProbe.Exec != nil {
+		t.Error("liveness probe should not use Exec when Tailscale serve is enabled")
 	}
 
 	if container.ReadinessProbe == nil {
 		t.Fatal("readiness probe should not be nil")
 	}
-	if container.ReadinessProbe.Exec == nil {
-		t.Fatal("readiness probe should use exec handler when Tailscale serve is enabled")
+	if container.ReadinessProbe.HTTPGet == nil {
+		t.Fatal("readiness probe should use HTTPGet handler when Tailscale serve is enabled")
 	}
 
 	if container.StartupProbe == nil {
 		t.Fatal("startup probe should not be nil")
 	}
-	if container.StartupProbe.Exec == nil {
-		t.Fatal("startup probe should use exec handler when Tailscale serve is enabled")
+	if container.StartupProbe.HTTPGet == nil {
+		t.Fatal("startup probe should use HTTPGet handler when Tailscale serve is enabled")
 	}
 
-	// Verify exec command targets localhost
-	cmd := strings.Join(container.LivenessProbe.Exec.Command, " ")
-	if !strings.Contains(cmd, "127.0.0.1") {
-		t.Errorf("exec probe should target 127.0.0.1, got command: %s", cmd)
-	}
-	if !strings.Contains(cmd, fmt.Sprintf("%d", GatewayPort)) {
-		t.Errorf("exec probe should target port %d, got command: %s", GatewayPort, cmd)
+	// Verify HTTP probe targets proxy port
+	if container.LivenessProbe.HTTPGet.Port.IntValue() != int(GatewayProxyPort) {
+		t.Errorf("liveness probe port = %d, want %d", container.LivenessProbe.HTTPGet.Port.IntValue(), GatewayProxyPort)
 	}
 }
 
-func TestBuildStatefulSet_AlwaysUsesExecProbes(t *testing.T) {
-	instance := newTestInstance("always-exec-probes")
-	// Tailscale not enabled - probes should still use exec (gateway always on loopback)
+func TestBuildStatefulSet_AlwaysUsesHTTPProbes(t *testing.T) {
+	instance := newTestInstance("always-http-probes")
+	// Tailscale not enabled - probes should still use HTTPGet via proxy
 
 	sts := BuildStatefulSet(instance, "hash", nil)
 	container := sts.Spec.Template.Spec.Containers[0]
@@ -6195,22 +6190,22 @@ func TestBuildStatefulSet_AlwaysUsesExecProbes(t *testing.T) {
 	if container.LivenessProbe == nil {
 		t.Fatal("liveness probe should not be nil")
 	}
-	if container.LivenessProbe.Exec == nil {
-		t.Fatal("liveness probe should always use exec handler")
+	if container.LivenessProbe.HTTPGet == nil {
+		t.Fatal("liveness probe should always use HTTPGet handler")
 	}
-	if container.LivenessProbe.TCPSocket != nil {
-		t.Error("liveness probe should not use TCPSocket")
+	if container.LivenessProbe.Exec != nil {
+		t.Error("liveness probe should not use Exec")
 	}
 
-	if container.ReadinessProbe.Exec == nil {
-		t.Fatal("readiness probe should always use exec handler")
+	if container.ReadinessProbe.HTTPGet == nil {
+		t.Fatal("readiness probe should always use HTTPGet handler")
 	}
-	if container.StartupProbe.Exec == nil {
-		t.Fatal("startup probe should always use exec handler")
+	if container.StartupProbe.HTTPGet == nil {
+		t.Fatal("startup probe should always use HTTPGet handler")
 	}
 }
 
-func TestBuildStatefulSet_TailscaleFunnel_UsesExecProbes(t *testing.T) {
+func TestBuildStatefulSet_TailscaleFunnel_UsesHTTPProbes(t *testing.T) {
 	instance := newTestInstance("ts-funnel-probes")
 	instance.Spec.Tailscale.Enabled = true
 	instance.Spec.Tailscale.Mode = "funnel"
@@ -6218,14 +6213,52 @@ func TestBuildStatefulSet_TailscaleFunnel_UsesExecProbes(t *testing.T) {
 	sts := BuildStatefulSet(instance, "hash", nil)
 	container := sts.Spec.Template.Spec.Containers[0]
 
-	if container.LivenessProbe.Exec == nil {
-		t.Fatal("liveness probe should use exec handler when Tailscale funnel is enabled")
+	if container.LivenessProbe.HTTPGet == nil {
+		t.Fatal("liveness probe should use HTTPGet handler when Tailscale funnel is enabled")
 	}
-	if container.ReadinessProbe.Exec == nil {
-		t.Fatal("readiness probe should use exec handler when Tailscale funnel is enabled")
+	if container.ReadinessProbe.HTTPGet == nil {
+		t.Fatal("readiness probe should use HTTPGet handler when Tailscale funnel is enabled")
 	}
-	if container.StartupProbe.Exec == nil {
-		t.Fatal("startup probe should use exec handler when Tailscale funnel is enabled")
+	if container.StartupProbe.HTTPGet == nil {
+		t.Fatal("startup probe should use HTTPGet handler when Tailscale funnel is enabled")
+	}
+}
+
+func TestBuildStatefulSet_ProbeEndpointPaths(t *testing.T) {
+	instance := newTestInstance("probe-paths")
+
+	sts := BuildStatefulSet(instance, "hash", nil)
+	container := sts.Spec.Template.Spec.Containers[0]
+
+	tests := []struct {
+		name     string
+		probe    *corev1.Probe
+		wantPath string
+		wantPort int
+	}{
+		{"liveness", container.LivenessProbe, "/healthz", int(GatewayProxyPort)},
+		{"readiness", container.ReadinessProbe, "/readyz", int(GatewayProxyPort)},
+		{"startup", container.StartupProbe, "/healthz", int(GatewayProxyPort)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.probe == nil {
+				t.Fatalf("%s probe should not be nil", tt.name)
+			}
+			if tt.probe.HTTPGet == nil {
+				t.Fatalf("%s probe should use HTTPGet handler", tt.name)
+			}
+			if tt.probe.HTTPGet.Path != tt.wantPath {
+				t.Errorf("%s probe path = %q, want %q", tt.name, tt.probe.HTTPGet.Path, tt.wantPath)
+			}
+			if tt.probe.HTTPGet.Port.IntValue() != tt.wantPort {
+				t.Errorf("%s probe port = %d, want %d", tt.name, tt.probe.HTTPGet.Port.IntValue(), tt.wantPort)
+			}
+			if tt.probe.HTTPGet.Scheme != corev1.URISchemeHTTP {
+				t.Errorf("%s probe scheme = %q, want %q", tt.name, tt.probe.HTTPGet.Scheme, corev1.URISchemeHTTP)
+			}
+		})
 	}
 }
 
@@ -8930,6 +8963,9 @@ func TestNormalizeStatefulSet_ProbeDefaults(t *testing.T) {
 	}
 	if main.StartupProbe.PeriodSeconds == 0 {
 		t.Error("startup probe PeriodSeconds should not be 0 after normalization")
+	}
+	if main.StartupProbe.HTTPGet != nil && main.StartupProbe.HTTPGet.Scheme == "" {
+		t.Error("startup probe HTTPGet.Scheme should not be empty after normalization")
 	}
 }
 

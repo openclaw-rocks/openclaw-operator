@@ -592,7 +592,7 @@ The operator automatically adds WebSocket-related annotations for nginx-ingress 
 
 ### spec.probes
 
-Health probe configuration for the main OpenClaw container. All probes use TCP socket checks against the gateway port (18789).
+Health probe configuration for the main OpenClaw container. All probes use HTTP GET requests through the nginx proxy sidecar on port 18790 - liveness and startup probes check `/healthz`, while readiness probes check `/readyz`.
 
 #### spec.probes.liveness
 
