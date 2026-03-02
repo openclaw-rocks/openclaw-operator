@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.17](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.16...v0.10.17) (2026-03-02)
+
+
+### Bug Fixes
+
+* add configurable timeout for BackingUp phase to prevent stuck instances ([#226](https://github.com/openclaw-rocks/k8s-operator/issues/226)) ([778a642](https://github.com/openclaw-rocks/k8s-operator/commit/778a6426d4f2b26845f110887b3bc41f02ceb0ac)), closes [#224](https://github.com/openclaw-rocks/k8s-operator/issues/224)
+* make skill pack resolution non-blocking to prevent provisioning failures ([#227](https://github.com/openclaw-rocks/k8s-operator/issues/227)) ([ffb2485](https://github.com/openclaw-rocks/k8s-operator/commit/ffb24852190e66844c9fe0f69ba28db8c9fade8f)), closes [#225](https://github.com/openclaw-rocks/k8s-operator/issues/225)
+
 ## [0.10.16](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.15...v0.10.16) (2026-03-01)
 
 
