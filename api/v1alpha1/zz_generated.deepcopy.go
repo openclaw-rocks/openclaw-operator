@@ -925,6 +925,10 @@ func (in *OpenClawInstanceStatus) DeepCopyInto(out *OpenClawInstanceStatus) {
 		*out = (*in).DeepCopy()
 	}
 	out.ManagedResources = in.ManagedResources
+	if in.BackingUpSince != nil {
+		in, out := &in.BackingUpSince, &out.BackingUpSince
+		*out = (*in).DeepCopy()
+	}
 	if in.LastBackupTime != nil {
 		in, out := &in.LastBackupTime, &out.LastBackupTime
 		*out = (*in).DeepCopy()

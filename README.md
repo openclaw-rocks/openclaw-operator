@@ -652,7 +652,7 @@ Compatible with AWS S3, Backblaze B2, Cloudflare R2, MinIO, Wasabi, and any S3-c
 
 **When backups run automatically:**
 
-- **On delete** - the operator backs up the PVC before removing any resources. Add the annotation `openclaw.rocks/skip-backup: "true"` to skip and delete immediately.
+- **On delete** - the operator backs up the PVC before removing any resources. Subject to `spec.backup.timeout` (default: 30m) - if the backup does not complete in time, it is skipped automatically. Add `openclaw.rocks/skip-backup: "true"` to skip immediately.
 - **Before auto-update** - when `spec.autoUpdate.backupBeforeUpdate: true` (the default).
 - **On a schedule** - when `spec.backup.schedule` is set (cron expression).
 
@@ -666,6 +666,7 @@ spec:
     schedule: "0 2 * * *"   # Daily at 2 AM UTC
     historyLimit: 3          # Successful job runs to retain (default: 3)
     failedHistoryLimit: 1    # Failed job runs to retain (default: 1)
+    timeout: "30m"           # Max time for pre-delete backup (default: 30m, min: 5m, max: 24h)
 ```
 
 The operator creates a Kubernetes CronJob that runs rclone to sync PVC data to S3. The CronJob mounts the PVC read-only (hot backup - no downtime) and uses pod affinity to co-locate on the same node as the StatefulSet pod (required for RWO PVCs). Each run stores data under a unique timestamped path: `backups/<tenantId>/<instanceName>/periodic/<timestamp>`.

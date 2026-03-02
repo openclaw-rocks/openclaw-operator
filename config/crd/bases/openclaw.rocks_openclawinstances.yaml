@@ -1316,6 +1316,15 @@ spec:
                       Requires persistence to be enabled and the s3-backup-credentials Secret
                       in the operator namespace.
                     type: string
+                  timeout:
+                    description: |-
+                      Timeout is the maximum duration to wait for a pre-delete backup to complete
+                      before giving up and proceeding with deletion (Go duration string, e.g. "30m", "1h").
+                      Covers all phases: StatefulSet scale-down, pod termination, Job execution, and
+                      Job failure retries. When the timeout elapses the operator logs a warning,
+                      emits a BackupTimedOut event, and removes the finalizer so deletion can proceed.
+                      Minimum: 5m, Maximum: 24h, Default: 30m.
+                    type: string
                 type: object
               chromium:
                 description: Chromium enables the Chromium sidecar for browser automation
@@ -9413,6 +9422,13 @@ spec:
                     - RollingBack
                     type: string
                 type: object
+              backingUpSince:
+                description: |-
+                  BackingUpSince is the timestamp when the instance entered the BackingUp phase.
+                  Used to enforce spec.backup.timeout. Set once when the phase transitions to BackingUp
+                  and cleared when the phase changes.
+                format: date-time
+                type: string
               backupJobName:
                 description: BackupJobName is the name of the active backup Job
                 type: string

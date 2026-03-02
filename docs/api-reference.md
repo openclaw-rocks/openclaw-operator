@@ -704,6 +704,7 @@ Configures periodic scheduled backups to S3-compatible storage. Requires the `s3
 | `schedule`           | `string` | --      | Cron expression for periodic backups (e.g., `"0 2 * * *"` for daily at 2 AM). When set, the operator creates a CronJob that runs rclone to sync PVC data to S3. |
 | `historyLimit`       | `*int32` | `3`     | Number of successful CronJob runs to retain.                                                       |
 | `failedHistoryLimit` | `*int32` | `1`     | Number of failed CronJob runs to retain.                                                           |
+| `timeout`            | `string` | `30m`   | Maximum duration to wait for a pre-delete backup to complete before giving up and proceeding with deletion (Go duration string, e.g. `"30m"`, `"1h"`). Covers all phases: StatefulSet scale-down, pod termination, Job execution, and Job failure retries. Minimum: `5m`, Maximum: `24h`. |
 
 The CronJob mounts the PVC read-only (hot backup - no downtime) and uses pod affinity to schedule on the same node as the StatefulSet pod (required for RWO PVCs). Each run stores data under a unique timestamped path: `backups/<tenantId>/<instanceName>/periodic/<timestamp>`.
 
@@ -713,6 +714,7 @@ spec:
     schedule: "0 2 * * *"   # Daily at 2 AM UTC
     historyLimit: 5          # Keep last 5 successful runs
     failedHistoryLimit: 2    # Keep last 2 failed runs
+    timeout: "30m"           # Max time for pre-delete backup (default: 30m)
 ```
 
 ### spec.restoreFrom
@@ -855,6 +857,7 @@ Standard `metav1.Condition` array. Condition types:
 
 | Field            | Type           | Description                                              |
 |------------------|----------------|----------------------------------------------------------|
+| `backingUpSince` | `*metav1.Time` | Timestamp when the instance entered the BackingUp phase. Used to enforce `spec.backup.timeout`. Cleared when the phase changes. |
 | `backupJobName`  | `string`       | Name of the active backup Job.                           |
 | `restoreJobName` | `string`       | Name of the active restore Job.                          |
 | `lastBackupPath` | `string`       | S3 path of the last successful backup.                   |
@@ -917,7 +920,7 @@ The first four keys are required. The operator uses rclone's S3 backend (`--s3-p
 
 | Trigger | Condition |
 |---------|-----------|
-| **Pre-delete backup** | Always runs when a CR is deleted, unless `openclaw.rocks/skip-backup: "true"` annotation is set or persistence is disabled. |
+| **Pre-delete backup** | Always runs when a CR is deleted, unless `openclaw.rocks/skip-backup: "true"` annotation is set or persistence is disabled. Subject to `spec.backup.timeout` (default: 30m) - if the backup does not complete within the timeout, it is skipped and deletion proceeds. |
 | **Pre-update backup** | Runs before each auto-update when `spec.autoUpdate.backupBeforeUpdate: true` (the default). |
 | **Periodic (scheduled)** | Runs on a cron schedule when `spec.backup.schedule` is set. See [Periodic scheduled backups](#periodic--scheduled-backups) below. |
 
@@ -938,9 +941,21 @@ Where:
 
 The path of the last successful backup is recorded in `status.lastBackupPath`.
 
+### Backup timeout
+
+Pre-delete backups are subject to a configurable timeout (default: 30 minutes). If the backup does not complete within the timeout -- whether due to a stuck Job, pod termination issues, or S3 credential errors -- the operator logs a warning, emits a `BackupTimedOut` event, sets the `BackupComplete=False` condition with reason `BackupTimedOut`, and proceeds with deletion.
+
+Configure the timeout via `spec.backup.timeout`:
+
+```yaml
+spec:
+  backup:
+    timeout: "1h"  # Allow up to 1 hour for pre-delete backups (default: 30m, min: 5m, max: 24h)
+```
+
 ### Skip backup on delete
 
-To delete an instance without waiting for a backup (e.g., the S3 backend is unavailable):
+To delete an instance immediately without waiting for a backup (e.g., the S3 backend is unavailable):
 
 ```bash
 kubectl annotate openclawinstance my-agent openclaw.rocks/skip-backup=true
