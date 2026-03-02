@@ -132,6 +132,8 @@ func (r *Resolver) Resolve(ctx context.Context, packNames []string) (*resources.
 }
 
 // resolvePack resolves a single pack reference, using cache if valid.
+// If fetching fails and a stale cache entry exists, returns the stale data
+// instead of an error so that transient GitHub outages do not block reconciliation.
 func (r *Resolver) resolvePack(ctx context.Context, name string) (*resources.ResolvedSkillPacks, error) {
 	r.mu.RLock()
 	if entry, ok := r.cache[name]; ok && time.Since(entry.fetchedAt) < r.cacheTTL {
@@ -143,6 +145,14 @@ func (r *Resolver) resolvePack(ctx context.Context, name string) (*resources.Res
 
 	resolved, err := r.fetchPack(ctx, name)
 	if err != nil {
+		// Stale cache fallback - return expired data rather than failing
+		r.mu.RLock()
+		if entry, ok := r.cache[name]; ok {
+			stale := entry.resolved
+			r.mu.RUnlock()
+			return stale, nil
+		}
+		r.mu.RUnlock()
 		return nil, err
 	}
 

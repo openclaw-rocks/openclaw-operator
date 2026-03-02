@@ -810,6 +810,7 @@ Standard `metav1.Condition` array. Condition types:
 | `ScheduledBackupReady`| The periodic backup CronJob is configured and ready.           |
 | `AutoUpdateAvailable` | A newer version is available in the OCI registry.              |
 | `SecretsReady`        | All referenced Secrets exist and are accessible.               |
+| `SkillPacksReady`     | Skill packs resolved successfully from GitHub. `False` with reason `ResolutionFailed` when GitHub is unreachable - instance runs without skill packs (phase `Degraded`). Retried on next reconcile. |
 
 ### status.endpoints
 

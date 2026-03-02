@@ -152,6 +152,34 @@ kubectl describe openclawinstance my-assistant -n openclaw
    kubectl get secret <name> -n openclaw
    ```
 
+### Instance in Degraded State (Skill Packs Unavailable)
+
+**Symptoms**: The instance phase is `Degraded`. The `SkillPacksReady` condition shows `status: "False"` with reason `ResolutionFailed`. The instance is running but without skill packs.
+
+**Diagnosis**:
+
+```bash
+# Check the SkillPacksReady condition
+kubectl get openclawinstance my-assistant -n openclaw \
+  -o jsonpath='{.status.conditions[?(@.type=="SkillPacksReady")]}'
+
+# Check events for details
+kubectl describe openclawinstance my-assistant -n openclaw | grep SkillPack
+```
+
+**Common causes**:
+
+1. **GitHub API unreachable**: The operator fetches skill packs from GitHub. If GitHub is down or the cluster has no egress access, resolution fails. The instance provisions without skill packs and retries on the next reconcile (30s).
+
+2. **Invalid pack reference**: Verify the `pack:` skill references are valid `owner/repo/path[@ref]` format:
+   ```bash
+   kubectl get openclawinstance my-assistant -n openclaw -o jsonpath='{.spec.skills}'
+   ```
+
+3. **Missing GITHUB_TOKEN**: Private skill pack repositories require a GitHub token. Verify the operator has the `GITHUB_TOKEN` environment variable set.
+
+**Resolution**: The operator automatically retries skill pack resolution on every reconcile. Once GitHub is reachable again, the instance transitions from `Degraded` to `Running`. The operator also uses stale cache - if a previous successful resolution exists, it will use that data even after the cache TTL expires.
+
 ### NetworkPolicy Blocking Traffic
 
 **Symptoms**: The instance is `Running` but cannot reach external APIs or other pods cannot reach the instance.

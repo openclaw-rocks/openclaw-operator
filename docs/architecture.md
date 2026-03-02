@@ -94,7 +94,7 @@ The `status.phase` field represents the high-level lifecycle state of the instan
 | `Pending`      | The resource has been created but reconciliation has not started.     |
 | `Provisioning` | The controller is actively creating or updating managed resources.   |
 | `Running`      | All resources are reconciled successfully.                           |
-| `Degraded`     | Reserved for future use (e.g., partial readiness).                   |
+| `Degraded`     | Instance is running but with reduced functionality (e.g., skill packs unavailable). |
 | `Failed`       | A reconciliation error occurred. The controller will retry.          |
 | `Terminating`  | The instance is being deleted. Finalizer cleanup is in progress.     |
 
@@ -104,10 +104,10 @@ Phase transitions follow this flow:
 Pending --> Provisioning --> Running
                 |               |
                 v               v
-             Failed         Degraded
-                |
-                v
-           (retry: Provisioning)
+             Failed         Degraded (e.g., skill packs unavailable)
+                |               |
+                v               v
+           (retry)          (retry --> Running when resolved)
 
 Deletion from any phase:
   * --> Terminating --> (removed)
@@ -126,6 +126,12 @@ The controller maintains fine-grained conditions using the standard `metav1.Cond
 | `NetworkPolicyReady` | The NetworkPolicy has been applied.               |
 | `RBACReady`          | ServiceAccount, Role, and RoleBinding exist.      |
 | `StorageReady`       | The PVC has been created (or an existing one set).|
+| `BackupComplete`     | The backup job completed successfully.            |
+| `RestoreComplete`    | The restore job completed successfully.           |
+| `ScheduledBackupReady`| The periodic backup CronJob is configured.       |
+| `AutoUpdateAvailable`| A newer version is available in the OCI registry. |
+| `SecretsReady`       | All referenced Secrets exist and are accessible.  |
+| `SkillPacksReady`    | Skill packs resolved from GitHub. `False` when GitHub is unreachable - instance runs without skill packs. |
 
 ### Endpoints
 

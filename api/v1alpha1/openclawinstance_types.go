@@ -1390,6 +1390,9 @@ const (
 
 	// ConditionTypeSecretsReady indicates all referenced secrets exist
 	ConditionTypeSecretsReady = "SecretsReady"
+
+	// ConditionTypeSkillPacksReady indicates skill packs were resolved successfully
+	ConditionTypeSkillPacksReady = "SkillPacksReady"
 )
 
 // Phase constants
