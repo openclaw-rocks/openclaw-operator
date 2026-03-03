@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.18](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.17...v0.10.18) (2026-03-03)
+
+
+### Features
+
+* switch probes from exec to httpGet ([#231](https://github.com/openclaw-rocks/k8s-operator/issues/231)) ([d5b7754](https://github.com/openclaw-rocks/k8s-operator/commit/d5b7754400e3b1d3e41c57237b03aefc8bc76525))
+
 ## [0.10.17](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.16...v0.10.17) (2026-03-02)
 
 
