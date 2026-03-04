@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.20](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.19...v0.10.20) (2026-03-04)
+
+
+### Features
+
+* add attachOnly and disable device auth in browser profiles ([#236](https://github.com/openclaw-rocks/k8s-operator/issues/236)) ([44dd9ce](https://github.com/openclaw-rocks/k8s-operator/commit/44dd9cee63c5a442f0dca2e6c1144224489b7ff3))
+
 ## [0.10.19](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.18...v0.10.19) (2026-03-04)
 
 
