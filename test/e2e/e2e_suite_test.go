@@ -458,6 +458,12 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			Expect(ok).To(BeTrue(), "config should have gateway key")
 			Expect(gw["bind"]).To(Equal("loopback"), "gateway.bind should be loopback")
 
+			// Device auth should be disabled (incompatible with K8s)
+			controlUI, ok := gw["controlUi"].(map[string]interface{})
+			Expect(ok).To(BeTrue(), "gateway should have controlUi key")
+			Expect(controlUI["dangerouslyDisableDeviceAuth"]).To(Equal(true),
+				"gateway.controlUi.dangerouslyDisableDeviceAuth should be true")
+
 			// Clean up via owner-reference garbage collection
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})
@@ -1351,6 +1357,8 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				Expect(ok).To(BeTrue(), "profiles should have %s key", profileName)
 				Expect(profile["cdpUrl"]).To(Equal(expectedCDP),
 					"browser.profiles.%s.cdpUrl should use env var reference for pod IP", profileName)
+				Expect(profile["attachOnly"]).To(BeTrue(),
+					"browser.profiles.%s.attachOnly should be true for sidecar mode", profileName)
 			}
 
 			// Verify Service has chromium port
@@ -1800,6 +1808,12 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			Expect(ok).To(BeTrue(), "gateway should have auth key (injected by operator)")
 			Expect(auth["mode"]).To(Equal("token"), "gateway.auth.mode should be token")
 			Expect(auth["token"]).NotTo(BeEmpty(), "gateway.auth.token should be set")
+
+			// Device auth should be disabled (incompatible with K8s)
+			controlUI, ok := gw["controlUi"].(map[string]interface{})
+			Expect(ok).To(BeTrue(), "gateway should have controlUi key (injected by operator)")
+			Expect(controlUI["dangerouslyDisableDeviceAuth"]).To(Equal(true),
+				"gateway.controlUi.dangerouslyDisableDeviceAuth should be true")
 
 			// Verify StatefulSet config volume points to operator-managed CM (not external)
 			statefulSet := &appsv1.StatefulSet{}

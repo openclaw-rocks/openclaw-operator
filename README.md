@@ -236,6 +236,8 @@ The operator automatically generates a gateway token Secret for each instance an
 - The token is generated once and never overwritten - rotate it by editing the Secret directly
 - If you set `gateway.auth.token` in your config or `OPENCLAW_GATEWAY_TOKEN` in `spec.env`, your value takes precedence
 - To bring your own token Secret, set `spec.gateway.existingSecret` - the operator will use it instead of auto-generating one (the Secret must have a key named `token`)
+- The operator automatically sets `gateway.controlUi.dangerouslyDisableDeviceAuth: true` - device pairing is incompatible with Kubernetes (users cannot approve pairing from inside a container, connections are always proxied, and mDNS is unavailable)
+- Since v2026.2.24, OpenClaw restricts `gateway.allowedOrigins` to same-origin by default - if accessing via a non-default hostname (e.g. Ingress), set `gateway.allowedOrigins: ["*"]` in your config
 
 ### Chromium sidecar
 
