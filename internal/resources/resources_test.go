@@ -2093,6 +2093,15 @@ func TestBuildConfigMapFromBytes_EnrichesExternalConfig(t *testing.T) {
 	if gw["bind"] != "loopback" {
 		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "loopback")
 	}
+
+	// Verify device auth was injected
+	controlUI, ok := gw["controlUi"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected gateway.controlUi key after enrichment")
+	}
+	if controlUI["dangerouslyDisableDeviceAuth"] != true {
+		t.Errorf("gateway.controlUi.dangerouslyDisableDeviceAuth = %v, want true", controlUI["dangerouslyDisableDeviceAuth"])
+	}
 }
 
 func TestBuildConfigMapFromBytes_PreservesUserConfig(t *testing.T) {
@@ -2232,6 +2241,95 @@ func TestEnrichConfigWithGatewayBind_InvalidJSON(t *testing.T) {
 	input := []byte(`not valid json`)
 	instance := newTestInstance("bind-invalid-json")
 	out, err := enrichConfigWithGatewayBind(input, instance)
+	if err != nil {
+		t.Fatal("should not error on invalid JSON")
+	}
+
+	if !bytes.Equal(out, input) {
+		t.Errorf("invalid JSON should be returned unchanged")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// enrichConfigWithDeviceAuth tests
+// ---------------------------------------------------------------------------
+
+func TestEnrichConfigWithDeviceAuth(t *testing.T) {
+	input := []byte(`{}`)
+	out, err := enrichConfigWithDeviceAuth(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	gw, ok := cfg["gateway"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected gateway key")
+	}
+	controlUI, ok := gw["controlUi"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected gateway.controlUi key")
+	}
+	if controlUI["dangerouslyDisableDeviceAuth"] != true {
+		t.Errorf("gateway.controlUi.dangerouslyDisableDeviceAuth = %v, want true", controlUI["dangerouslyDisableDeviceAuth"])
+	}
+}
+
+func TestEnrichConfigWithDeviceAuth_PreservesUserOverride(t *testing.T) {
+	input := []byte(`{"gateway":{"controlUi":{"dangerouslyDisableDeviceAuth":false}}}`)
+	out, err := enrichConfigWithDeviceAuth(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	gw := cfg["gateway"].(map[string]interface{})
+	controlUI := gw["controlUi"].(map[string]interface{})
+	if controlUI["dangerouslyDisableDeviceAuth"] != false {
+		t.Errorf("gateway.controlUi.dangerouslyDisableDeviceAuth = %v, want false (user override)", controlUI["dangerouslyDisableDeviceAuth"])
+	}
+}
+
+func TestEnrichConfigWithDeviceAuth_PreservesOtherFields(t *testing.T) {
+	input := []byte(`{"gateway":{"auth":{"mode":"token","token":"secret"}}}`)
+	out, err := enrichConfigWithDeviceAuth(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	gw := cfg["gateway"].(map[string]interface{})
+	controlUI, ok := gw["controlUi"].(map[string]interface{})
+	if !ok {
+		t.Fatal("gateway.controlUi should be created")
+	}
+	if controlUI["dangerouslyDisableDeviceAuth"] != true {
+		t.Errorf("gateway.controlUi.dangerouslyDisableDeviceAuth = %v, want true", controlUI["dangerouslyDisableDeviceAuth"])
+	}
+	auth, ok := gw["auth"].(map[string]interface{})
+	if !ok {
+		t.Fatal("gateway.auth should be preserved")
+	}
+	if auth["token"] != "secret" {
+		t.Errorf("gateway.auth.token = %v, want %q", auth["token"], "secret")
+	}
+}
+
+func TestEnrichConfigWithDeviceAuth_InvalidJSON(t *testing.T) {
+	input := []byte(`not valid json`)
+	out, err := enrichConfigWithDeviceAuth(input)
 	if err != nil {
 		t.Fatal("should not error on invalid JSON")
 	}
@@ -6274,6 +6372,35 @@ func TestBuildConfigMap_ChromiumBrowserConfig(t *testing.T) {
 		if p["color"] != "#4285F4" {
 			t.Errorf("browser.profiles.%s.color = %v, want %q", name, p["color"], "#4285F4")
 		}
+		if p["attachOnly"] != true {
+			t.Errorf("browser.profiles.%s.attachOnly = %v, want true", name, p["attachOnly"])
+		}
+	}
+}
+
+func TestBuildConfigMap_ChromiumUserOverrideAttachOnly(t *testing.T) {
+	instance := newTestInstance("cr-override-attachonly")
+	instance.Spec.Chromium.Enabled = true
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{
+			Raw: []byte(`{"browser":{"profiles":{"default":{"attachOnly":false}}}}`),
+		},
+	}
+
+	cm := BuildConfigMap(instance, "", nil)
+	content := cm.Data["openclaw.json"]
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config JSON: %v", err)
+	}
+
+	browser := parsed["browser"].(map[string]interface{})
+	profiles := browser["profiles"].(map[string]interface{})
+	defaultProfile := profiles["default"].(map[string]interface{})
+
+	if defaultProfile["attachOnly"] != false {
+		t.Errorf("user-set attachOnly should be preserved, got %v", defaultProfile["attachOnly"])
 	}
 }
 
