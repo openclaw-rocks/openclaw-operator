@@ -1142,6 +1142,14 @@ type GatewaySpec struct {
 	// auto-generating a gateway token Secret and uses this Secret instead.
 	// +optional
 	ExistingSecret string `json:"existingSecret,omitempty"`
+
+	// ControlUiOrigins is a list of additional allowed origins for the Control UI.
+	// The operator always auto-injects localhost origins (http://localhost:18789,
+	// http://127.0.0.1:18789) and derives origins from ingress hosts. Use this
+	// field to add extra origins (e.g., custom reverse proxy URLs).
+	// +kubebuilder:validation:MaxItems=20
+	// +optional
+	ControlUIOrigins []string `json:"controlUiOrigins,omitempty"`
 }
 
 // AutoUpdateStatus tracks the state of automatic version updates

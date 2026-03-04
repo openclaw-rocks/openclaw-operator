@@ -237,6 +237,16 @@ The operator automatically generates a gateway token Secret for each instance an
 - If you set `gateway.auth.token` in your config or `OPENCLAW_GATEWAY_TOKEN` in `spec.env`, your value takes precedence
 - To bring your own token Secret, set `spec.gateway.existingSecret` - the operator will use it instead of auto-generating one (the Secret must have a key named `token`)
 
+### Control UI allowed origins
+
+The operator auto-injects `gateway.controlUi.allowedOrigins` so the Control UI works through reverse proxies without CORS errors. Origins are derived from:
+
+- **Localhost** (always): `http://localhost:18789`, `http://127.0.0.1:18789` for port-forwarding
+- **Ingress hosts**: scheme determined from TLS config (`https://` if TLS, `http://` otherwise)
+- **Explicit extras**: `spec.gateway.controlUiOrigins` for custom proxy URLs
+
+If you set `gateway.controlUi.allowedOrigins` directly in your config JSON, the operator will not override it.
+
 ### Chromium sidecar
 
 Enable headless browser automation for web scraping, screenshots, and browser-based integrations:
@@ -690,6 +700,7 @@ These behaviors are always applied - no configuration needed:
 |----------|---------|
 | `gateway.bind=loopback` | Always injected into config; an nginx reverse proxy sidecar exposes the gateway and canvas ports for external access |
 | Gateway auth token | Auto-generated Secret per instance; injected into config and env |
+| Control UI origins | `gateway.controlUi.allowedOrigins` auto-injected from localhost + ingress hosts + `spec.gateway.controlUiOrigins` |
 | `OPENCLAW_DISABLE_BONJOUR=1` | Always set (mDNS does not work in Kubernetes) |
 | Browser profiles | When Chromium is enabled, `"default"` and `"chrome"` profiles are auto-configured with the sidecar's CDP endpoint |
 | Tailscale serve config | When Tailscale is enabled, a `tailscale-serve.json` key is added to the ConfigMap for the sidecar's `TS_SERVE_CONFIG` |

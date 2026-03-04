@@ -3550,6 +3550,16 @@ spec:
               gateway:
                 description: Gateway configures the gateway authentication token
                 properties:
+                  controlUiOrigins:
+                    description: |-
+                      ControlUiOrigins is a list of additional allowed origins for the Control UI.
+                      The operator always auto-injects localhost origins (http://localhost:18789,
+                      http://127.0.0.1:18789) and derives origins from ingress hosts. Use this
+                      field to add extra origins (e.g., custom reverse proxy URLs).
+                    items:
+                      type: string
+                    maxItems: 20
+                    type: array
                   existingSecret:
                     description: |-
                       ExistingSecret is the name of a user-managed Secret containing the gateway token.
