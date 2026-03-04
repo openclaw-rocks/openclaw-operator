@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.19](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.18...v0.10.19) (2026-03-04)
+
+
+### Features
+
+* auto-inject gateway.controlUi.allowedOrigins ([#234](https://github.com/openclaw-rocks/k8s-operator/issues/234)) ([#235](https://github.com/openclaw-rocks/k8s-operator/issues/235)) ([46b5445](https://github.com/openclaw-rocks/k8s-operator/commit/46b5445e299e4af252568fcb043bb390373ca12c))
+
 ## [0.10.18](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.17...v0.10.18) (2026-03-03)
 
 
