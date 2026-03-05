@@ -1318,22 +1318,18 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			}
 			Expect(foundPortEnv).To(BeTrue(), "chromium container should have PORT env var")
 
-			// Verify main container has POD_IP and OPENCLAW_CHROMIUM_CDP env vars
+			// Verify main container has OPENCLAW_CHROMIUM_CDP using localhost (IPv6-safe)
 			mainContainer := statefulSet.Spec.Template.Spec.Containers[0]
-			var foundPodIP, foundChromiumCDP bool
+			var foundChromiumCDP bool
 			for _, env := range mainContainer.Env {
-				if env.Name == "POD_IP" {
-					foundPodIP = true
-					Expect(env.ValueFrom).NotTo(BeNil(), "POD_IP should use valueFrom")
-					Expect(env.ValueFrom.FieldRef).NotTo(BeNil(), "POD_IP should use fieldRef")
-					Expect(env.ValueFrom.FieldRef.FieldPath).To(Equal("status.podIP"))
-				}
+				Expect(env.Name).NotTo(Equal("POD_IP"),
+					"POD_IP env var should no longer be set (replaced by localhost)")
 				if env.Name == "OPENCLAW_CHROMIUM_CDP" {
 					foundChromiumCDP = true
-					Expect(env.Value).To(Equal(fmt.Sprintf("http://$(POD_IP):%d", resources.ChromiumPort)))
+					Expect(env.Value).To(Equal(fmt.Sprintf("http://127.0.0.1:%d", resources.ChromiumPort)),
+						"OPENCLAW_CHROMIUM_CDP should use IPv4 loopback (IPv6-safe)")
 				}
 			}
-			Expect(foundPodIP).To(BeTrue(), "POD_IP env var should be set via Downward API")
 			Expect(foundChromiumCDP).To(BeTrue(), "OPENCLAW_CHROMIUM_CDP env var should be set")
 
 			// Verify ConfigMap has browser profiles with cdpUrl on port 9222

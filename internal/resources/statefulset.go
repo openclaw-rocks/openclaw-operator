@@ -338,23 +338,17 @@ func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecre
 	}
 
 	if instance.Spec.Chromium.Enabled {
-		// Inject the pod IP via Downward API so the config can reference
-		// ${OPENCLAW_CHROMIUM_CDP} with a non-loopback address. The OpenClaw
-		// browser control service treats 127.x.x.x as "local/managed" and
-		// only activates remote/attach-only mode for non-loopback addresses.
+		// The Chromium sidecar shares the pod network namespace, so we can
+		// reach it via localhost. Using 127.0.0.1 (explicit IPv4 loopback)
+		// avoids IPv6 URL formatting issues (IPv6 addresses need brackets
+		// in URLs, e.g. http://[::1]:9222, but Kubernetes env var
+		// interpolation cannot add them conditionally).
+		// The config sets attachOnly=true so OpenClaw attaches to the
+		// sidecar regardless of whether the address is loopback or not.
 		env = append(env,
 			corev1.EnvVar{
-				Name: "POD_IP",
-				ValueFrom: &corev1.EnvVarSource{
-					FieldRef: &corev1.ObjectFieldSelector{
-						APIVersion: "v1",
-						FieldPath:  "status.podIP",
-					},
-				},
-			},
-			corev1.EnvVar{
 				Name:  "OPENCLAW_CHROMIUM_CDP",
-				Value: fmt.Sprintf("http://$(POD_IP):%d", ChromiumPort),
+				Value: fmt.Sprintf("http://127.0.0.1:%d", ChromiumPort),
 			},
 		)
 	}
@@ -1121,12 +1115,11 @@ func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.
 
 	// Override the default listening port (3000) to avoid conflicting with
 	// the OpenClaw gateway's built-in browser control service on port 3000.
-	// The sidecar listens on 0.0.0.0 so it's reachable via the pod IP.
-	// The cdpUrl in the config uses ${OPENCLAW_CHROMIUM_CDP} which resolves
-	// to the pod IP at runtime, triggering the remote/attach-only code path
-	// in the browser control service (any non-loopback address is "remote").
+	// HOST=:: enables dual-stack listening so the sidecar is reachable on
+	// both IPv4 (127.0.0.1) and IPv6 (::1) loopback addresses.
 	chromiumEnv := []corev1.EnvVar{
 		{Name: "PORT", Value: fmt.Sprintf("%d", ChromiumPort)},
+		{Name: "HOST", Value: "::"},
 	}
 
 	// Add CA bundle mount and env if configured

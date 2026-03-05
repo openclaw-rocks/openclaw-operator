@@ -447,45 +447,47 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 		t.Fatal("chromium container not found")
 	}
 
-	// Main container should have POD_IP (Downward API) and OPENCLAW_CHROMIUM_CDP env vars
+	// Main container should have OPENCLAW_CHROMIUM_CDP using localhost (IPv6-safe)
 	mainContainer := containers[0]
-	foundPodIP := false
 	foundChromiumCDP := false
 	for _, env := range mainContainer.Env {
 		if env.Name == "POD_IP" {
-			foundPodIP = true
-			if env.ValueFrom == nil || env.ValueFrom.FieldRef == nil || env.ValueFrom.FieldRef.FieldPath != "status.podIP" {
-				t.Error("POD_IP should use Downward API fieldRef to status.podIP")
-			}
+			t.Error("POD_IP env var should no longer be set (replaced by localhost)")
 		}
 		if env.Name == "OPENCLAW_CHROMIUM_CDP" {
 			foundChromiumCDP = true
-			expected := fmt.Sprintf("http://$(POD_IP):%d", ChromiumPort)
+			expected := fmt.Sprintf("http://127.0.0.1:%d", ChromiumPort)
 			if env.Value != expected {
 				t.Errorf("OPENCLAW_CHROMIUM_CDP = %q, want %q", env.Value, expected)
 			}
 		}
 	}
-	if !foundPodIP {
-		t.Error("main container should have POD_IP env var (Downward API) when chromium is enabled")
-	}
 	if !foundChromiumCDP {
 		t.Error("main container should have OPENCLAW_CHROMIUM_CDP env var when chromium is enabled")
 	}
 
-	// Chromium PORT env var overrides the default listening port (3000)
+	// Chromium PORT and HOST env vars
 	foundPortEnv := false
+	foundHostEnv := false
 	for _, env := range chromium.Env {
 		if env.Name == "PORT" {
 			foundPortEnv = true
 			if env.Value != fmt.Sprintf("%d", ChromiumPort) {
 				t.Errorf("chromium PORT env = %q, want %q", env.Value, fmt.Sprintf("%d", ChromiumPort))
 			}
-			break
+		}
+		if env.Name == "HOST" {
+			foundHostEnv = true
+			if env.Value != "::" {
+				t.Errorf("chromium HOST env = %q, want %q", env.Value, "::")
+			}
 		}
 	}
 	if !foundPortEnv {
 		t.Error("chromium container should have PORT env var to override default listening port")
+	}
+	if !foundHostEnv {
+		t.Error("chromium container should have HOST=:: env var for dual-stack listening")
 	}
 
 	// Chromium image defaults
@@ -6599,8 +6601,7 @@ func TestBuildConfigMap_ChromiumBrowserConfig(t *testing.T) {
 	}
 
 	// Both "default" and "chrome" profiles must use the env var reference.
-	// ${OPENCLAW_CHROMIUM_CDP} resolves at runtime to the pod IP, which is
-	// non-loopback and triggers the remote/attach-only code path.
+	// ${OPENCLAW_CHROMIUM_CDP} resolves at runtime to the localhost CDP URL.
 	for _, name := range []string{"default", "chrome"} {
 		p, ok := profiles[name].(map[string]interface{})
 		if !ok {
