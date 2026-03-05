@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.21](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.20...v0.10.21) (2026-03-05)
+
+
+### Bug Fixes
+
+* disable device auth for Control UI in K8s environments ([#238](https://github.com/openclaw-rocks/k8s-operator/issues/238)) ([c5c420c](https://github.com/openclaw-rocks/k8s-operator/commit/c5c420c40d0f01c58e49d5d535f60f5db4b0651d)), closes [#233](https://github.com/openclaw-rocks/k8s-operator/issues/233)
+* propagate nodeSelector and tolerations to backup CronJob pods ([#245](https://github.com/openclaw-rocks/k8s-operator/issues/245)) ([98ef456](https://github.com/openclaw-rocks/k8s-operator/commit/98ef4568d4156f5ce27c9d253dd3da6bf9350c12)), closes [#244](https://github.com/openclaw-rocks/k8s-operator/issues/244)
+* use localhost for Chromium CDP URL to support IPv6 clusters ([#243](https://github.com/openclaw-rocks/k8s-operator/issues/243)) ([08dc2c2](https://github.com/openclaw-rocks/k8s-operator/commit/08dc2c27ce98dc0b54b18a295ec0823d74b90d44)), closes [#228](https://github.com/openclaw-rocks/k8s-operator/issues/228)
+
 ## [0.10.20](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.19...v0.10.20) (2026-03-04)
 
 
