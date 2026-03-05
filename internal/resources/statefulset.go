@@ -1806,22 +1806,17 @@ func buildChromiumResourceRequirements(instance *openclawv1alpha1.OpenClawInstan
 	return req
 }
 
-// buildProbeHandler returns an exec-based probe handler that checks the
-// gateway on loopback. The gateway always binds to 127.0.0.1 (the proxy
-// sidecar handles external access), which is unreachable from the kubelet
-// via TCPSocket probes (they connect to the pod IP). Exec probes run inside
-// the container and can reach localhost.
-//
-// Uses a Node.js TCP connect check instead of wget because the gateway
-// returns 404 on GET / (no HTTP health endpoint). Node.js is always
-// available in the OpenClaw container.
-func buildProbeHandler(_ *openclawv1alpha1.OpenClawInstance) corev1.ProbeHandler {
+// buildHTTPProbeHandler returns an HTTP GET probe handler that hits the
+// given path on the nginx proxy sidecar port. The gateway exposes /healthz
+// (liveness) and /readyz (readiness) on 127.0.0.1:18789; the proxy sidecar
+// forwards traffic from 0.0.0.0:18790, making the endpoints reachable by
+// the kubelet.
+func buildHTTPProbeHandler(path string) corev1.ProbeHandler {
 	return corev1.ProbeHandler{
-		Exec: &corev1.ExecAction{
-			Command: []string{
-				"node", "-e",
-				fmt.Sprintf("require('net').connect(%d,'127.0.0.1',()=>process.exit(0)).on('error',()=>process.exit(1));setTimeout(()=>process.exit(1),2000)", GatewayPort),
-			},
+		HTTPGet: &corev1.HTTPGetAction{
+			Path:   path,
+			Port:   intstr.FromInt32(GatewayProxyPort),
+			Scheme: corev1.URISchemeHTTP,
 		},
 	}
 }
@@ -1837,7 +1832,7 @@ func buildLivenessProbe(instance *openclawv1alpha1.OpenClawInstance) *corev1.Pro
 	}
 
 	probe := &corev1.Probe{
-		ProbeHandler:        buildProbeHandler(instance),
+		ProbeHandler:        buildHTTPProbeHandler("/healthz"),
 		InitialDelaySeconds: 30,
 		PeriodSeconds:       10,
 		TimeoutSeconds:      5,
@@ -1874,7 +1869,7 @@ func buildReadinessProbe(instance *openclawv1alpha1.OpenClawInstance) *corev1.Pr
 	}
 
 	probe := &corev1.Probe{
-		ProbeHandler:        buildProbeHandler(instance),
+		ProbeHandler:        buildHTTPProbeHandler("/readyz"),
 		InitialDelaySeconds: 5,
 		PeriodSeconds:       5,
 		TimeoutSeconds:      3,
@@ -1911,7 +1906,7 @@ func buildStartupProbe(instance *openclawv1alpha1.OpenClawInstance) *corev1.Prob
 	}
 
 	probe := &corev1.Probe{
-		ProbeHandler:        buildProbeHandler(instance),
+		ProbeHandler:        buildHTTPProbeHandler("/healthz"),
 		InitialDelaySeconds: 0,
 		PeriodSeconds:       5,
 		TimeoutSeconds:      3,
@@ -2088,6 +2083,9 @@ func normalizeProbe(p *corev1.Probe) {
 	}
 	if p.FailureThreshold == 0 {
 		p.FailureThreshold = 3
+	}
+	if p.HTTPGet != nil && p.HTTPGet.Scheme == "" {
+		p.HTTPGet.Scheme = corev1.URISchemeHTTP
 	}
 }
 

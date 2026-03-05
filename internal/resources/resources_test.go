@@ -380,16 +380,15 @@ func TestBuildStatefulSet_Defaults(t *testing.T) {
 		t.Error("startup probe should not be nil by default")
 	}
 
-	// Liveness probe defaults (always exec since gateway binds to loopback)
-	if main.LivenessProbe.Exec == nil {
-		t.Fatal("liveness probe should use exec handler")
+	// Liveness probe defaults (HTTPGet via proxy sidecar)
+	if main.LivenessProbe.HTTPGet == nil {
+		t.Fatal("liveness probe should use HTTPGet handler")
 	}
-	cmd := strings.Join(main.LivenessProbe.Exec.Command, " ")
-	if !strings.Contains(cmd, "127.0.0.1") {
-		t.Errorf("liveness probe should target 127.0.0.1, got command: %s", cmd)
+	if main.LivenessProbe.HTTPGet.Path != "/healthz" {
+		t.Errorf("liveness probe path = %q, want %q", main.LivenessProbe.HTTPGet.Path, "/healthz")
 	}
-	if !strings.Contains(cmd, fmt.Sprintf("%d", GatewayPort)) {
-		t.Errorf("liveness probe should target port %d, got command: %s", GatewayPort, cmd)
+	if main.LivenessProbe.HTTPGet.Port.IntValue() != int(GatewayProxyPort) {
+		t.Errorf("liveness probe port = %d, want %d", main.LivenessProbe.HTTPGet.Port.IntValue(), GatewayProxyPort)
 	}
 	if main.LivenessProbe.InitialDelaySeconds != 30 {
 		t.Errorf("liveness probe initialDelaySeconds = %d, want 30", main.LivenessProbe.InitialDelaySeconds)
@@ -2387,6 +2386,312 @@ func TestBuildConfigMap_RawConfig_UserBindPreserved(t *testing.T) {
 	gw := parsed["gateway"].(map[string]interface{})
 	if gw["bind"] != "0.0.0.0" {
 		t.Errorf("gateway.bind = %v, want %q (user override should win)", gw["bind"], "0.0.0.0")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// enrichConfigWithControlUIOrigins tests
+// ---------------------------------------------------------------------------
+
+func TestEnrichConfigWithControlUIOrigins_InjectsFromIngress(t *testing.T) {
+	input := []byte(`{}`)
+	instance := newTestInstance("origins-ingress")
+	instance.Spec.Networking.Ingress.Hosts = []openclawv1alpha1.IngressHost{
+		{Host: "openclaw.example.com"},
+	}
+	instance.Spec.Networking.Ingress.TLS = []openclawv1alpha1.IngressTLS{
+		{Hosts: []string{"openclaw.example.com"}, SecretName: "tls-secret"},
+	}
+
+	out, err := enrichConfigWithControlUIOrigins(input, instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	gw := cfg["gateway"].(map[string]interface{})
+	controlUI := gw["controlUi"].(map[string]interface{})
+	origins, ok := controlUI["allowedOrigins"].([]interface{})
+	if !ok {
+		t.Fatal("expected allowedOrigins array")
+	}
+
+	originStrs := make([]string, len(origins))
+	for i, o := range origins {
+		originStrs[i] = o.(string)
+	}
+
+	expected := []string{
+		"http://127.0.0.1:18789",
+		"http://localhost:18789",
+		"https://openclaw.example.com",
+	}
+	if len(originStrs) != len(expected) {
+		t.Fatalf("expected %d origins, got %d: %v", len(expected), len(originStrs), originStrs)
+	}
+	for i, exp := range expected {
+		if originStrs[i] != exp {
+			t.Errorf("origin[%d] = %q, want %q", i, originStrs[i], exp)
+		}
+	}
+}
+
+func TestEnrichConfigWithControlUIOrigins_PreservesUserOrigins(t *testing.T) {
+	input := []byte(`{"gateway":{"controlUi":{"allowedOrigins":["https://my-proxy.example.com"]}}}`)
+	instance := newTestInstance("origins-user-override")
+	instance.Spec.Networking.Ingress.Hosts = []openclawv1alpha1.IngressHost{
+		{Host: "openclaw.example.com"},
+	}
+
+	out, err := enrichConfigWithControlUIOrigins(input, instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Should return unchanged because user already set allowedOrigins
+	if !bytes.Equal(out, input) {
+		t.Error("user-set allowedOrigins should not be overridden")
+	}
+}
+
+func TestEnrichConfigWithControlUIOrigins_NoIngress(t *testing.T) {
+	input := []byte(`{}`)
+	instance := newTestInstance("origins-no-ingress")
+
+	out, err := enrichConfigWithControlUIOrigins(input, instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	gw := cfg["gateway"].(map[string]interface{})
+	controlUI := gw["controlUi"].(map[string]interface{})
+	origins := controlUI["allowedOrigins"].([]interface{})
+
+	// Should only have localhost origins
+	if len(origins) != 2 {
+		t.Fatalf("expected 2 origins (localhost only), got %d: %v", len(origins), origins)
+	}
+}
+
+func TestEnrichConfigWithControlUIOrigins_CRDExplicitOrigins(t *testing.T) {
+	input := []byte(`{}`)
+	instance := newTestInstance("origins-crd")
+	instance.Spec.Gateway.ControlUIOrigins = []string{
+		"https://custom-proxy.example.com",
+		"http://internal.corp:8080",
+	}
+
+	out, err := enrichConfigWithControlUIOrigins(input, instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	gw := cfg["gateway"].(map[string]interface{})
+	controlUI := gw["controlUi"].(map[string]interface{})
+	origins := controlUI["allowedOrigins"].([]interface{})
+
+	expected := []string{
+		"http://127.0.0.1:18789",
+		"http://internal.corp:8080",
+		"http://localhost:18789",
+		"https://custom-proxy.example.com",
+	}
+	if len(origins) != len(expected) {
+		t.Fatalf("expected %d origins, got %d: %v", len(expected), len(origins), origins)
+	}
+	for i, exp := range expected {
+		if origins[i].(string) != exp {
+			t.Errorf("origin[%d] = %q, want %q", i, origins[i], exp)
+		}
+	}
+}
+
+func TestEnrichConfigWithControlUIOrigins_Deduplicates(t *testing.T) {
+	input := []byte(`{}`)
+	instance := newTestInstance("origins-dedup")
+	instance.Spec.Networking.Ingress.Hosts = []openclawv1alpha1.IngressHost{
+		{Host: "openclaw.example.com"},
+	}
+	instance.Spec.Networking.Ingress.TLS = []openclawv1alpha1.IngressTLS{
+		{Hosts: []string{"openclaw.example.com"}, SecretName: "tls-secret"},
+	}
+	// Add an explicit origin that duplicates the ingress-derived one
+	instance.Spec.Gateway.ControlUIOrigins = []string{
+		"https://openclaw.example.com",
+		"http://localhost:18789",
+	}
+
+	out, err := enrichConfigWithControlUIOrigins(input, instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	gw := cfg["gateway"].(map[string]interface{})
+	controlUI := gw["controlUi"].(map[string]interface{})
+	origins := controlUI["allowedOrigins"].([]interface{})
+
+	// Should have exactly 3: localhost, 127.0.0.1, and the ingress host (no duplicates)
+	if len(origins) != 3 {
+		t.Fatalf("expected 3 deduplicated origins, got %d: %v", len(origins), origins)
+	}
+}
+
+func TestEnrichConfigWithControlUIOrigins_InvalidJSON(t *testing.T) {
+	input := []byte(`not valid json`)
+	instance := newTestInstance("origins-invalid-json")
+
+	out, err := enrichConfigWithControlUIOrigins(input, instance)
+	if err != nil {
+		t.Fatal("should not error on invalid JSON")
+	}
+
+	if !bytes.Equal(out, input) {
+		t.Error("invalid JSON should be returned unchanged")
+	}
+}
+
+func TestEnrichConfigWithControlUIOrigins_PreservesOtherFields(t *testing.T) {
+	input := []byte(`{"gateway":{"auth":{"mode":"token","token":"secret"},"bind":"loopback"}}`)
+	instance := newTestInstance("origins-preserves-fields")
+
+	out, err := enrichConfigWithControlUIOrigins(input, instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	gw := cfg["gateway"].(map[string]interface{})
+
+	// Verify existing fields are preserved
+	auth := gw["auth"].(map[string]interface{})
+	if auth["token"] != "secret" {
+		t.Errorf("gateway.auth.token = %v, want %q", auth["token"], "secret")
+	}
+	if gw["bind"] != "loopback" {
+		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "loopback")
+	}
+
+	// Verify origins were still injected
+	controlUI := gw["controlUi"].(map[string]interface{})
+	if _, ok := controlUI["allowedOrigins"]; !ok {
+		t.Error("allowedOrigins should be injected")
+	}
+}
+
+func TestEnrichConfigWithControlUIOrigins_HttpWithoutTLS(t *testing.T) {
+	input := []byte(`{}`)
+	instance := newTestInstance("origins-http")
+	instance.Spec.Networking.Ingress.Hosts = []openclawv1alpha1.IngressHost{
+		{Host: "openclaw.example.com"},
+	}
+	// No TLS config - should use http:// scheme
+
+	out, err := enrichConfigWithControlUIOrigins(input, instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	gw := cfg["gateway"].(map[string]interface{})
+	controlUI := gw["controlUi"].(map[string]interface{})
+	origins := controlUI["allowedOrigins"].([]interface{})
+
+	// Find the ingress-derived origin
+	found := false
+	for _, o := range origins {
+		if o.(string) == "http://openclaw.example.com" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected http://openclaw.example.com in origins, got %v", origins)
+	}
+}
+
+func TestBuildConfigMap_ControlUIOriginsInjected(t *testing.T) {
+	instance := newTestInstance("cm-origins-inject")
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{
+			Raw: []byte(`{"mcpServers":{"test":{"url":"http://localhost"}}}`),
+		},
+	}
+	instance.Spec.Networking.Ingress.Hosts = []openclawv1alpha1.IngressHost{
+		{Host: "openclaw.example.com"},
+	}
+	instance.Spec.Networking.Ingress.TLS = []openclawv1alpha1.IngressTLS{
+		{Hosts: []string{"openclaw.example.com"}, SecretName: "tls-secret"},
+	}
+
+	cm := BuildConfigMap(instance, "", nil)
+	content := cm.Data["openclaw.json"]
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config: %v", err)
+	}
+
+	// User config should be preserved
+	if _, ok := parsed["mcpServers"]; !ok {
+		t.Error("mcpServers should be preserved from raw config")
+	}
+
+	// Origins should be injected
+	gw := parsed["gateway"].(map[string]interface{})
+	controlUI := gw["controlUi"].(map[string]interface{})
+	origins, ok := controlUI["allowedOrigins"].([]interface{})
+	if !ok {
+		t.Fatal("expected allowedOrigins array")
+	}
+
+	// Should contain localhost and ingress-derived origins
+	originStrs := make([]string, len(origins))
+	for i, o := range origins {
+		originStrs[i] = o.(string)
+	}
+
+	hasLocalhost := false
+	hasIngress := false
+	for _, o := range originStrs {
+		if o == "http://localhost:18789" {
+			hasLocalhost = true
+		}
+		if o == "https://openclaw.example.com" {
+			hasIngress = true
+		}
+	}
+	if !hasLocalhost {
+		t.Errorf("expected http://localhost:18789 in origins, got %v", originStrs)
+	}
+	if !hasIngress {
+		t.Errorf("expected https://openclaw.example.com in origins, got %v", originStrs)
 	}
 }
 
@@ -6241,8 +6546,8 @@ func TestBuildConfigMap_TailscaleLoopback_UserOverridePreserved(t *testing.T) {
 	}
 }
 
-func TestBuildStatefulSet_TailscaleServe_UsesExecProbes(t *testing.T) {
-	instance := newTestInstance("ts-exec-probes")
+func TestBuildStatefulSet_TailscaleServe_UsesHTTPProbes(t *testing.T) {
+	instance := newTestInstance("ts-http-probes")
 	instance.Spec.Tailscale.Enabled = true
 	instance.Spec.Tailscale.Mode = "serve"
 
@@ -6252,40 +6557,36 @@ func TestBuildStatefulSet_TailscaleServe_UsesExecProbes(t *testing.T) {
 	if container.LivenessProbe == nil {
 		t.Fatal("liveness probe should not be nil")
 	}
-	if container.LivenessProbe.Exec == nil {
-		t.Fatal("liveness probe should use exec handler when Tailscale serve is enabled")
+	if container.LivenessProbe.HTTPGet == nil {
+		t.Fatal("liveness probe should use HTTPGet handler when Tailscale serve is enabled")
 	}
-	if container.LivenessProbe.TCPSocket != nil {
-		t.Error("liveness probe should not use TCPSocket when Tailscale serve is enabled")
+	if container.LivenessProbe.Exec != nil {
+		t.Error("liveness probe should not use Exec when Tailscale serve is enabled")
 	}
 
 	if container.ReadinessProbe == nil {
 		t.Fatal("readiness probe should not be nil")
 	}
-	if container.ReadinessProbe.Exec == nil {
-		t.Fatal("readiness probe should use exec handler when Tailscale serve is enabled")
+	if container.ReadinessProbe.HTTPGet == nil {
+		t.Fatal("readiness probe should use HTTPGet handler when Tailscale serve is enabled")
 	}
 
 	if container.StartupProbe == nil {
 		t.Fatal("startup probe should not be nil")
 	}
-	if container.StartupProbe.Exec == nil {
-		t.Fatal("startup probe should use exec handler when Tailscale serve is enabled")
+	if container.StartupProbe.HTTPGet == nil {
+		t.Fatal("startup probe should use HTTPGet handler when Tailscale serve is enabled")
 	}
 
-	// Verify exec command targets localhost
-	cmd := strings.Join(container.LivenessProbe.Exec.Command, " ")
-	if !strings.Contains(cmd, "127.0.0.1") {
-		t.Errorf("exec probe should target 127.0.0.1, got command: %s", cmd)
-	}
-	if !strings.Contains(cmd, fmt.Sprintf("%d", GatewayPort)) {
-		t.Errorf("exec probe should target port %d, got command: %s", GatewayPort, cmd)
+	// Verify HTTP probe targets proxy port
+	if container.LivenessProbe.HTTPGet.Port.IntValue() != int(GatewayProxyPort) {
+		t.Errorf("liveness probe port = %d, want %d", container.LivenessProbe.HTTPGet.Port.IntValue(), GatewayProxyPort)
 	}
 }
 
-func TestBuildStatefulSet_AlwaysUsesExecProbes(t *testing.T) {
-	instance := newTestInstance("always-exec-probes")
-	// Tailscale not enabled - probes should still use exec (gateway always on loopback)
+func TestBuildStatefulSet_AlwaysUsesHTTPProbes(t *testing.T) {
+	instance := newTestInstance("always-http-probes")
+	// Tailscale not enabled - probes should still use HTTPGet via proxy
 
 	sts := BuildStatefulSet(instance, "hash", nil)
 	container := sts.Spec.Template.Spec.Containers[0]
@@ -6293,22 +6594,22 @@ func TestBuildStatefulSet_AlwaysUsesExecProbes(t *testing.T) {
 	if container.LivenessProbe == nil {
 		t.Fatal("liveness probe should not be nil")
 	}
-	if container.LivenessProbe.Exec == nil {
-		t.Fatal("liveness probe should always use exec handler")
+	if container.LivenessProbe.HTTPGet == nil {
+		t.Fatal("liveness probe should always use HTTPGet handler")
 	}
-	if container.LivenessProbe.TCPSocket != nil {
-		t.Error("liveness probe should not use TCPSocket")
+	if container.LivenessProbe.Exec != nil {
+		t.Error("liveness probe should not use Exec")
 	}
 
-	if container.ReadinessProbe.Exec == nil {
-		t.Fatal("readiness probe should always use exec handler")
+	if container.ReadinessProbe.HTTPGet == nil {
+		t.Fatal("readiness probe should always use HTTPGet handler")
 	}
-	if container.StartupProbe.Exec == nil {
-		t.Fatal("startup probe should always use exec handler")
+	if container.StartupProbe.HTTPGet == nil {
+		t.Fatal("startup probe should always use HTTPGet handler")
 	}
 }
 
-func TestBuildStatefulSet_TailscaleFunnel_UsesExecProbes(t *testing.T) {
+func TestBuildStatefulSet_TailscaleFunnel_UsesHTTPProbes(t *testing.T) {
 	instance := newTestInstance("ts-funnel-probes")
 	instance.Spec.Tailscale.Enabled = true
 	instance.Spec.Tailscale.Mode = "funnel"
@@ -6316,14 +6617,52 @@ func TestBuildStatefulSet_TailscaleFunnel_UsesExecProbes(t *testing.T) {
 	sts := BuildStatefulSet(instance, "hash", nil)
 	container := sts.Spec.Template.Spec.Containers[0]
 
-	if container.LivenessProbe.Exec == nil {
-		t.Fatal("liveness probe should use exec handler when Tailscale funnel is enabled")
+	if container.LivenessProbe.HTTPGet == nil {
+		t.Fatal("liveness probe should use HTTPGet handler when Tailscale funnel is enabled")
 	}
-	if container.ReadinessProbe.Exec == nil {
-		t.Fatal("readiness probe should use exec handler when Tailscale funnel is enabled")
+	if container.ReadinessProbe.HTTPGet == nil {
+		t.Fatal("readiness probe should use HTTPGet handler when Tailscale funnel is enabled")
 	}
-	if container.StartupProbe.Exec == nil {
-		t.Fatal("startup probe should use exec handler when Tailscale funnel is enabled")
+	if container.StartupProbe.HTTPGet == nil {
+		t.Fatal("startup probe should use HTTPGet handler when Tailscale funnel is enabled")
+	}
+}
+
+func TestBuildStatefulSet_ProbeEndpointPaths(t *testing.T) {
+	instance := newTestInstance("probe-paths")
+
+	sts := BuildStatefulSet(instance, "hash", nil)
+	container := sts.Spec.Template.Spec.Containers[0]
+
+	tests := []struct {
+		name     string
+		probe    *corev1.Probe
+		wantPath string
+		wantPort int
+	}{
+		{"liveness", container.LivenessProbe, "/healthz", int(GatewayProxyPort)},
+		{"readiness", container.ReadinessProbe, "/readyz", int(GatewayProxyPort)},
+		{"startup", container.StartupProbe, "/healthz", int(GatewayProxyPort)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.probe == nil {
+				t.Fatalf("%s probe should not be nil", tt.name)
+			}
+			if tt.probe.HTTPGet == nil {
+				t.Fatalf("%s probe should use HTTPGet handler", tt.name)
+			}
+			if tt.probe.HTTPGet.Path != tt.wantPath {
+				t.Errorf("%s probe path = %q, want %q", tt.name, tt.probe.HTTPGet.Path, tt.wantPath)
+			}
+			if tt.probe.HTTPGet.Port.IntValue() != tt.wantPort {
+				t.Errorf("%s probe port = %d, want %d", tt.name, tt.probe.HTTPGet.Port.IntValue(), tt.wantPort)
+			}
+			if tt.probe.HTTPGet.Scheme != corev1.URISchemeHTTP {
+				t.Errorf("%s probe scheme = %q, want %q", tt.name, tt.probe.HTTPGet.Scheme, corev1.URISchemeHTTP)
+			}
+		})
 	}
 }
 
@@ -9057,6 +9396,9 @@ func TestNormalizeStatefulSet_ProbeDefaults(t *testing.T) {
 	}
 	if main.StartupProbe.PeriodSeconds == 0 {
 		t.Error("startup probe PeriodSeconds should not be 0 after normalization")
+	}
+	if main.StartupProbe.HTTPGet != nil && main.StartupProbe.HTTPGet.Scheme == "" {
+		t.Error("startup probe HTTPGet.Scheme should not be empty after normalization")
 	}
 }
 

@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.20](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.19...v0.10.20) (2026-03-04)
+
+
+### Features
+
+* add attachOnly and disable device auth in browser profiles ([#236](https://github.com/openclaw-rocks/k8s-operator/issues/236)) ([44dd9ce](https://github.com/openclaw-rocks/k8s-operator/commit/44dd9cee63c5a442f0dca2e6c1144224489b7ff3))
+
+## [0.10.19](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.18...v0.10.19) (2026-03-04)
+
+
+### Features
+
+* auto-inject gateway.controlUi.allowedOrigins ([#234](https://github.com/openclaw-rocks/k8s-operator/issues/234)) ([#235](https://github.com/openclaw-rocks/k8s-operator/issues/235)) ([46b5445](https://github.com/openclaw-rocks/k8s-operator/commit/46b5445e299e4af252568fcb043bb390373ca12c))
+
+## [0.10.18](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.17...v0.10.18) (2026-03-03)
+
+
+### Features
+
+* switch probes from exec to httpGet ([#231](https://github.com/openclaw-rocks/k8s-operator/issues/231)) ([d5b7754](https://github.com/openclaw-rocks/k8s-operator/commit/d5b7754400e3b1d3e41c57237b03aefc8bc76525))
+
+## [0.10.17](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.16...v0.10.17) (2026-03-02)
+
+
+### Bug Fixes
+
+* add configurable timeout for BackingUp phase to prevent stuck instances ([#226](https://github.com/openclaw-rocks/k8s-operator/issues/226)) ([778a642](https://github.com/openclaw-rocks/k8s-operator/commit/778a6426d4f2b26845f110887b3bc41f02ceb0ac)), closes [#224](https://github.com/openclaw-rocks/k8s-operator/issues/224)
+* make skill pack resolution non-blocking to prevent provisioning failures ([#227](https://github.com/openclaw-rocks/k8s-operator/issues/227)) ([ffb2485](https://github.com/openclaw-rocks/k8s-operator/commit/ffb24852190e66844c9fe0f69ba28db8c9fade8f)), closes [#225](https://github.com/openclaw-rocks/k8s-operator/issues/225)
+
 ## [0.10.16](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.15...v0.10.16) (2026-03-01)
 
 

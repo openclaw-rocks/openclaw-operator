@@ -19,6 +19,7 @@ package resources
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -74,6 +75,9 @@ func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseCo
 		}
 	}
 	if enriched, err := enrichConfigWithGatewayBind(configBytes, instance); err == nil {
+		configBytes = enriched
+	}
+	if enriched, err := enrichConfigWithControlUIOrigins(configBytes, instance); err == nil {
 		configBytes = enriched
 	}
 	if skillPacks != nil && len(skillPacks.SkillEntries) > 0 {
@@ -366,6 +370,101 @@ func enrichConfigWithGatewayBind(configJSON []byte, instance *openclawv1alpha1.O
 	config["gateway"] = gw
 
 	return json.Marshal(config)
+}
+
+// enrichConfigWithControlUIOrigins injects gateway.controlUi.allowedOrigins
+// into the config JSON. Origins are derived from localhost (always), ingress
+// hosts (scheme from TLS config), and spec.gateway.controlUiOrigins (explicit).
+// If the user has already set gateway.controlUi.allowedOrigins, the config is
+// returned unchanged (user override wins).
+func enrichConfigWithControlUIOrigins(configJSON []byte, instance *openclawv1alpha1.OpenClawInstance) ([]byte, error) {
+	var config map[string]interface{}
+	if err := json.Unmarshal(configJSON, &config); err != nil {
+		return configJSON, nil // not a JSON object, return unchanged
+	}
+
+	gw, _ := config["gateway"].(map[string]interface{})
+	if gw == nil {
+		gw = make(map[string]interface{})
+	}
+
+	controlUI, _ := gw["controlUi"].(map[string]interface{})
+	if controlUI == nil {
+		controlUI = make(map[string]interface{})
+	}
+
+	// If the user already set allowedOrigins, don't override
+	if _, ok := controlUI["allowedOrigins"]; ok {
+		return configJSON, nil
+	}
+
+	origins := deriveControlUIOrigins(instance)
+	if len(origins) == 0 {
+		return configJSON, nil
+	}
+
+	// Convert to []interface{} for JSON marshaling
+	originsIface := make([]interface{}, len(origins))
+	for i, o := range origins {
+		originsIface[i] = o
+	}
+
+	controlUI["allowedOrigins"] = originsIface
+	gw["controlUi"] = controlUI
+	config["gateway"] = gw
+
+	return json.Marshal(config)
+}
+
+// deriveControlUIOrigins builds a deduplicated, sorted list of origins from:
+// 1. Localhost (always): http://localhost:18789, http://127.0.0.1:18789
+// 2. Ingress hosts: https:// if host appears in TLS config, http:// otherwise
+// 3. CRD field: spec.gateway.controlUiOrigins (explicit extras)
+func deriveControlUIOrigins(instance *openclawv1alpha1.OpenClawInstance) []string {
+	seen := make(map[string]struct{})
+	var origins []string
+
+	add := func(origin string) {
+		if _, exists := seen[origin]; !exists {
+			seen[origin] = struct{}{}
+			origins = append(origins, origin)
+		}
+	}
+
+	// Always include localhost origins for port-forwarding
+	add(fmt.Sprintf("http://localhost:%d", GatewayPort))
+	add(fmt.Sprintf("http://127.0.0.1:%d", GatewayPort))
+
+	// Build TLS host lookup for scheme determination
+	tlsHosts := make(map[string]struct{})
+	for _, tls := range instance.Spec.Networking.Ingress.TLS {
+		for _, h := range tls.Hosts {
+			tlsHosts[h] = struct{}{}
+		}
+	}
+
+	// Derive origins from ingress hosts
+	for _, ingressHost := range instance.Spec.Networking.Ingress.Hosts {
+		host := ingressHost.Host
+		if host == "" {
+			continue
+		}
+		scheme := "http"
+		if _, isTLS := tlsHosts[host]; isTLS {
+			scheme = "https"
+		}
+		add(fmt.Sprintf("%s://%s", scheme, host))
+	}
+
+	// Add explicit origins from CRD field
+	for _, origin := range instance.Spec.Gateway.ControlUIOrigins {
+		if origin != "" {
+			add(origin)
+		}
+	}
+
+	sort.Strings(origins)
+	return origins
 }
 
 // enrichConfigWithSkillPacks injects skills.entries from resolved skill packs

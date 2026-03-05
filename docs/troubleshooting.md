@@ -152,6 +152,34 @@ kubectl describe openclawinstance my-assistant -n openclaw
    kubectl get secret <name> -n openclaw
    ```
 
+### Instance in Degraded State (Skill Packs Unavailable)
+
+**Symptoms**: The instance phase is `Degraded`. The `SkillPacksReady` condition shows `status: "False"` with reason `ResolutionFailed`. The instance is running but without skill packs.
+
+**Diagnosis**:
+
+```bash
+# Check the SkillPacksReady condition
+kubectl get openclawinstance my-assistant -n openclaw \
+  -o jsonpath='{.status.conditions[?(@.type=="SkillPacksReady")]}'
+
+# Check events for details
+kubectl describe openclawinstance my-assistant -n openclaw | grep SkillPack
+```
+
+**Common causes**:
+
+1. **GitHub API unreachable**: The operator fetches skill packs from GitHub. If GitHub is down or the cluster has no egress access, resolution fails. The instance provisions without skill packs and retries on the next reconcile (30s).
+
+2. **Invalid pack reference**: Verify the `pack:` skill references are valid `owner/repo/path[@ref]` format:
+   ```bash
+   kubectl get openclawinstance my-assistant -n openclaw -o jsonpath='{.spec.skills}'
+   ```
+
+3. **Missing GITHUB_TOKEN**: Private skill pack repositories require a GitHub token. Verify the operator has the `GITHUB_TOKEN` environment variable set.
+
+**Resolution**: The operator automatically retries skill pack resolution on every reconcile. Once GitHub is reachable again, the instance transitions from `Degraded` to `Running`. The operator also uses stale cache - if a previous successful resolution exists, it will use that data even after the cache TTL expires.
+
 ### NetworkPolicy Blocking Traffic
 
 **Symptoms**: The instance is `Running` but cannot reach external APIs or other pods cannot reach the instance.
@@ -195,6 +223,51 @@ kubectl describe openclawinstance my-assistant -n openclaw
    ```bash
    kubectl run -n openclaw test-curl --rm -it --image=curlimages/curl -- \
      curl -v http://my-assistant:18789
+   ```
+
+### Instance Stuck in BackingUp Phase
+
+**Symptoms**: After deleting an instance, it remains in `BackingUp` phase and is not deleted.
+
+**Diagnosis**:
+
+```bash
+# Check the instance status
+kubectl get openclawinstance my-agent -o jsonpath='{.status.phase}'
+kubectl get openclawinstance my-agent -o jsonpath='{.status.backingUpSince}'
+
+# Check if a backup Job exists and its status
+kubectl get jobs -l openclaw.rocks/instance=my-agent
+kubectl describe job my-agent-backup -n <namespace>
+
+# Check events for timeout or failure
+kubectl describe openclawinstance my-agent | grep -A5 Events
+```
+
+**Possible causes and solutions**:
+
+1. **Backup timeout will resolve it automatically**: By default, the operator waits up to 30 minutes (`spec.backup.timeout`) before giving up and proceeding with deletion. Check `status.backingUpSince` to see when the phase started and how much time remains.
+
+2. **Backup Job failed**: The Job may have failed due to S3 connectivity issues, incorrect credentials, or insufficient permissions. The operator retries until the timeout elapses. Check the Job logs:
+   ```bash
+   kubectl logs job/my-agent-backup -n <namespace>
+   ```
+
+3. **Pods stuck terminating**: The StatefulSet was scaled to 0 but pods are stuck. Check for finalizers or PodDisruptionBudgets:
+   ```bash
+   kubectl get pods -l openclaw.rocks/instance=my-agent -o yaml | grep finalizers
+   ```
+
+4. **Skip backup immediately**: To bypass the backup and delete immediately:
+   ```bash
+   kubectl annotate openclawinstance my-agent openclaw.rocks/skip-backup=true
+   ```
+
+5. **Increase or decrease the timeout**: Adjust `spec.backup.timeout` (min: 5m, max: 24h):
+   ```yaml
+   spec:
+     backup:
+       timeout: "1h"
    ```
 
 ### PVC Not Binding

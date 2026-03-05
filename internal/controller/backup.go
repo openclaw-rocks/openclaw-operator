@@ -37,19 +37,28 @@ import (
 	"github.com/openclawrocks/k8s-operator/internal/resources"
 )
 
+const (
+	// defaultBackupTimeout is the maximum time the operator waits for a pre-delete
+	// backup to complete before giving up and proceeding with deletion.
+	defaultBackupTimeout = 30 * time.Minute
+)
+
 // reconcileDeleteWithBackup implements the backup-before-delete state machine:
-//  1. Check skip-backup annotation → if set, remove finalizer immediately
-//  2. Scale down StatefulSet to 0 → requeue 5s
-//  3. Wait for pods to terminate → requeue 5s
-//  4. Create/check backup Job
-//  5. On success: remove finalizer → K8s GCs all owned resources
+//  1. Check skip-backup annotation -> if set, remove finalizer immediately
+//  2. Check backup timeout -> if elapsed, skip backup and proceed with deletion
+//  3. Scale down StatefulSet to 0 -> requeue 5s
+//  4. Wait for pods to terminate -> requeue 5s
+//  5. Create/check backup Job
+//  6. On success: remove finalizer -> K8s GCs all owned resources
 func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	logger.Info("Handling deletion with backup", "instance", instance.Name, "namespace", instance.Namespace)
 
-	// Step 0: Update phase to BackingUp (if not already terminating/backing up)
+	// Step 0: Update phase to BackingUp and record start time (if not already terminating/backing up)
 	if instance.Status.Phase != openclawv1alpha1.PhaseBackingUp && instance.Status.Phase != openclawv1alpha1.PhaseTerminating {
+		now := metav1.Now()
 		instance.Status.Phase = openclawv1alpha1.PhaseBackingUp
+		instance.Status.BackingUpSince = &now
 		if err := r.Status().Update(ctx, instance); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -76,7 +85,32 @@ func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Conte
 		return r.removeFinalizer(ctx, instance)
 	}
 
-	// Step 2: Scale down StatefulSet to 0
+	// Step 2: Check backup timeout
+	if instance.Status.BackingUpSince != nil {
+		timeout := parseBackupTimeout(instance.Spec.Backup.Timeout)
+		elapsed := time.Since(instance.Status.BackingUpSince.Time)
+		if elapsed >= timeout {
+			logger.Info("Backup timeout exceeded, skipping backup and proceeding with deletion",
+				"elapsed", elapsed.Round(time.Second), "timeout", timeout)
+			r.Recorder.Event(instance, corev1.EventTypeWarning, "BackupTimedOut",
+				fmt.Sprintf("Backup did not complete within %s - skipping backup and proceeding with deletion", timeout))
+
+			meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+				Type:    openclawv1alpha1.ConditionTypeBackupComplete,
+				Status:  metav1.ConditionFalse,
+				Reason:  "BackupTimedOut",
+				Message: fmt.Sprintf("Backup did not complete within %s", timeout),
+			})
+			instance.Status.Phase = openclawv1alpha1.PhaseTerminating
+			instance.Status.BackingUpSince = nil
+			if err := r.Status().Update(ctx, instance); err != nil {
+				return ctrl.Result{}, err
+			}
+			return r.removeFinalizer(ctx, instance)
+		}
+	}
+
+	// Step 3: Scale down StatefulSet to 0
 	sts := &appsv1.StatefulSet{}
 	stsKey := client.ObjectKey{Name: resources.StatefulSetName(instance), Namespace: instance.Namespace}
 	if err := r.Get(ctx, stsKey, sts); err != nil {
@@ -98,7 +132,7 @@ func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Conte
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		}
 
-		// Step 3: Wait for pods to terminate
+		// Step 4: Wait for pods to terminate
 		podList := &corev1.PodList{}
 		if err := r.List(ctx, podList,
 			client.InNamespace(instance.Namespace),
@@ -112,7 +146,7 @@ func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Conte
 		}
 	}
 
-	// Step 4: Create/check backup Job
+	// Step 5: Create/check backup Job
 	creds, err := r.getS3Credentials(ctx)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -185,9 +219,9 @@ func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Conte
 	}
 
 	if condType == batchv1.JobFailed {
-		logger.Error(nil, "Backup Job failed — keeping finalizer for manual intervention", "job", jobName)
+		logger.Error(nil, "Backup Job failed - retrying until timeout", "job", jobName)
 		r.Recorder.Event(instance, corev1.EventTypeWarning, "BackupFailed",
-			fmt.Sprintf("Backup Job %s failed. Fix and delete the Job to retry, or annotate %s=true to skip.", jobName, AnnotationSkipBackup))
+			fmt.Sprintf("Backup Job %s failed. Will retry until backup timeout elapses. To skip immediately: annotate %s=true.", jobName, AnnotationSkipBackup))
 
 		meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
 			Type:    openclawv1alpha1.ConditionTypeBackupComplete,
@@ -201,7 +235,7 @@ func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Conte
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	// Step 5: Backup succeeded — record and remove finalizer
+	// Step 6: Backup succeeded - record and remove finalizer
 	logger.Info("Backup Job completed successfully", "job", jobName, "remotePath", instance.Status.LastBackupPath)
 	r.Recorder.Event(instance, corev1.EventTypeNormal, "BackupComplete",
 		fmt.Sprintf("Backup completed to %s", instance.Status.LastBackupPath))
@@ -209,6 +243,7 @@ func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Conte
 	now := metav1.Now()
 	instance.Status.LastBackupTime = &now
 	instance.Status.Phase = openclawv1alpha1.PhaseTerminating
+	instance.Status.BackingUpSince = nil
 
 	meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
 		Type:    openclawv1alpha1.ConditionTypeBackupComplete,
@@ -221,6 +256,25 @@ func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Conte
 	}
 
 	return r.removeFinalizer(ctx, instance)
+}
+
+// parseBackupTimeout parses the backup timeout string with min/max bounds.
+// Returns defaultBackupTimeout (30m) when empty. Minimum: 5m, Maximum: 24h.
+func parseBackupTimeout(s string) time.Duration {
+	if s == "" {
+		return defaultBackupTimeout
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return defaultBackupTimeout
+	}
+	if d < 5*time.Minute {
+		return 5 * time.Minute
+	}
+	if d > 24*time.Hour {
+		return 24 * time.Hour
+	}
+	return d
 }
 
 // removeFinalizer removes the operator finalizer, allowing K8s to GC the resource.

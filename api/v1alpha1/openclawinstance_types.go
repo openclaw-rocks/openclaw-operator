@@ -469,6 +469,15 @@ type BackupSpec struct {
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	FailedHistoryLimit *int32 `json:"failedHistoryLimit,omitempty"`
+
+	// Timeout is the maximum duration to wait for a pre-delete backup to complete
+	// before giving up and proceeding with deletion (Go duration string, e.g. "30m", "1h").
+	// Covers all phases: StatefulSet scale-down, pod termination, Job execution, and
+	// Job failure retries. When the timeout elapses the operator logs a warning,
+	// emits a BackupTimedOut event, and removes the finalizer so deletion can proceed.
+	// Minimum: 5m, Maximum: 24h, Default: 30m.
+	// +optional
+	Timeout string `json:"timeout,omitempty"`
 }
 
 // ChromiumSpec defines the Chromium sidecar configuration
@@ -1142,6 +1151,14 @@ type GatewaySpec struct {
 	// auto-generating a gateway token Secret and uses this Secret instead.
 	// +optional
 	ExistingSecret string `json:"existingSecret,omitempty"`
+
+	// ControlUiOrigins is a list of additional allowed origins for the Control UI.
+	// The operator always auto-injects localhost origins (http://localhost:18789,
+	// http://127.0.0.1:18789) and derives origins from ingress hosts. Use this
+	// field to add extra origins (e.g., custom reverse proxy URLs).
+	// +kubebuilder:validation:MaxItems=20
+	// +optional
+	ControlUIOrigins []string `json:"controlUiOrigins,omitempty"`
 }
 
 // AutoUpdateStatus tracks the state of automatic version updates
@@ -1224,6 +1241,12 @@ type OpenClawInstanceStatus struct {
 	// ManagedResources tracks the resources created by the operator
 	// +optional
 	ManagedResources ManagedResourcesStatus `json:"managedResources,omitempty"`
+
+	// BackingUpSince is the timestamp when the instance entered the BackingUp phase.
+	// Used to enforce spec.backup.timeout. Set once when the phase transitions to BackingUp
+	// and cleared when the phase changes.
+	// +optional
+	BackingUpSince *metav1.Time `json:"backingUpSince,omitempty"`
 
 	// BackupJobName is the name of the active backup Job
 	// +optional
@@ -1390,6 +1413,9 @@ const (
 
 	// ConditionTypeSecretsReady indicates all referenced secrets exist
 	ConditionTypeSecretsReady = "SecretsReady"
+
+	// ConditionTypeSkillPacksReady indicates skill packs were resolved successfully
+	ConditionTypeSkillPacksReady = "SkillPacksReady"
 )
 
 // Phase constants

@@ -1113,14 +1113,18 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			}
 			Expect(foundTSInit).To(BeTrue(), "init-tailscale-bin init container should be present")
 
-			// Verify probes use exec (not TCPSocket) for loopback-bound gateway
+			// Verify probes use HTTPGet via the nginx proxy sidecar
 			Expect(mainContainer.LivenessProbe).NotTo(BeNil(), "liveness probe should be set")
-			Expect(mainContainer.LivenessProbe.Exec).NotTo(BeNil(), "liveness probe should use exec")
-			Expect(mainContainer.LivenessProbe.TCPSocket).To(BeNil(), "liveness probe should not use TCPSocket")
+			Expect(mainContainer.LivenessProbe.HTTPGet).NotTo(BeNil(), "liveness probe should use HTTPGet")
+			Expect(mainContainer.LivenessProbe.HTTPGet.Path).To(Equal("/healthz"))
+			Expect(mainContainer.LivenessProbe.HTTPGet.Port.IntValue()).To(Equal(int(resources.GatewayProxyPort)))
 			Expect(mainContainer.ReadinessProbe).NotTo(BeNil(), "readiness probe should be set")
-			Expect(mainContainer.ReadinessProbe.Exec).NotTo(BeNil(), "readiness probe should use exec")
+			Expect(mainContainer.ReadinessProbe.HTTPGet).NotTo(BeNil(), "readiness probe should use HTTPGet")
+			Expect(mainContainer.ReadinessProbe.HTTPGet.Path).To(Equal("/readyz"))
+			Expect(mainContainer.ReadinessProbe.HTTPGet.Port.IntValue()).To(Equal(int(resources.GatewayProxyPort)))
 			Expect(mainContainer.StartupProbe).NotTo(BeNil(), "startup probe should be set")
-			Expect(mainContainer.StartupProbe.Exec).NotTo(BeNil(), "startup probe should use exec")
+			Expect(mainContainer.StartupProbe.HTTPGet).NotTo(BeNil(), "startup probe should use HTTPGet")
+			Expect(mainContainer.StartupProbe.HTTPGet.Path).To(Equal("/healthz"))
 
 			// Verify NetworkPolicy has STUN and WireGuard egress
 			np := &networkingv1.NetworkPolicy{}
@@ -2080,6 +2084,91 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				}
 				return updatedInstance.Status.ObservedGeneration == updatedInstance.Generation
 			}, timeout, interval).Should(BeTrue(), "ObservedGeneration should match Generation")
+
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+	})
+
+	Context("When creating an instance with ingress hosts (#234)", func() {
+		var namespace string
+
+		BeforeEach(func() {
+			namespace = "test-origins-" + time.Now().Format("20060102150405")
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+			Expect(k8sClient.Create(ctx, ns)).Should(Succeed())
+		})
+
+		AfterEach(func() {
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+			_ = k8sClient.Delete(ctx, ns)
+		})
+
+		It("Should auto-inject controlUi.allowedOrigins from ingress hosts", func() {
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instanceName := "origins-ingress"
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					Networking: openclawv1alpha1.NetworkingSpec{
+						Ingress: openclawv1alpha1.IngressSpec{
+							Enabled: true,
+							Hosts: []openclawv1alpha1.IngressHost{
+								{Host: "openclaw.example.com"},
+							},
+							TLS: []openclawv1alpha1.IngressTLS{
+								{Hosts: []string{"openclaw.example.com"}, SecretName: "tls-secret"},
+							},
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			// Verify ConfigMap contains allowedOrigins
+			cm := &corev1.ConfigMap{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.ConfigMapName(instance),
+					Namespace: namespace,
+				}, cm)
+			}, timeout, interval).Should(Succeed())
+
+			configContent, ok := cm.Data["openclaw.json"]
+			Expect(ok).To(BeTrue(), "ConfigMap should have openclaw.json key")
+
+			var parsed map[string]interface{}
+			Expect(json.Unmarshal([]byte(configContent), &parsed)).To(Succeed())
+
+			gw, ok := parsed["gateway"].(map[string]interface{})
+			Expect(ok).To(BeTrue(), "config should have gateway key")
+			controlUI, ok := gw["controlUi"].(map[string]interface{})
+			Expect(ok).To(BeTrue(), "gateway should have controlUi key")
+			origins, ok := controlUI["allowedOrigins"].([]interface{})
+			Expect(ok).To(BeTrue(), "controlUi should have allowedOrigins array")
+
+			originStrs := make([]string, len(origins))
+			for i, o := range origins {
+				originStrs[i] = o.(string)
+			}
+
+			Expect(originStrs).To(ContainElement("http://localhost:18789"),
+				"should contain localhost origin for port-forwarding")
+			Expect(originStrs).To(ContainElement("https://openclaw.example.com"),
+				"should contain ingress host origin with https scheme")
 
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})

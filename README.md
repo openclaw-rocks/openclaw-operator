@@ -239,6 +239,16 @@ The operator automatically generates a gateway token Secret for each instance an
 - The operator automatically sets `gateway.controlUi.dangerouslyDisableDeviceAuth: true` - device pairing is incompatible with Kubernetes (users cannot approve pairing from inside a container, connections are always proxied, and mDNS is unavailable)
 - Since v2026.2.24, OpenClaw restricts `gateway.allowedOrigins` to same-origin by default - if accessing via a non-default hostname (e.g. Ingress), set `gateway.allowedOrigins: ["*"]` in your config
 
+### Control UI allowed origins
+
+The operator auto-injects `gateway.controlUi.allowedOrigins` so the Control UI works through reverse proxies without CORS errors. Origins are derived from:
+
+- **Localhost** (always): `http://localhost:18789`, `http://127.0.0.1:18789` for port-forwarding
+- **Ingress hosts**: scheme determined from TLS config (`https://` if TLS, `http://` otherwise)
+- **Explicit extras**: `spec.gateway.controlUiOrigins` for custom proxy URLs
+
+If you set `gateway.controlUi.allowedOrigins` directly in your config JSON, the operator will not override it.
+
 ### Chromium sidecar
 
 Enable headless browser automation for web scraping, screenshots, and browser-based integrations:
@@ -654,7 +664,7 @@ Compatible with AWS S3, Backblaze B2, Cloudflare R2, MinIO, Wasabi, and any S3-c
 
 **When backups run automatically:**
 
-- **On delete** - the operator backs up the PVC before removing any resources. Add the annotation `openclaw.rocks/skip-backup: "true"` to skip and delete immediately.
+- **On delete** - the operator backs up the PVC before removing any resources. Subject to `spec.backup.timeout` (default: 30m) - if the backup does not complete in time, it is skipped automatically. Add `openclaw.rocks/skip-backup: "true"` to skip immediately.
 - **Before auto-update** - when `spec.autoUpdate.backupBeforeUpdate: true` (the default).
 - **On a schedule** - when `spec.backup.schedule` is set (cron expression).
 
@@ -668,6 +678,7 @@ spec:
     schedule: "0 2 * * *"   # Daily at 2 AM UTC
     historyLimit: 3          # Successful job runs to retain (default: 3)
     failedHistoryLimit: 1    # Failed job runs to retain (default: 1)
+    timeout: "30m"           # Max time for pre-delete backup (default: 30m, min: 5m, max: 24h)
 ```
 
 The operator creates a Kubernetes CronJob that runs rclone to sync PVC data to S3. The CronJob mounts the PVC read-only (hot backup - no downtime) and uses pod affinity to co-locate on the same node as the StatefulSet pod (required for RWO PVCs). Each run stores data under a unique timestamped path: `backups/<tenantId>/<instanceName>/periodic/<timestamp>`.
@@ -692,6 +703,7 @@ These behaviors are always applied - no configuration needed:
 |----------|---------|
 | `gateway.bind=loopback` | Always injected into config; an nginx reverse proxy sidecar exposes the gateway and canvas ports for external access |
 | Gateway auth token | Auto-generated Secret per instance; injected into config and env |
+| Control UI origins | `gateway.controlUi.allowedOrigins` auto-injected from localhost + ingress hosts + `spec.gateway.controlUiOrigins` |
 | `OPENCLAW_DISABLE_BONJOUR=1` | Always set (mDNS does not work in Kubernetes) |
 | Browser profiles | When Chromium is enabled, `"default"` and `"chrome"` profiles are auto-configured with the sidecar's CDP endpoint |
 | Tailscale serve config | When Tailscale is enabled, a `tailscale-serve.json` key is added to the ConfigMap for the sidecar's `TS_SERVE_CONFIG` |

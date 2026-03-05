@@ -217,19 +217,29 @@ func (r *OpenClawInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{RequeueAfter: requeueAfter}, err
 	}
 
-	// Update status to Running
-	instance.Status.Phase = openclawv1alpha1.PhaseRunning
+	// Determine phase based on condition health
+	skillPacksCondition := meta.FindStatusCondition(instance.Status.Conditions, openclawv1alpha1.ConditionTypeSkillPacksReady)
+	if skillPacksCondition != nil && skillPacksCondition.Status == metav1.ConditionFalse {
+		instance.Status.Phase = openclawv1alpha1.PhaseDegraded
+		meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+			Type:    openclawv1alpha1.ConditionTypeReady,
+			Status:  metav1.ConditionTrue,
+			Reason:  "ReconcileSucceededDegraded",
+			Message: "Resources reconciled but skill packs unavailable - instance running without skill packs",
+		})
+	} else {
+		instance.Status.Phase = openclawv1alpha1.PhaseRunning
+		meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+			Type:    openclawv1alpha1.ConditionTypeReady,
+			Status:  metav1.ConditionTrue,
+			Reason:  "ReconcileSucceeded",
+			Message: "All resources reconciled successfully",
+		})
+	}
 	if instance.Status.ObservedGeneration != instance.Generation {
 		instance.Status.LastReconcileTime = &metav1.Time{Time: time.Now()}
 	}
 	instance.Status.ObservedGeneration = instance.Generation
-
-	meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
-		Type:    openclawv1alpha1.ConditionTypeReady,
-		Status:  metav1.ConditionTrue,
-		Reason:  "ReconcileSucceeded",
-		Message: "All resources reconciled successfully",
-	})
 
 	// Check for auto-updates (non-fatal — errors are logged and evented)
 	autoUpdateResult, autoUpdateErr := r.reconcileAutoUpdate(ctx, instance)
@@ -297,16 +307,34 @@ func (r *OpenClawInstanceReconciler) reconcileResources(ctx context.Context, ins
 	}
 	logger.V(1).Info("Gateway token secret reconciled")
 
-	// 2c. Resolve skill packs from GitHub (if any pack: skills defined)
+	// 2c. Resolve skill packs from GitHub (non-blocking - failures degrade but don't block provisioning)
 	var skillPacks *resources.ResolvedSkillPacks
 	packNames := resources.ExtractPackSkills(instance.Spec.Skills)
 	if len(packNames) > 0 && r.SkillPackResolver != nil {
 		resolved, err := r.SkillPackResolver.Resolve(ctx, packNames)
 		if err != nil {
-			return fmt.Errorf("failed to resolve skill packs: %w", err)
+			logger.Error(err, "Failed to resolve skill packs, continuing without them", "packs", packNames)
+			r.Recorder.Event(instance, corev1.EventTypeWarning, "SkillPackResolutionFailed",
+				fmt.Sprintf("Failed to resolve skill packs: %v. Instance will start without skill packs.", err))
+			meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+				Type:               openclawv1alpha1.ConditionTypeSkillPacksReady,
+				Status:             metav1.ConditionFalse,
+				Reason:             "ResolutionFailed",
+				Message:            fmt.Sprintf("Failed to resolve skill packs: %v", err),
+				ObservedGeneration: instance.Generation,
+			})
+			// Continue with skillPacks = nil - instance will provision without skill packs
+		} else {
+			skillPacks = resolved
+			meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+				Type:               openclawv1alpha1.ConditionTypeSkillPacksReady,
+				Status:             metav1.ConditionTrue,
+				Reason:             "Resolved",
+				Message:            fmt.Sprintf("Successfully resolved %d skill pack(s)", len(packNames)),
+				ObservedGeneration: instance.Generation,
+			})
+			logger.V(1).Info("Skill packs resolved", "packs", packNames)
 		}
-		skillPacks = resolved
-		logger.V(1).Info("Skill packs resolved", "packs", packNames)
 	}
 
 	// 3. Reconcile ConfigMap (always - enrichment pipeline runs on all config sources)

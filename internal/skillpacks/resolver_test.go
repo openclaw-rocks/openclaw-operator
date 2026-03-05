@@ -319,3 +319,66 @@ func TestResolve_InvalidRef(t *testing.T) {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
+
+func TestResolve_StaleCacheFallback(t *testing.T) {
+	manifestJSON := `{"files": {}, "directories": ["skills/test"], "config": {"test-skill": {"enabled": true}}}`
+	callCount := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		if callCount > 1 {
+			// Simulate GitHub outage on subsequent requests
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(ghFile(manifestJSON)))
+	}))
+	defer server.Close()
+
+	// Use a very short TTL so the cache expires quickly
+	resolver := &Resolver{
+		cacheTTL:   1 * time.Millisecond,
+		httpClient: &http.Client{Timeout: 5 * time.Second},
+		baseURL:    server.URL,
+		cache:      make(map[string]*cacheEntry),
+	}
+
+	// First call succeeds and populates cache
+	resolved, err := resolver.Resolve(context.Background(), []string{"owner/repo/test"})
+	if err != nil {
+		t.Fatalf("first resolve: %v", err)
+	}
+	if len(resolved.Directories) != 1 || resolved.Directories[0] != "skills/test" {
+		t.Errorf("unexpected directories: %v", resolved.Directories)
+	}
+
+	// Wait for cache to expire
+	time.Sleep(5 * time.Millisecond)
+
+	// Second call fails but returns stale cache instead of error
+	resolved, err = resolver.Resolve(context.Background(), []string{"owner/repo/test"})
+	if err != nil {
+		t.Fatalf("expected stale cache fallback, got error: %v", err)
+	}
+	if resolved == nil {
+		t.Fatal("expected stale cached result, got nil")
+	}
+	if len(resolved.Directories) != 1 || resolved.Directories[0] != "skills/test" {
+		t.Errorf("unexpected stale directories: %v", resolved.Directories)
+	}
+}
+
+func TestResolve_NoCacheFallbackOnFirstFailure(t *testing.T) {
+	// When there is no cached data at all, errors should propagate
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	resolver := newTestResolver(server, "")
+
+	_, err := resolver.Resolve(context.Background(), []string{"owner/repo/test"})
+	if err == nil {
+		t.Fatal("expected error when no cache exists and fetch fails")
+	}
+}

@@ -592,7 +592,7 @@ The operator automatically adds WebSocket-related annotations for nginx-ingress 
 
 ### spec.probes
 
-Health probe configuration for the main OpenClaw container. All probes use TCP socket checks against the gateway port (18789).
+Health probe configuration for the main OpenClaw container. All probes use HTTP GET requests through the nginx proxy sidecar on port 18790 - liveness and startup probes check `/healthz`, while readiness probes check `/readyz`.
 
 #### spec.probes.liveness
 
@@ -704,6 +704,7 @@ Configures periodic scheduled backups to S3-compatible storage. Requires the `s3
 | `schedule`           | `string` | --      | Cron expression for periodic backups (e.g., `"0 2 * * *"` for daily at 2 AM). When set, the operator creates a CronJob that runs rclone to sync PVC data to S3. |
 | `historyLimit`       | `*int32` | `3`     | Number of successful CronJob runs to retain.                                                       |
 | `failedHistoryLimit` | `*int32` | `1`     | Number of failed CronJob runs to retain.                                                           |
+| `timeout`            | `string` | `30m`   | Maximum duration to wait for a pre-delete backup to complete before giving up and proceeding with deletion (Go duration string, e.g. `"30m"`, `"1h"`). Covers all phases: StatefulSet scale-down, pod termination, Job execution, and Job failure retries. Minimum: `5m`, Maximum: `24h`. |
 
 The CronJob mounts the PVC read-only (hot backup - no downtime) and uses pod affinity to schedule on the same node as the StatefulSet pod (required for RWO PVCs). Each run stores data under a unique timestamped path: `backups/<tenantId>/<instanceName>/periodic/<timestamp>`.
 
@@ -713,6 +714,7 @@ spec:
     schedule: "0 2 * * *"   # Daily at 2 AM UTC
     historyLimit: 5          # Keep last 5 successful runs
     failedHistoryLimit: 2    # Keep last 2 failed runs
+    timeout: "30m"           # Max time for pre-delete backup (default: 30m)
 ```
 
 ### spec.restoreFrom
@@ -741,11 +743,12 @@ spec:
 
 ### spec.gateway
 
-Configures the gateway authentication token.
+Configures the gateway authentication token and Control UI origins.
 
-| Field            | Type     | Default | Description                                                                                       |
-|------------------|----------|---------|---------------------------------------------------------------------------------------------------|
-| `existingSecret` | `string` | --      | Name of a user-managed Secret containing the gateway token. The Secret must have a key named `token`. When set, the operator skips auto-generating a gateway token Secret and uses this Secret instead. |
+| Field              | Type       | Default | Description                                                                                       |
+|--------------------|------------|---------|---------------------------------------------------------------------------------------------------|
+| `existingSecret`   | `string`   | --      | Name of a user-managed Secret containing the gateway token. The Secret must have a key named `token`. When set, the operator skips auto-generating a gateway token Secret and uses this Secret instead. |
+| `controlUiOrigins` | `[]string` | --      | Additional allowed origins for the Control UI. The operator always auto-injects `http://localhost:18789` and `http://127.0.0.1:18789` (for port-forwarding) and derives origins from ingress hosts. Use this field to add extra origins (e.g., custom reverse proxy URLs). Max 20 items. |
 
 When `existingSecret` is not set, the operator automatically generates a random gateway token Secret, which is tracked in `status.managedResources.gatewayTokenSecret`.
 
@@ -753,12 +756,21 @@ When `existingSecret` is not set, the operator automatically generates a random 
 
 The operator always injects `gateway.controlUi.dangerouslyDisableDeviceAuth: true` into the config JSON. Device pairing (introduced in OpenClaw v2026.3.2) is fundamentally incompatible with Kubernetes because users cannot approve pairing from inside a container, connections always come through the nginx proxy sidecar (non-local), and mDNS is unavailable. If you explicitly set `gateway.controlUi.dangerouslyDisableDeviceAuth` in your config, your value takes precedence.
 
+The operator auto-injects `gateway.controlUi.allowedOrigins` into the config JSON with:
+- **Localhost** (always): `http://localhost:18789`, `http://127.0.0.1:18789`
+- **Ingress hosts**: `https://` if the host appears in TLS config, `http://` otherwise
+- **Explicit extras**: values from `spec.gateway.controlUiOrigins`
+
+If you set `gateway.controlUi.allowedOrigins` directly in your config JSON, the operator will not override it.
+
 **Note:** Since OpenClaw v2026.2.24, `gateway.allowedOrigins` defaults to same-origin only. If you access the Control UI through an Ingress or other non-default hostname, set `gateway.allowedOrigins: ["*"]` in your config to avoid blocked WebSocket connections.
 
 ```yaml
 spec:
   gateway:
     existingSecret: my-gateway-token
+    controlUiOrigins:
+      - "https://proxy.example.com"
 ```
 
 ### spec.autoUpdate
@@ -816,6 +828,7 @@ Standard `metav1.Condition` array. Condition types:
 | `ScheduledBackupReady`| The periodic backup CronJob is configured and ready.           |
 | `AutoUpdateAvailable` | A newer version is available in the OCI registry.              |
 | `SecretsReady`        | All referenced Secrets exist and are accessible.               |
+| `SkillPacksReady`     | Skill packs resolved successfully from GitHub. `False` with reason `ResolutionFailed` when GitHub is unreachable - instance runs without skill packs (phase `Degraded`). Retried on next reconcile. |
 
 ### status.endpoints
 
@@ -861,6 +874,7 @@ Standard `metav1.Condition` array. Condition types:
 
 | Field            | Type           | Description                                              |
 |------------------|----------------|----------------------------------------------------------|
+| `backingUpSince` | `*metav1.Time` | Timestamp when the instance entered the BackingUp phase. Used to enforce `spec.backup.timeout`. Cleared when the phase changes. |
 | `backupJobName`  | `string`       | Name of the active backup Job.                           |
 | `restoreJobName` | `string`       | Name of the active restore Job.                          |
 | `lastBackupPath` | `string`       | S3 path of the last successful backup.                   |
@@ -923,7 +937,7 @@ The first four keys are required. The operator uses rclone's S3 backend (`--s3-p
 
 | Trigger | Condition |
 |---------|-----------|
-| **Pre-delete backup** | Always runs when a CR is deleted, unless `openclaw.rocks/skip-backup: "true"` annotation is set or persistence is disabled. |
+| **Pre-delete backup** | Always runs when a CR is deleted, unless `openclaw.rocks/skip-backup: "true"` annotation is set or persistence is disabled. Subject to `spec.backup.timeout` (default: 30m) - if the backup does not complete within the timeout, it is skipped and deletion proceeds. |
 | **Pre-update backup** | Runs before each auto-update when `spec.autoUpdate.backupBeforeUpdate: true` (the default). |
 | **Periodic (scheduled)** | Runs on a cron schedule when `spec.backup.schedule` is set. See [Periodic scheduled backups](#periodic--scheduled-backups) below. |
 
@@ -944,9 +958,21 @@ Where:
 
 The path of the last successful backup is recorded in `status.lastBackupPath`.
 
+### Backup timeout
+
+Pre-delete backups are subject to a configurable timeout (default: 30 minutes). If the backup does not complete within the timeout -- whether due to a stuck Job, pod termination issues, or S3 credential errors -- the operator logs a warning, emits a `BackupTimedOut` event, sets the `BackupComplete=False` condition with reason `BackupTimedOut`, and proceeds with deletion.
+
+Configure the timeout via `spec.backup.timeout`:
+
+```yaml
+spec:
+  backup:
+    timeout: "1h"  # Allow up to 1 hour for pre-delete backups (default: 30m, min: 5m, max: 24h)
+```
+
 ### Skip backup on delete
 
-To delete an instance without waiting for a backup (e.g., the S3 backend is unavailable):
+To delete an instance immediately without waiting for a backup (e.g., the S3 backend is unavailable):
 
 ```bash
 kubectl annotate openclawinstance my-agent openclaw.rocks/skip-backup=true
