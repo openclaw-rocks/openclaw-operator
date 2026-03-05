@@ -339,6 +339,8 @@ func buildBackupCronJob(
 							DNSPolicy:                     corev1.DNSClusterFirst,
 							SchedulerName:                 "default-scheduler",
 							TerminationGracePeriodSeconds: &gracePeriod,
+							NodeSelector:                  instance.Spec.Availability.NodeSelector,
+							Tolerations:                   instance.Spec.Availability.Tolerations,
 							SecurityContext: &corev1.PodSecurityContext{
 								RunAsUser:  int64Ptr(1000),
 								RunAsGroup: int64Ptr(1000),

@@ -214,5 +214,64 @@ var _ = Describe("Periodic Backup CronJob", func() {
 			// Clean up
 			Expect(k8sClient.Delete(ctx, updatedInstance)).Should(Succeed())
 		})
+
+		It("Should propagate nodeSelector and tolerations to CronJob pod template", func() {
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instanceName := "backup-cron-nodeselector"
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					Backup: openclawv1alpha1.BackupSpec{
+						Schedule: "0 4 * * *",
+					},
+					Availability: openclawv1alpha1.AvailabilitySpec{
+						NodeSelector: map[string]string{
+							"openclaw.rocks/nodepool": "openclaw",
+						},
+						Tolerations: []corev1.Toleration{
+							{
+								Key:      "openclaw.rocks/dedicated",
+								Operator: corev1.TolerationOpEqual,
+								Value:    "openclaw",
+								Effect:   corev1.TaintEffectNoSchedule,
+							},
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			// Verify CronJob is created with nodeSelector and tolerations
+			cronJob := &batchv1.CronJob{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName + "-backup-periodic",
+					Namespace: namespace,
+				}, cronJob)
+			}, timeout, interval).Should(Succeed())
+
+			podSpec := cronJob.Spec.JobTemplate.Spec.Template.Spec
+			Expect(podSpec.NodeSelector).To(HaveKeyWithValue("openclaw.rocks/nodepool", "openclaw"))
+			Expect(podSpec.Tolerations).To(HaveLen(1))
+			Expect(podSpec.Tolerations[0].Key).To(Equal("openclaw.rocks/dedicated"))
+			Expect(podSpec.Tolerations[0].Value).To(Equal("openclaw"))
+			Expect(podSpec.Tolerations[0].Effect).To(Equal(corev1.TaintEffectNoSchedule))
+
+			// Clean up
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
 	})
 })

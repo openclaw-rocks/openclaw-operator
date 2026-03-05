@@ -382,6 +382,36 @@ var _ = Describe("S3 Helpers", func() {
 			Expect(cronJob.Labels["openclaw.rocks/job-type"]).To(Equal("periodic-backup"))
 		})
 
+		It("Should propagate nodeSelector and tolerations from spec.availability", func() {
+			instance.Spec.Availability.NodeSelector = map[string]string{
+				"openclaw.rocks/nodepool": "openclaw",
+			}
+			instance.Spec.Availability.Tolerations = []corev1.Toleration{
+				{
+					Key:      "openclaw.rocks/dedicated",
+					Operator: corev1.TolerationOpEqual,
+					Value:    "openclaw",
+					Effect:   corev1.TaintEffectNoSchedule,
+				},
+			}
+			cronJob := buildBackupCronJob(instance, creds)
+			podSpec := cronJob.Spec.JobTemplate.Spec.Template.Spec
+			Expect(podSpec.NodeSelector).To(Equal(map[string]string{
+				"openclaw.rocks/nodepool": "openclaw",
+			}))
+			Expect(podSpec.Tolerations).To(HaveLen(1))
+			Expect(podSpec.Tolerations[0].Key).To(Equal("openclaw.rocks/dedicated"))
+			Expect(podSpec.Tolerations[0].Value).To(Equal("openclaw"))
+			Expect(podSpec.Tolerations[0].Effect).To(Equal(corev1.TaintEffectNoSchedule))
+		})
+
+		It("Should leave nodeSelector and tolerations nil when not set", func() {
+			cronJob := buildBackupCronJob(instance, creds)
+			podSpec := cronJob.Spec.JobTemplate.Spec.Template.Spec
+			Expect(podSpec.NodeSelector).To(BeNil())
+			Expect(podSpec.Tolerations).To(BeNil())
+		})
+
 		It("Should set explicit Kubernetes default fields", func() {
 			cronJob := buildBackupCronJob(instance, creds)
 			spec := cronJob.Spec.JobTemplate.Spec.Template.Spec
