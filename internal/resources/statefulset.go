@@ -1144,12 +1144,12 @@ func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.
 	// browserless v2 reads DEFAULT_LAUNCH_ARGS env var and forwards the flags
 	// to the Chrome process. Using container Args would override the image CMD
 	// and cause the first flag to be executed as a binary (issue #209).
-	defaultArgs := []string{
+	allArgs := []string{
 		"--disable-blink-features=AutomationControlled",
 		"--disable-features=AutomationControlled",
 		"--no-first-run",
 	}
-	allArgs := append(defaultArgs, instance.Spec.Chromium.ExtraArgs...)
+	allArgs = append(allArgs, instance.Spec.Chromium.ExtraArgs...)
 	if launchArgs, err := json.Marshal(allArgs); err == nil {
 		chromiumEnv = append(chromiumEnv, corev1.EnvVar{
 			Name:  "DEFAULT_LAUNCH_ARGS",
