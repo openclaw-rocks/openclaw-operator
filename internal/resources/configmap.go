@@ -44,8 +44,8 @@ func BuildConfigMap(instance *openclawv1alpha1.OpenClawInstance, gatewayToken st
 // BuildConfigMapFromBytes creates a ConfigMap for the OpenClawInstance using
 // the provided base config bytes. This allows the controller to pass config
 // from any source (inline raw, external ConfigMap, or empty default).
-// The enrichment pipeline (gateway auth, tailscale, browser, gateway bind)
-// always runs on the provided bytes.
+// The enrichment pipeline (gateway auth, device auth, tailscale, browser,
+// gateway bind, skill packs) always runs on the provided bytes.
 func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseConfig []byte, gatewayToken string, skillPacks *ResolvedSkillPacks) *corev1.ConfigMap {
 	labels := Labels(instance)
 
@@ -54,11 +54,14 @@ func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseCo
 		configBytes = []byte("{}")
 	}
 
-	// Enrichment pipeline: gateway auth -> tailscale -> browser -> gateway bind
+	// Enrichment pipeline: gateway auth -> device auth -> tailscale -> browser -> gateway bind -> skill packs
 	if gatewayToken != "" {
 		if enriched, err := enrichConfigWithGatewayAuth(configBytes, gatewayToken); err == nil {
 			configBytes = enriched
 		}
+	}
+	if enriched, err := enrichConfigWithDeviceAuth(configBytes); err == nil {
+		configBytes = enriched
 	}
 	if instance.Spec.Tailscale.Enabled {
 		if enriched, err := enrichConfigWithTailscale(configBytes, instance); err == nil {
@@ -136,6 +139,39 @@ func enrichConfigWithGatewayAuth(configJSON []byte, token string) ([]byte, error
 	auth["mode"] = "token" //nolint:goconst // OpenClaw auth mode, not k8s Secret key
 	auth["token"] = token
 	gw["auth"] = auth
+	config["gateway"] = gw
+
+	return json.Marshal(config)
+}
+
+// enrichConfigWithDeviceAuth injects gateway.controlUi.dangerouslyDisableDeviceAuth=true
+// into the config JSON. Device pairing is fundamentally incompatible with Kubernetes
+// because (1) users cannot approve pairing from inside a container, (2) connections
+// always come through the nginx proxy sidecar (non-local), and (3) mDNS does not work
+// in K8s. If the user has already set the field, the config is returned unchanged.
+func enrichConfigWithDeviceAuth(configJSON []byte) ([]byte, error) {
+	var config map[string]interface{}
+	if err := json.Unmarshal(configJSON, &config); err != nil {
+		return configJSON, nil // not a JSON object, return unchanged
+	}
+
+	gw, _ := config["gateway"].(map[string]interface{})
+	if gw == nil {
+		gw = make(map[string]interface{})
+	}
+
+	controlUI, _ := gw["controlUi"].(map[string]interface{})
+	if controlUI == nil {
+		controlUI = make(map[string]interface{})
+	}
+
+	// If the user already set dangerouslyDisableDeviceAuth, don't override
+	if _, ok := controlUI["dangerouslyDisableDeviceAuth"]; ok {
+		return configJSON, nil
+	}
+
+	controlUI["dangerouslyDisableDeviceAuth"] = true
+	gw["controlUi"] = controlUI
 	config["gateway"] = gw
 
 	return json.Marshal(config)
@@ -234,7 +270,9 @@ func BuildTailscaleServeConfig(instance *openclawv1alpha1.OpenClawInstance) stri
 // enrichConfigWithBrowser injects browser config into the config JSON so the
 // agent uses the Chromium sidecar instead of the Chrome extension relay.
 // Configures both "default" and "chrome" profiles to point at the sidecar CDP
-// port. The "chrome" profile must be redirected because LLMs frequently pass
+// port and sets attachOnly=true so OpenClaw attaches to the existing sidecar
+// instead of trying to launch/manage a browser process locally.
+// The "chrome" profile must be redirected because LLMs frequently pass
 // profile="chrome" explicitly in browser tool calls, bypassing defaultProfile.
 // Without this override the built-in "chrome" profile falls back to the
 // extension relay which does not work in a headless container.
@@ -261,10 +299,10 @@ func enrichConfigWithBrowser(configJSON []byte) ([]byte, error) {
 	}
 
 	// Use ${OPENCLAW_CHROMIUM_CDP} env var (resolved at runtime by OpenClaw)
-	// which contains the pod IP. The browser control service treats any
-	// 127.x.x.x address as "local/managed" and tries to bind the port.
-	// A non-loopback pod IP activates remote/attach-only mode so the
-	// service just connects to the existing chromium sidecar.
+	// which contains the pod IP, and set attachOnly=true on each profile.
+	// attachOnly explicitly tells OpenClaw to attach to the existing sidecar
+	// instead of trying to launch/manage the browser process locally - this
+	// is deterministic regardless of whether the pod IP is loopback or not.
 	cdpURL := "${OPENCLAW_CHROMIUM_CDP}"
 
 	// Configure both "default" and "chrome" profiles to point at the sidecar.
@@ -286,6 +324,12 @@ func enrichConfigWithBrowser(configJSON []byte) ([]byte, error) {
 		// color is required by OpenClaw's config validation
 		if _, hasColor := profile["color"]; !hasColor {
 			profile["color"] = "#4285F4"
+		}
+
+		// attachOnly tells OpenClaw to attach to the existing sidecar
+		// instead of trying to launch/manage the browser process locally.
+		if _, hasAttachOnly := profile["attachOnly"]; !hasAttachOnly {
+			profile["attachOnly"] = true
 		}
 
 		profiles[profileName] = profile
