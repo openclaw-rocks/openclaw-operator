@@ -34,7 +34,7 @@ annotations:
     - name: Website
       url: https://openclaw.rocks
     - name: Documentation
-      url: https://openclaw.rocks/blog/deploy-openclaw-kubernetes
+      url: https://openclaw.rocks/docs/operator/0.10
     - name: OperatorHub
       url: https://operatorhub.io/operator/openclaw-operator
     - name: Artifact Hub
