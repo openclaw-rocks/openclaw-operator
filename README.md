@@ -267,9 +267,8 @@ spec:
       limits:
         cpu: "1000m"
         memory: "2Gi"
-    # Pass extra flags to the Chromium process (useful for anti-bot evasion)
+    # Pass extra flags to the Chromium process (appended to built-in anti-bot defaults)
     extraArgs:
-      - "--disable-blink-features=AutomationControlled"
       - "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     # Inject extra environment variables into the sidecar
     extraEnv:
@@ -281,6 +280,7 @@ When enabled, the operator automatically:
 - Injects a `CHROMIUM_URL` environment variable into the main container
 - Configures browser profiles in the OpenClaw config - both `"default"` and `"chrome"` profiles are set to point at the sidecar's CDP endpoint, so browser tool calls work regardless of which profile name the LLM passes
 - Sets up shared memory, security contexts, and health probes for the sidecar
+- Applies anti-bot-detection flags by default (`--disable-blink-features=AutomationControlled`, `--disable-features=AutomationControlled`, `--no-first-run`)
 
 ### Ollama sidecar
 

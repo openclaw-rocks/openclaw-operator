@@ -565,8 +565,8 @@ func TestBuildStatefulSet_ChromiumExtraArgs(t *testing.T) {
 	instance := newTestInstance("chromium-extraargs")
 	instance.Spec.Chromium.Enabled = true
 	instance.Spec.Chromium.ExtraArgs = []string{
-		"--disable-blink-features=AutomationControlled",
 		"--window-size=1920,1080",
+		"--user-agent=CustomAgent/1.0",
 	}
 
 	sts := BuildStatefulSet(instance, "", nil)
@@ -589,6 +589,7 @@ func TestBuildStatefulSet_ChromiumExtraArgs(t *testing.T) {
 	}
 
 	// ExtraArgs must be encoded as DEFAULT_LAUNCH_ARGS JSON env var for browserless v2
+	// Default anti-bot-detection flags are prepended, then user ExtraArgs appended
 	var launchArgs string
 	for _, env := range chromium.Env {
 		if env.Name == "DEFAULT_LAUNCH_ARGS" {
@@ -596,7 +597,7 @@ func TestBuildStatefulSet_ChromiumExtraArgs(t *testing.T) {
 			break
 		}
 	}
-	const wantLaunchArgs = `["--disable-blink-features=AutomationControlled","--window-size=1920,1080"]`
+	const wantLaunchArgs = `["--disable-blink-features=AutomationControlled","--disable-features=AutomationControlled","--no-first-run","--window-size=1920,1080","--user-agent=CustomAgent/1.0"]`
 	if launchArgs != wantLaunchArgs {
 		t.Errorf("DEFAULT_LAUNCH_ARGS = %q, want %q", launchArgs, wantLaunchArgs)
 	}
@@ -657,7 +658,7 @@ func TestBuildStatefulSet_ChromiumExtraEnv(t *testing.T) {
 func TestBuildStatefulSet_ChromiumNoExtraArgs(t *testing.T) {
 	instance := newTestInstance("chromium-no-args")
 	instance.Spec.Chromium.Enabled = true
-	// ExtraArgs not set - DEFAULT_LAUNCH_ARGS should not be injected
+	// ExtraArgs not set - DEFAULT_LAUNCH_ARGS should still contain anti-bot defaults
 
 	sts := BuildStatefulSet(instance, "", nil)
 
@@ -675,10 +676,16 @@ func TestBuildStatefulSet_ChromiumNoExtraArgs(t *testing.T) {
 	if len(chromium.Args) != 0 {
 		t.Errorf("expected no container Args, got %v", chromium.Args)
 	}
+	var launchArgs string
 	for _, env := range chromium.Env {
 		if env.Name == "DEFAULT_LAUNCH_ARGS" {
-			t.Errorf("expected no DEFAULT_LAUNCH_ARGS env when ExtraArgs not set, got %q", env.Value)
+			launchArgs = env.Value
+			break
 		}
+	}
+	const wantDefaults = `["--disable-blink-features=AutomationControlled","--disable-features=AutomationControlled","--no-first-run"]`
+	if launchArgs != wantDefaults {
+		t.Errorf("DEFAULT_LAUNCH_ARGS = %q, want %q", launchArgs, wantDefaults)
 	}
 }
 

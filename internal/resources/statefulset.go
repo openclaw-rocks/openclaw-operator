@@ -1140,18 +1140,21 @@ func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.
 		})
 	}
 
-	// Encode extra Chrome launch args as DEFAULT_LAUNCH_ARGS JSON array.
-	// browserless v2 reads this env var and forwards the flags to the Chrome process.
-	// Using container Args would override the image CMD and cause the first flag
-	// to be executed as a binary (issue #209).
-	if len(instance.Spec.Chromium.ExtraArgs) > 0 {
-		launchArgs, err := json.Marshal(instance.Spec.Chromium.ExtraArgs)
-		if err == nil {
-			chromiumEnv = append(chromiumEnv, corev1.EnvVar{
-				Name:  "DEFAULT_LAUNCH_ARGS",
-				Value: string(launchArgs),
-			})
-		}
+	// Build Chrome launch args with anti-bot-detection defaults + user ExtraArgs.
+	// browserless v2 reads DEFAULT_LAUNCH_ARGS env var and forwards the flags
+	// to the Chrome process. Using container Args would override the image CMD
+	// and cause the first flag to be executed as a binary (issue #209).
+	defaultArgs := []string{
+		"--disable-blink-features=AutomationControlled",
+		"--disable-features=AutomationControlled",
+		"--no-first-run",
+	}
+	allArgs := append(defaultArgs, instance.Spec.Chromium.ExtraArgs...)
+	if launchArgs, err := json.Marshal(allArgs); err == nil {
+		chromiumEnv = append(chromiumEnv, corev1.EnvVar{
+			Name:  "DEFAULT_LAUNCH_ARGS",
+			Value: string(launchArgs),
+		})
 	}
 
 	// Append user-supplied extra env vars

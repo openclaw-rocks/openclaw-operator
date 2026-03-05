@@ -233,7 +233,7 @@ Optional Chromium sidecar for browser automation.
 | `resources.requests.memory`| `string`          | `512Mi`                        | Chromium minimum memory.                                                                                             |
 | `resources.limits.cpu`     | `string`          | `1000m`                        | Chromium maximum CPU.                                                                                                |
 | `resources.limits.memory`  | `string`          | `2Gi`                          | Chromium maximum memory.                                                                                             |
-| `extraArgs`                | `[]string`        | --                             | Additional command-line arguments passed to the Chromium process (appended to defaults). Browserless forwards unrecognised flags to the underlying Chromium binary. |
+| `extraArgs`                | `[]string`        | --                             | Additional command-line arguments passed to the Chromium process, appended to the built-in anti-bot defaults (`--disable-blink-features=AutomationControlled`, `--disable-features=AutomationControlled`, `--no-first-run`). |
 | `extraEnv`                 | `[]EnvVar`        | --                             | Additional environment variables for the Chromium sidecar container, merged with operator-managed variables.         |
 
 When enabled, the sidecar:
