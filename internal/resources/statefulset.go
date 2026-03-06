@@ -338,17 +338,19 @@ func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecre
 	}
 
 	if instance.Spec.Chromium.Enabled {
-		// The Chromium sidecar shares the pod network namespace, so we can
-		// reach it via localhost. Using 127.0.0.1 (explicit IPv4 loopback)
-		// avoids IPv6 URL formatting issues (IPv6 addresses need brackets
-		// in URLs, e.g. http://[::1]:9222, but Kubernetes env var
-		// interpolation cannot add them conditionally).
-		// The config sets attachOnly=true so OpenClaw attaches to the
-		// sidecar regardless of whether the address is loopback or not.
+		// Use the Kubernetes Service DNS name to reach the Chromium sidecar.
+		// A non-loopback address triggers OpenClaw's remote/attach mode so
+		// the browser control service connects to the existing sidecar
+		// instead of trying to launch a local browser process.
+		// Using DNS instead of pod IP avoids IPv6 URL formatting issues
+		// (IPv6 addresses need brackets in URLs but Kubernetes env var
+		// interpolation cannot add them conditionally) and is stable
+		// across pod restarts (unlike status.podIP).
+		svcDNS := fmt.Sprintf("%s.%s.svc", ServiceName(instance), instance.Namespace)
 		env = append(env,
 			corev1.EnvVar{
 				Name:  "OPENCLAW_CHROMIUM_CDP",
-				Value: fmt.Sprintf("http://127.0.0.1:%d", ChromiumPort),
+				Value: fmt.Sprintf("http://%s:%d", svcDNS, ChromiumPort),
 			},
 		)
 	}

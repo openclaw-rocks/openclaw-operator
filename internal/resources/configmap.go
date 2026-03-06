@@ -297,17 +297,15 @@ func enrichConfigWithBrowser(configJSON []byte) ([]byte, error) {
 		browser["defaultProfile"] = "default"
 	}
 
-	if _, hasAttachOnly := browser["attachOnly"]; !hasAttachOnly {
-		browser["attachOnly"] = true
-	}
-
 	profiles, _ := browser["profiles"].(map[string]interface{})
 	if profiles == nil {
 		profiles = make(map[string]interface{})
 	}
 
 	// Use ${OPENCLAW_CHROMIUM_CDP} env var (resolved at runtime by OpenClaw)
-	// which points to the Chromium sidecar via localhost (127.0.0.1).
+	// which points to the Chromium sidecar via the Kubernetes Service DNS name.
+	// The non-loopback address triggers OpenClaw's remote/attach mode
+	// automatically, so no explicit attachOnly flag is needed.
 	cdpURL := "${OPENCLAW_CHROMIUM_CDP}"
 
 	// Configure both "default" and "chrome" profiles to point at the sidecar.

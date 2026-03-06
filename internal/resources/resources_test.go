@@ -447,16 +447,13 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 		t.Fatal("chromium container not found")
 	}
 
-	// Main container should have OPENCLAW_CHROMIUM_CDP using localhost (IPv6-safe)
+	// Main container should have OPENCLAW_CHROMIUM_CDP using service DNS name
 	mainContainer := containers[0]
 	foundChromiumCDP := false
 	for _, env := range mainContainer.Env {
-		if env.Name == "POD_IP" {
-			t.Error("POD_IP env var should no longer be set (replaced by localhost)")
-		}
 		if env.Name == "OPENCLAW_CHROMIUM_CDP" {
 			foundChromiumCDP = true
-			expected := fmt.Sprintf("http://127.0.0.1:%d", ChromiumPort)
+			expected := fmt.Sprintf("http://%s.%s.svc:%d", instance.Name, instance.Namespace, ChromiumPort)
 			if env.Value != expected {
 				t.Errorf("OPENCLAW_CHROMIUM_CDP = %q, want %q", env.Value, expected)
 			}
@@ -6700,8 +6697,10 @@ func TestBuildConfigMap_ChromiumBrowserConfig(t *testing.T) {
 		t.Errorf("browser.defaultProfile = %v, want %q", browser["defaultProfile"], "default")
 	}
 
-	if browser["attachOnly"] != true {
-		t.Errorf("browser.attachOnly = %v, want true", browser["attachOnly"])
+	// attachOnly should NOT be injected — remote mode is triggered automatically
+	// by the non-loopback service DNS address in OPENCLAW_CHROMIUM_CDP.
+	if _, hasAttachOnly := browser["attachOnly"]; hasAttachOnly {
+		t.Errorf("browser.attachOnly should not be injected by operator, got %v", browser["attachOnly"])
 	}
 
 	profiles, ok := browser["profiles"].(map[string]interface{})
@@ -6710,7 +6709,7 @@ func TestBuildConfigMap_ChromiumBrowserConfig(t *testing.T) {
 	}
 
 	// Both "default" and "chrome" profiles must use the env var reference.
-	// ${OPENCLAW_CHROMIUM_CDP} resolves at runtime to the localhost CDP URL.
+	// ${OPENCLAW_CHROMIUM_CDP} resolves at runtime to the service DNS CDP URL.
 	for _, name := range []string{"default", "chrome"} {
 		p, ok := profiles[name].(map[string]interface{})
 		if !ok {
@@ -6731,7 +6730,7 @@ func TestBuildConfigMap_ChromiumUserOverrideAttachOnly(t *testing.T) {
 	instance.Spec.Chromium.Enabled = true
 	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
 		RawExtension: runtime.RawExtension{
-			Raw: []byte(`{"browser":{"attachOnly":false}}`),
+			Raw: []byte(`{"browser":{"attachOnly":true}}`),
 		},
 	}
 
@@ -6745,7 +6744,7 @@ func TestBuildConfigMap_ChromiumUserOverrideAttachOnly(t *testing.T) {
 
 	browser := parsed["browser"].(map[string]interface{})
 	attachOnly := browser["attachOnly"].(bool)
-	if attachOnly != false {
+	if attachOnly != true {
 		t.Errorf("user-set attachOnly should be preserved, got %v", attachOnly)
 	}
 }
