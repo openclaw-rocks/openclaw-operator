@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.23](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.22...v0.10.23) (2026-03-06)
+
+
+### Bug Fixes
+
+* correct attachOnly field placement in browser configuration ([#250](https://github.com/openclaw-rocks/k8s-operator/issues/250)) ([04d44af](https://github.com/openclaw-rocks/k8s-operator/commit/04d44af9ff6a0ac9792e9746e23ed2b6d028aa4d))
+
 ## [0.10.22](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.21...v0.10.22) (2026-03-05)
 
 
