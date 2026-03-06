@@ -1318,16 +1318,16 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			}
 			Expect(foundPortEnv).To(BeTrue(), "chromium container should have PORT env var")
 
-			// Verify main container has OPENCLAW_CHROMIUM_CDP using localhost (IPv6-safe)
+			// Verify main container has OPENCLAW_CHROMIUM_CDP using service DNS name
 			mainContainer := statefulSet.Spec.Template.Spec.Containers[0]
 			var foundChromiumCDP bool
+			expectedCDP := fmt.Sprintf("http://%s.%s.svc:%d",
+				resources.ServiceName(instance), instance.Namespace, resources.ChromiumPort)
 			for _, env := range mainContainer.Env {
-				Expect(env.Name).NotTo(Equal("POD_IP"),
-					"POD_IP env var should no longer be set (replaced by localhost)")
 				if env.Name == "OPENCLAW_CHROMIUM_CDP" {
 					foundChromiumCDP = true
-					Expect(env.Value).To(Equal(fmt.Sprintf("http://127.0.0.1:%d", resources.ChromiumPort)),
-						"OPENCLAW_CHROMIUM_CDP should use IPv4 loopback (IPv6-safe)")
+					Expect(env.Value).To(Equal(expectedCDP),
+						"OPENCLAW_CHROMIUM_CDP should use service DNS name")
 				}
 			}
 			Expect(foundChromiumCDP).To(BeTrue(), "OPENCLAW_CHROMIUM_CDP env var should be set")
@@ -1347,20 +1347,19 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			browser, ok := parsed["browser"].(map[string]interface{})
 			Expect(ok).To(BeTrue(), "config should have browser key")
 
-			attachOnly, ok := browser["attachOnly"].(bool)
-			Expect(ok).To(BeTrue(), "browser should have attachOnly key")
-			Expect(attachOnly).To(BeTrue(), "browser.attachOnly should be true for sidecar mode")
+			// attachOnly should NOT be injected by the operator
+			_, hasAttachOnly := browser["attachOnly"]
+			Expect(hasAttachOnly).To(BeFalse(), "browser.attachOnly should not be injected by operator")
 
 			profiles, ok := browser["profiles"].(map[string]interface{})
 			Expect(ok).To(BeTrue(), "browser should have profiles key")
 
-			// cdpUrl uses env var reference resolved at runtime to pod IP
-			expectedCDP := "${OPENCLAW_CHROMIUM_CDP}"
+			// cdpUrl uses env var reference resolved at runtime to service DNS
 			for _, profileName := range []string{"default", "chrome"} {
 				profile, ok := profiles[profileName].(map[string]interface{})
 				Expect(ok).To(BeTrue(), "profiles should have %s key", profileName)
-				Expect(profile["cdpUrl"]).To(Equal(expectedCDP),
-					"browser.profiles.%s.cdpUrl should use env var reference for pod IP", profileName)
+				Expect(profile["cdpUrl"]).To(Equal("${OPENCLAW_CHROMIUM_CDP}"),
+					"browser.profiles.%s.cdpUrl should use env var reference", profileName)
 			}
 
 			// Verify Service has chromium port
