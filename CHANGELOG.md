@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.24](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.23...v0.10.24) (2026-03-06)
+
+
+### Bug Fixes
+
+* use service DNS for Chromium CDP URL instead of localhost ([#252](https://github.com/openclaw-rocks/k8s-operator/issues/252)) ([70b9ec4](https://github.com/openclaw-rocks/k8s-operator/commit/70b9ec48c156cc20d9c9eaf6837e39350f232a40))
+
 ## [0.10.23](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.22...v0.10.23) (2026-03-06)
 
 
