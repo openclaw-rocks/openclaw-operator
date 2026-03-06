@@ -1353,7 +1353,6 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			profiles, ok := browser["profiles"].(map[string]interface{})
 			Expect(ok).To(BeTrue(), "browser should have profiles key")
 
-		
 			// cdpUrl uses env var reference resolved at runtime to pod IP
 			expectedCDP := "${OPENCLAW_CHROMIUM_CDP}"
 			for _, profileName := range []string{"default", "chrome"} {
