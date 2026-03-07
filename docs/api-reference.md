@@ -155,7 +155,7 @@ Security-related configuration for the instance.
 | Field                      | Type              | Default | Description                                                    |
 |----------------------------|-------------------|---------|----------------------------------------------------------------|
 | `allowPrivilegeEscalation` | `*bool`           | `false` | Allow privilege escalation. Warns if set to `true`.            |
-| `readOnlyRootFilesystem`   | `*bool`           | `true`  | Mount root filesystem as read-only. The PVC at `~/.openclaw/` and `/tmp` emptyDir provide writable paths. |
+| `readOnlyRootFilesystem`   | `*bool`           | `true`  | Mount root filesystem as read-only. Writable paths: PVC at `~/.openclaw/`, `~/.local/` (pip user installs), `~/.cache/` (package caches), and `/tmp` emptyDir. |
 | `capabilities`             | `*Capabilities`   | Drop ALL | Linux capabilities to add or drop.                            |
 
 #### spec.security.networkPolicy

@@ -149,7 +149,7 @@ func buildPodSecurityContext(instance *openclawv1alpha1.OpenClawInstance) *corev
 func buildContainerSecurityContext(instance *openclawv1alpha1.OpenClawInstance) *corev1.SecurityContext {
 	sc := &corev1.SecurityContext{
 		AllowPrivilegeEscalation: Ptr(false),
-		ReadOnlyRootFilesystem:   Ptr(true), // PVC at ~/.openclaw/ + /tmp emptyDir provide writable paths
+		ReadOnlyRootFilesystem:   Ptr(true), // PVC subpaths at ~/.openclaw/, ~/.local/, ~/.cache/ + /tmp emptyDir provide writable paths
 		RunAsNonRoot:             Ptr(true),
 		Capabilities: &corev1.Capabilities{
 			Drop: []corev1.Capability{"ALL"},
@@ -255,6 +255,16 @@ func buildMainContainer(instance *openclawv1alpha1.OpenClawInstance, gatewayToke
 				MountPath: "/home/openclaw/.openclaw",
 			},
 			{
+				Name:      "data",
+				MountPath: "/home/openclaw/.local",
+				SubPath:   ".local",
+			},
+			{
+				Name:      "data",
+				MountPath: "/home/openclaw/.cache",
+				SubPath:   ".cache",
+			},
+			{
 				Name:      "tmp",
 				MountPath: "/tmp",
 			},
@@ -335,6 +345,13 @@ func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecre
 		{Name: "HOME", Value: "/home/openclaw"},
 		// mDNS/Bonjour pairing is unusable in Kubernetes — always disable it
 		{Name: "OPENCLAW_DISABLE_BONJOUR", Value: "1"},
+		// npm: redirect global installs to the writable PVC subpath at ~/.local
+		{Name: "NPM_CONFIG_PREFIX", Value: "/home/openclaw/.local"},
+		// npm/npx: redirect cache to the writable PVC subpath at ~/.cache
+		{Name: "NPM_CONFIG_CACHE", Value: "/home/openclaw/.cache/npm"},
+		// pip: default to user-level installs so "pip install <pkg>" writes to
+		// the writable ~/.local/ PVC subpath instead of read-only system site-packages
+		{Name: "PIP_USER", Value: "1"},
 	}
 
 	if instance.Spec.Chromium.Enabled {
@@ -501,6 +518,15 @@ func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance, skillPacks
 		initContainers = append(initContainers, buildTailscaleBinInitContainer(instance))
 	}
 
+	// uv init container - always install uv into ~/.local/bin/ so agents can
+	// install Python CLI tools via "uv tool install" without manual bootstrapping
+	initContainers = append(initContainers, buildUvInitContainer())
+
+	// pip init container - bootstrap pip via ensurepip so agents can install
+	// Python packages with "pip install <pkg>" (PIP_USER=1 makes it write to
+	// the writable ~/.local/ PVC subpath instead of read-only system site-packages)
+	initContainers = append(initContainers, buildPipInitContainer(instance))
+
 	// Runtime dependency init containers (run before skills so skills can use pnpm/python)
 	if instance.Spec.RuntimeDeps.Pnpm {
 		initContainers = append(initContainers, buildPnpmInitContainer(instance))
@@ -598,6 +624,8 @@ func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance, skillPacks *Re
 				allFiles[name] = true
 			}
 		}
+		// Always inject environment documentation
+		allFiles["ENVIRONMENT.md"] = true
 		if instance.Spec.SelfConfigure.Enabled {
 			allFiles["SELFCONFIG.md"] = true
 			allFiles["selfconfig.sh"] = true
@@ -792,6 +820,79 @@ pnpm --version`
 	}
 }
 
+// buildUvInitContainer creates an init container that copies the uv binary from
+// the uv image into the PVC-backed ~/.local/bin/. This gives agents immediate
+// access to "uv pip install" for Python packages and "uv tool install" for CLI
+// tools without any manual bootstrapping. The check is idempotent - subsequent
+// pod starts skip the copy if uv is already present.
+func buildUvInitContainer() corev1.Container {
+	script := `set -e
+if [ -x /home/openclaw/.local/bin/uv ]; then echo "uv already installed"; exit 0; fi
+mkdir -p /home/openclaw/.local/bin
+cp /usr/local/bin/uv /home/openclaw/.local/bin/uv
+echo "uv $(/home/openclaw/.local/bin/uv --version) installed"`
+
+	return corev1.Container{
+		Name:                     "init-uv",
+		Image:                    UvImage,
+		Command:                  []string{"sh", "-c", script},
+		ImagePullPolicy:          corev1.PullIfNotPresent,
+		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
+		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+		Resources:                corev1.ResourceRequirements{},
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: Ptr(false),
+			ReadOnlyRootFilesystem:   Ptr(true),
+			RunAsNonRoot:             Ptr(true),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+			SeccompProfile: &corev1.SeccompProfile{
+				Type: corev1.SeccompProfileTypeRuntimeDefault,
+			},
+		},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: "data", MountPath: "/home/openclaw/.local", SubPath: ".local"},
+		},
+	}
+}
+
+// buildPipInitContainer creates an init container that bootstraps pip via ensurepip.
+// Uses the same image as the main container so pip targets the correct Python version.
+// Combined with PIP_USER=1 env var, "pip install <pkg>" writes to the writable
+// ~/.local/ PVC subpath. Runs on every pod start (fast, no network needed).
+func buildPipInitContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
+	script := `python3 -m ensurepip --upgrade --user 2>/dev/null || echo "ensurepip unavailable, skipping"`
+
+	return corev1.Container{
+		Name:                     "init-pip",
+		Image:                    GetImage(instance),
+		Command:                  []string{"sh", "-c", script},
+		ImagePullPolicy:          getPullPolicy(instance),
+		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
+		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+		Resources:                corev1.ResourceRequirements{},
+		Env: []corev1.EnvVar{
+			{Name: "HOME", Value: "/home/openclaw"},
+		},
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: Ptr(false),
+			ReadOnlyRootFilesystem:   Ptr(true),
+			RunAsNonRoot:             Ptr(true),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+			SeccompProfile: &corev1.SeccompProfile{
+				Type: corev1.SeccompProfileTypeRuntimeDefault,
+			},
+		},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: "data", MountPath: "/home/openclaw/.local", SubPath: ".local"},
+			{Name: "tmp", MountPath: "/tmp"},
+		},
+	}
+}
+
 // buildPythonInitContainer creates the init container that installs Python 3.12 and uv.
 func buildPythonInitContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
 	script := `set -e
@@ -857,16 +958,10 @@ uv --version`
 	}
 }
 
-// hasWorkspaceFiles returns true if the instance has workspace files to seed,
-// either from user-defined workspace files or operator-injected self-configure files.
-func hasWorkspaceFiles(instance *openclawv1alpha1.OpenClawInstance, skillPacks *ResolvedSkillPacks) bool {
-	if instance.Spec.SelfConfigure.Enabled {
-		return true
-	}
-	if HasSkillPackFiles(skillPacks) {
-		return true
-	}
-	return instance.Spec.Workspace != nil && len(instance.Spec.Workspace.InitialFiles) > 0
+// hasWorkspaceFiles returns true if the instance has workspace files to seed.
+// Always returns true because the operator always injects ENVIRONMENT.md.
+func hasWorkspaceFiles(_ *openclawv1alpha1.OpenClawInstance, _ *ResolvedSkillPacks) bool {
+	return true
 }
 
 // configMapKey returns the ConfigMap key for the config file.
