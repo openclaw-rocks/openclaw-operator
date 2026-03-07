@@ -518,14 +518,11 @@ func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance, skillPacks
 		initContainers = append(initContainers, buildTailscaleBinInitContainer(instance))
 	}
 
-	// uv init container - always install uv into ~/.local/bin/ so agents can
-	// install Python CLI tools via "uv tool install" without manual bootstrapping
-	initContainers = append(initContainers, buildUvInitContainer())
-
-	// pip init container - bootstrap pip via ensurepip so agents can install
-	// Python packages with "pip install <pkg>" (PIP_USER=1 makes it write to
-	// the writable ~/.local/ PVC subpath instead of read-only system site-packages)
-	initContainers = append(initContainers, buildPipInitContainer(instance))
+	// uv + pip init containers:
+	// - init-uv: copies uv binary so agents can "uv tool install" CLI tools
+	// - init-pip: bootstraps pip via ensurepip so agents can "pip install <pkg>"
+	//   (PIP_USER=1 makes pip write to the writable ~/.local/ PVC subpath)
+	initContainers = append(initContainers, buildUvInitContainer(), buildPipInitContainer(instance))
 
 	// Runtime dependency init containers (run before skills so skills can use pnpm/python)
 	if instance.Spec.RuntimeDeps.Pnpm {
