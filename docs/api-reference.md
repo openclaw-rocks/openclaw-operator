@@ -1018,7 +1018,7 @@ The operator creates a Kubernetes CronJob (`<instance>-backup-periodic`) that:
 
 ## Related Guides
 
-- [Model Fallback Chains](model-fallback.md) - configure multi-provider fallback with `llmConfig`
+- [Model Fallback Chains](model-fallback.md) - configure multi-provider fallback via environment variables
 - [Custom AI Providers](custom-providers.md) - Ollama sidecar, vLLM, and other self-hosted models
 - [External Secrets Operator Integration](external-secrets.md) - sync API keys from AWS, Vault, GCP, etc.
 

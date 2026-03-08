@@ -11,19 +11,14 @@ This guide covers common patterns for connecting OpenClaw to self-hosted or alte
 
 Run Ollama alongside OpenClaw in the same pod. This is the simplest option when you want local model inference without network hops.
 
+Provider configuration is done entirely through environment variables. Set `OPENAI_BASE_URL` to point OpenClaw at your custom provider endpoint:
+
 ```yaml
 apiVersion: openclaw.rocks/v1alpha1
 kind: OpenClawInstance
 metadata:
   name: local-llm
 spec:
-  config:
-    raw:
-      llmConfig:
-        - provider: openai
-          model: llama3.2
-          baseURL: http://localhost:11434/v1
-
   sidecars:
     - name: ollama
       image: ollama/ollama:latest
@@ -39,10 +34,11 @@ spec:
       emptyDir:
         sizeLimit: 20Gi
 
-  # No external API keys needed for local inference
   env:
     - name: OPENAI_API_KEY
       value: "not-needed"
+    - name: OPENAI_BASE_URL
+      value: "http://localhost:11434/v1"
 
   resources:
     requests:
@@ -85,7 +81,7 @@ spec:
 
 ## Ollama as an External Service
 
-When Ollama runs as a separate Deployment or on bare metal, point OpenClaw to it via config and allow egress to the service.
+When Ollama runs as a separate Deployment or on bare metal, point OpenClaw to it via environment variables and allow egress to the service.
 
 ```yaml
 apiVersion: openclaw.rocks/v1alpha1
@@ -93,16 +89,11 @@ kind: OpenClawInstance
 metadata:
   name: external-ollama
 spec:
-  config:
-    raw:
-      llmConfig:
-        - provider: openai
-          model: llama3.2
-          baseURL: http://ollama.inference.svc:11434/v1
-
   env:
     - name: OPENAI_API_KEY
       value: "not-needed"
+    - name: OPENAI_BASE_URL
+      value: "http://ollama.inference.svc:11434/v1"
 
   security:
     networkPolicy:
@@ -130,16 +121,11 @@ kind: OpenClawInstance
 metadata:
   name: vllm-instance
 spec:
-  config:
-    raw:
-      llmConfig:
-        - provider: openai
-          model: meta-llama/Llama-3.2-8B-Instruct
-          baseURL: http://vllm.inference.svc:8000/v1
-
   env:
     - name: OPENAI_API_KEY
       value: "not-needed"
+    - name: OPENAI_BASE_URL
+      value: "http://vllm.inference.svc:8000/v1"
 
   security:
     networkPolicy:
@@ -168,29 +154,3 @@ The default NetworkPolicy allows egress only on port 443 (HTTPS) and port 53 (DN
 | vLLM external         | 8000  | `additionalEgress` with pod selector  |
 | Custom HTTPS endpoint | 443   | Already allowed by default            |
 | Custom non-443 HTTPS  | 8443  | `additionalEgress` with CIDR or selector |
-
-## Hybrid Fallback (Local + Cloud)
-
-Combine a local provider with cloud fallbacks for resilience:
-
-```yaml
-spec:
-  config:
-    raw:
-      llmConfig:
-        - provider: openai
-          model: llama3.2
-          baseURL: http://localhost:11434/v1
-        - provider: anthropic
-          model: claude-sonnet-4-5-20250929
-
-  envFrom:
-    - secretRef:
-        name: cloud-api-keys
-
-  env:
-    - name: OPENAI_API_KEY
-      value: "not-needed"
-```
-
-This tries local Ollama first and falls back to Anthropic Claude if the local model is unavailable or errors. See [Model Fallback Chains](model-fallback.md) for details on fallback behavior.

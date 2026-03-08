@@ -311,7 +311,7 @@ When enabled, the operator:
 - Configures GPU resource limits when `gpu` is set (`nvidia.com/gpu`)
 - Mounts a model cache volume (emptyDir by default, or an existing PVC via `storage.existingClaim`)
 
-See [Custom AI Providers](docs/custom-providers.md) for configuring OpenClaw to use Ollama models via `llmConfig`.
+See [Custom AI Providers](docs/custom-providers.md) for configuring OpenClaw to use Ollama models via environment variables.
 
 ### Web terminal sidecar
 
