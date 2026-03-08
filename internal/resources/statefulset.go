@@ -598,6 +598,9 @@ func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance, skillPacks *Re
 				allFiles[name] = true
 			}
 		}
+		// Bootstrap file (first-run onboarding, always injected)
+		allFiles["BOOTSTRAP.md"] = true
+
 		if instance.Spec.SelfConfigure.Enabled {
 			allFiles["SELFCONFIG.md"] = true
 			allFiles["selfconfig.sh"] = true
@@ -860,13 +863,8 @@ uv --version`
 // hasWorkspaceFiles returns true if the instance has workspace files to seed,
 // either from user-defined workspace files or operator-injected self-configure files.
 func hasWorkspaceFiles(instance *openclawv1alpha1.OpenClawInstance, skillPacks *ResolvedSkillPacks) bool {
-	if instance.Spec.SelfConfigure.Enabled {
-		return true
-	}
-	if HasSkillPackFiles(skillPacks) {
-		return true
-	}
-	return instance.Spec.Workspace != nil && len(instance.Spec.Workspace.InitialFiles) > 0
+	// Always true: BOOTSTRAP.md is unconditionally injected for all instances
+	return true
 }
 
 // configMapKey returns the ConfigMap key for the config file.

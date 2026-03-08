@@ -908,10 +908,13 @@ func TestBuildStatefulSet_ConfigVolume_ConfigMapRef(t *testing.T) {
 	assertVolumeMount(t, initC.VolumeMounts, "data", "/data")
 	assertVolumeMount(t, initC.VolumeMounts, "config", "/config")
 
-	// Verify the command copies openclaw.json (not the custom key)
-	expectedCmd := "cp /config/'openclaw.json' /data/openclaw.json"
-	if len(initC.Command) != 3 || initC.Command[2] != expectedCmd {
-		t.Errorf("init container command = %v, want sh -c %q", initC.Command, expectedCmd)
+	// Verify the command starts with config copy (not the custom key) and includes BOOTSTRAP.md
+	cmd := initC.Command[2]
+	if !strings.HasPrefix(cmd, "cp /config/'openclaw.json' /data/openclaw.json") {
+		t.Errorf("init container command should start with config copy, got %q", cmd)
+	}
+	if !strings.Contains(cmd, "BOOTSTRAP.md") {
+		t.Errorf("init container command should include BOOTSTRAP.md, got %q", cmd)
 	}
 
 	// Volume should reference the operator-managed ConfigMap (not the external one)
@@ -934,14 +937,17 @@ func TestBuildStatefulSet_ConfigMapRef_DefaultKey(t *testing.T) {
 
 	sts := BuildStatefulSet(instance, "", nil)
 
-	// Init container should use "openclaw.json" (operator-managed key)
+	// Init container should use "openclaw.json" (operator-managed key) + BOOTSTRAP.md
 	initContainers := sts.Spec.Template.Spec.InitContainers
 	if len(initContainers) != 1 {
 		t.Fatalf("expected 1 init container, got %d", len(initContainers))
 	}
-	expectedCmd := "cp /config/'openclaw.json' /data/openclaw.json"
-	if initContainers[0].Command[2] != expectedCmd {
-		t.Errorf("init container command = %q, want %q", initContainers[0].Command[2], expectedCmd)
+	cmd := initContainers[0].Command[2]
+	if !strings.HasPrefix(cmd, "cp /config/'openclaw.json' /data/openclaw.json") {
+		t.Errorf("init container command should start with config copy, got %q", cmd)
+	}
+	if !strings.Contains(cmd, "BOOTSTRAP.md") {
+		t.Errorf("init container command should include BOOTSTRAP.md, got %q", cmd)
 	}
 
 	// Volume should reference the operator-managed ConfigMap
@@ -3843,8 +3849,11 @@ func TestBuildWorkspaceConfigMap_Nil(t *testing.T) {
 	instance.Spec.Workspace = nil
 
 	cm := BuildWorkspaceConfigMap(instance, nil)
-	if cm != nil {
-		t.Fatal("expected nil ConfigMap when workspace is nil")
+	if cm == nil {
+		t.Fatal("expected non-nil ConfigMap (BOOTSTRAP.md always injected)")
+	}
+	if _, ok := cm.Data["BOOTSTRAP.md"]; !ok {
+		t.Error("expected BOOTSTRAP.md in ConfigMap data")
 	}
 }
 
@@ -3855,8 +3864,11 @@ func TestBuildWorkspaceConfigMap_EmptyFiles(t *testing.T) {
 	}
 
 	cm := BuildWorkspaceConfigMap(instance, nil)
-	if cm != nil {
-		t.Fatal("expected nil ConfigMap when initialFiles is empty")
+	if cm == nil {
+		t.Fatal("expected non-nil ConfigMap (BOOTSTRAP.md always injected)")
+	}
+	if len(cm.Data) != 1 {
+		t.Fatalf("expected 1 data entry (BOOTSTRAP.md), got %d", len(cm.Data))
 	}
 }
 
@@ -3879,14 +3891,17 @@ func TestBuildWorkspaceConfigMap_WithFiles(t *testing.T) {
 	if cm.Namespace != "test-ns" {
 		t.Errorf("ConfigMap namespace = %q, want %q", cm.Namespace, "test-ns")
 	}
-	if len(cm.Data) != 2 {
-		t.Fatalf("expected 2 data entries, got %d", len(cm.Data))
+	if len(cm.Data) != 3 {
+		t.Fatalf("expected 3 data entries (2 user + BOOTSTRAP.md), got %d", len(cm.Data))
 	}
 	if cm.Data["SOUL.md"] != "# Personality\nBe helpful." {
 		t.Errorf("SOUL.md content mismatch")
 	}
 	if cm.Data["AGENTS.md"] != "# Agents config" {
 		t.Errorf("AGENTS.md content mismatch")
+	}
+	if _, ok := cm.Data["BOOTSTRAP.md"]; !ok {
+		t.Error("expected BOOTSTRAP.md in ConfigMap data")
 	}
 }
 
@@ -3926,8 +3941,9 @@ func TestBuildInitScript_ConfigOnly(t *testing.T) {
 	}
 
 	script := BuildInitScript(instance, nil)
-	if script != "cp /config/'openclaw.json' /data/openclaw.json" {
-		t.Errorf("unexpected script:\n%s", script)
+	expected := "cp /config/'openclaw.json' /data/openclaw.json\nmkdir -p /data/workspace\n[ -f /data/workspace/'BOOTSTRAP.md' ] || cp /workspace-init/'BOOTSTRAP.md' /data/workspace/'BOOTSTRAP.md'"
+	if script != expected {
+		t.Errorf("unexpected script:\ngot:  %q\nwant: %q", script, expected)
 	}
 }
 
@@ -3941,7 +3957,7 @@ func TestBuildInitScript_WorkspaceOnly(t *testing.T) {
 	}
 
 	script := BuildInitScript(instance, nil)
-	expected := "cp /config/'openclaw.json' /data/openclaw.json\nmkdir -p /data/workspace/'memory'\nmkdir -p /data/workspace\n[ -f /data/workspace/'SOUL.md' ] || cp /workspace-init/'SOUL.md' /data/workspace/'SOUL.md'"
+	expected := "cp /config/'openclaw.json' /data/openclaw.json\nmkdir -p /data/workspace/'memory'\nmkdir -p /data/workspace\n[ -f /data/workspace/'BOOTSTRAP.md' ] || cp /workspace-init/'BOOTSTRAP.md' /data/workspace/'BOOTSTRAP.md'\n[ -f /data/workspace/'SOUL.md' ] || cp /workspace-init/'SOUL.md' /data/workspace/'SOUL.md'"
 	if script != expected {
 		t.Errorf("unexpected script:\ngot:  %q\nwant: %q", script, expected)
 	}
@@ -3962,10 +3978,10 @@ func TestBuildInitScript_Both(t *testing.T) {
 
 	script := BuildInitScript(instance, nil)
 
-	// Verify all expected lines are present (sorted order)
+	// Verify all expected lines are present (sorted order, BOOTSTRAP.md always included)
 	lines := strings.Split(script, "\n")
-	if len(lines) != 6 {
-		t.Fatalf("expected 6 lines, got %d:\n%s", len(lines), script)
+	if len(lines) != 7 {
+		t.Fatalf("expected 7 lines, got %d:\n%s", len(lines), script)
 	}
 	if lines[0] != "cp /config/'openclaw.json' /data/openclaw.json" {
 		t.Errorf("line 0: %q", lines[0])
@@ -3982,8 +3998,11 @@ func TestBuildInitScript_Both(t *testing.T) {
 	if lines[4] != "[ -f /data/workspace/'AGENTS.md' ] || cp /workspace-init/'AGENTS.md' /data/workspace/'AGENTS.md'" {
 		t.Errorf("line 4: %q", lines[4])
 	}
-	if lines[5] != "[ -f /data/workspace/'SOUL.md' ] || cp /workspace-init/'SOUL.md' /data/workspace/'SOUL.md'" {
+	if lines[5] != "[ -f /data/workspace/'BOOTSTRAP.md' ] || cp /workspace-init/'BOOTSTRAP.md' /data/workspace/'BOOTSTRAP.md'" {
 		t.Errorf("line 5: %q", lines[5])
+	}
+	if lines[6] != "[ -f /data/workspace/'SOUL.md' ] || cp /workspace-init/'SOUL.md' /data/workspace/'SOUL.md'" {
+		t.Errorf("line 6: %q", lines[6])
 	}
 }
 
@@ -3994,7 +4013,7 @@ func TestBuildInitScript_DirsOnly(t *testing.T) {
 	}
 
 	script := BuildInitScript(instance, nil)
-	expected := "cp /config/'openclaw.json' /data/openclaw.json\nmkdir -p /data/workspace/'memory'\nmkdir -p /data/workspace/'tools/scripts'"
+	expected := "cp /config/'openclaw.json' /data/openclaw.json\nmkdir -p /data/workspace/'memory'\nmkdir -p /data/workspace/'tools/scripts'\nmkdir -p /data/workspace\n[ -f /data/workspace/'BOOTSTRAP.md' ] || cp /workspace-init/'BOOTSTRAP.md' /data/workspace/'BOOTSTRAP.md'"
 	if script != expected {
 		t.Errorf("unexpected script:\ngot:  %q\nwant: %q", script, expected)
 	}
@@ -4009,7 +4028,7 @@ func TestBuildInitScript_ShellQuotesSpecialChars(t *testing.T) {
 	}
 
 	script := BuildInitScript(instance, nil)
-	expected := "cp /config/'openclaw.json' /data/openclaw.json\nmkdir -p /data/workspace\n[ -f /data/workspace/'it'\\''s a file.md' ] || cp /workspace-init/'it'\\''s a file.md' /data/workspace/'it'\\''s a file.md'"
+	expected := "cp /config/'openclaw.json' /data/openclaw.json\nmkdir -p /data/workspace\n[ -f /data/workspace/'BOOTSTRAP.md' ] || cp /workspace-init/'BOOTSTRAP.md' /data/workspace/'BOOTSTRAP.md'\n[ -f /data/workspace/'it'\\''s a file.md' ] || cp /workspace-init/'it'\\''s a file.md' /data/workspace/'it'\\''s a file.md'"
 	if script != expected {
 		t.Errorf("unexpected script:\ngot:  %q\nwant: %q", script, expected)
 	}
@@ -4034,8 +4053,8 @@ func TestBuildInitScript_FilesOnly_MkdirWorkspace(t *testing.T) {
 func TestBuildInitScript_VanillaDeployment(t *testing.T) {
 	instance := newTestInstance("init-empty")
 	script := BuildInitScript(instance, nil)
-	// Vanilla deployments now get a config copy (gateway.bind=lan)
-	expected := "cp /config/'openclaw.json' /data/openclaw.json"
+	// Vanilla deployments get config copy + BOOTSTRAP.md (always injected)
+	expected := "cp /config/'openclaw.json' /data/openclaw.json\nmkdir -p /data/workspace\n[ -f /data/workspace/'BOOTSTRAP.md' ] || cp /workspace-init/'BOOTSTRAP.md' /data/workspace/'BOOTSTRAP.md'"
 	if script != expected {
 		t.Errorf("unexpected script:\ngot:  %q\nwant: %q", script, expected)
 	}
@@ -4117,23 +4136,23 @@ func TestBuildStatefulSet_WorkspaceVolume(t *testing.T) {
 	assertVolumeMount(t, init.VolumeMounts, "workspace-init", "/workspace-init")
 }
 
-func TestBuildStatefulSet_NoWorkspaceVolume(t *testing.T) {
-	instance := newTestInstance("no-ws-vol")
+func TestBuildStatefulSet_AlwaysHasWorkspaceVolume(t *testing.T) {
+	instance := newTestInstance("always-ws-vol")
 	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
 	}
 
 	sts := BuildStatefulSet(instance, "", nil)
 
-	// No workspace-init volume
+	// BOOTSTRAP.md is always injected, so workspace-init volume always exists
 	wsVol := findVolume(sts.Spec.Template.Spec.Volumes, "workspace-init")
-	if wsVol != nil {
-		t.Error("workspace-init volume should not exist without workspace files")
+	if wsVol == nil {
+		t.Error("workspace-init volume should always exist (BOOTSTRAP.md always injected)")
 	}
 }
 
-func TestBuildStatefulSet_WorkspaceDirsOnly_NoVolume(t *testing.T) {
-	instance := newTestInstance("ws-dirs-no-vol")
+func TestBuildStatefulSet_WorkspaceDirsOnly_HasVolume(t *testing.T) {
+	instance := newTestInstance("ws-dirs-has-vol")
 	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
 	}
@@ -4143,15 +4162,14 @@ func TestBuildStatefulSet_WorkspaceDirsOnly_NoVolume(t *testing.T) {
 
 	sts := BuildStatefulSet(instance, "", nil)
 
-	// Dirs only — no workspace-init volume needed (no files to mount)
+	// BOOTSTRAP.md is always injected, so workspace-init volume always exists
 	wsVol := findVolume(sts.Spec.Template.Spec.Volumes, "workspace-init")
-	if wsVol != nil {
-		t.Error("workspace-init volume should not exist with only directories")
+	if wsVol == nil {
+		t.Error("workspace-init volume should exist (BOOTSTRAP.md always injected)")
 	}
 
-	// But init container should still exist (for mkdir commands)
 	if len(sts.Spec.Template.Spec.InitContainers) == 0 {
-		t.Fatal("expected init container for workspace directories")
+		t.Fatal("expected init container for workspace setup")
 	}
 }
 
@@ -7773,8 +7791,14 @@ func TestBuildWorkspaceConfigMap_SelfConfigureDisabledNoFiles(t *testing.T) {
 
 	cm := BuildWorkspaceConfigMap(instance, nil)
 
-	if cm != nil {
-		t.Error("BuildWorkspaceConfigMap should return nil when no workspace files and self-configure disabled")
+	if cm == nil {
+		t.Fatal("expected non-nil ConfigMap (BOOTSTRAP.md always injected)")
+	}
+	if _, ok := cm.Data["BOOTSTRAP.md"]; !ok {
+		t.Error("expected BOOTSTRAP.md in ConfigMap data")
+	}
+	if len(cm.Data) != 1 {
+		t.Errorf("expected 1 data entry (BOOTSTRAP.md only), got %d", len(cm.Data))
 	}
 }
 
@@ -9412,7 +9436,10 @@ func TestBuildWorkspaceConfigMap_NilWorkspace(t *testing.T) {
 	instance := newTestInstance("ws-nil")
 	instance.Spec.Workspace = nil
 	cm := BuildWorkspaceConfigMap(instance, nil)
-	if cm != nil {
-		t.Error("expected nil ConfigMap when workspace is nil")
+	if cm == nil {
+		t.Fatal("expected non-nil ConfigMap (BOOTSTRAP.md always injected)")
+	}
+	if _, ok := cm.Data["BOOTSTRAP.md"]; !ok {
+		t.Error("expected BOOTSTRAP.md in ConfigMap data")
 	}
 }

@@ -37,6 +37,9 @@ func BuildWorkspaceConfigMap(instance *openclawv1alpha1.OpenClawInstance, skillP
 		}
 	}
 
+	// Operator-injected bootstrap (first-run onboarding)
+	files["BOOTSTRAP.md"] = BootstrapContent
+
 	// Operator-injected self-configure files
 	if instance.Spec.SelfConfigure.Enabled {
 		files["SELFCONFIG.md"] = SelfConfigureSkillContent
