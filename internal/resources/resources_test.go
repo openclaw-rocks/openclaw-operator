@@ -4445,7 +4445,7 @@ func TestBuildInitScript_MergeMode_NoConfig(t *testing.T) {
 
 func TestParseSkillEntry_ClawHub(t *testing.T) {
 	got := parseSkillEntry("@anthropic/mcp-server-fetch")
-	want := "npx -y clawhub install '@anthropic/mcp-server-fetch'"
+	want := "npx -y clawhub install --force '@anthropic/mcp-server-fetch'"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -4486,10 +4486,10 @@ func TestBuildSkillsScript_WithSkills(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("expected 2 lines, got %d: %q", len(lines), script)
 	}
-	if lines[0] != "npx -y clawhub install '@anthropic/mcp-server-fetch'" {
+	if lines[0] != "npx -y clawhub install --force '@anthropic/mcp-server-fetch'" {
 		t.Errorf("line 0: %q", lines[0])
 	}
-	if lines[1] != "npx -y clawhub install '@github/copilot-skill'" {
+	if lines[1] != "npx -y clawhub install --force '@github/copilot-skill'" {
 		t.Errorf("line 1: %q", lines[1])
 	}
 }
@@ -4509,7 +4509,7 @@ func TestBuildSkillsScript_MixedPrefixes(t *testing.T) {
 		t.Fatalf("expected 3 lines, got %d: %q", len(lines), script)
 	}
 	// Sorted: @anthropic/... < npm:@openclaw/... < npm:some-tool
-	if lines[0] != "npx -y clawhub install '@anthropic/mcp-server-fetch'" {
+	if lines[0] != "npx -y clawhub install --force '@anthropic/mcp-server-fetch'" {
 		t.Errorf("line 0: %q", lines[0])
 	}
 	if lines[1] != "cd /home/openclaw/.openclaw && npm install '@openclaw/matrix'" {

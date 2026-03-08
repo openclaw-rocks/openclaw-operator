@@ -1550,7 +1550,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			Expect(script).To(ContainSubstring("npm install '@openclaw/matrix'"),
 				"npm: prefixed skill should use npm install")
 			// Script should also contain clawhub for non-prefixed skill
-			Expect(script).To(ContainSubstring("clawhub install '@anthropic/mcp-server-fetch'"),
+			Expect(script).To(ContainSubstring("clawhub install --force '@anthropic/mcp-server-fetch'"),
 				"non-prefixed skill should use clawhub install")
 
 			// NPM_CONFIG_IGNORE_SCRIPTS should be set (#91)

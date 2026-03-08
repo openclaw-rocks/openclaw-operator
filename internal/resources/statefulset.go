@@ -665,12 +665,12 @@ func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance, skillPacks *Re
 
 // parseSkillEntry returns the shell command to install a single skill entry.
 // Entries prefixed with "npm:" are installed via `npm install` into the PVC
-// node_modules. All other entries use `npx -y clawhub install`.
+// node_modules. All other entries use `npx -y clawhub install --force`.
 func parseSkillEntry(entry string) string {
 	if pkg, ok := strings.CutPrefix(entry, "npm:"); ok {
 		return fmt.Sprintf("cd /home/openclaw/.openclaw && npm install %s", shellQuote(pkg))
 	}
-	return fmt.Sprintf("npx -y clawhub install %s", shellQuote(entry))
+	return fmt.Sprintf("npx -y clawhub install --force %s", shellQuote(entry))
 }
 
 // BuildSkillsScript generates the shell script for the skills init container.
