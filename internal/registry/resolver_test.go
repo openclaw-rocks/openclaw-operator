@@ -38,6 +38,12 @@ func writeJSON(w http.ResponseWriter, v interface{}) {
 // newTestServer creates an httptest.Server that simulates an OCI registry with
 // token auth and a tags/list endpoint.
 func newTestServer(tags []string) *httptest.Server {
+	return newPaginatedTestServer([][]string{tags})
+}
+
+// newPaginatedTestServer creates an httptest.Server that simulates an OCI registry
+// with paginated tag responses. Each element of pages is one page of tags.
+func newPaginatedTestServer(pages [][]string) *httptest.Server {
 	mux := http.NewServeMux()
 
 	// Token endpoint (anonymous)
@@ -45,16 +51,41 @@ func newTestServer(tags []string) *httptest.Server {
 		writeJSON(w, tokenResponse{Token: "test-token"})
 	})
 
-	// /v2/ probe — returns 401 with WWW-Authenticate challenge
+	// /v2/ probe and tags/list handler
 	mux.HandleFunc("/v2/", func(w http.ResponseWriter, r *http.Request) {
-		// Check if this is a tags/list request
 		if strings.Contains(r.URL.Path, "/tags/list") {
 			auth := r.Header.Get("Authorization")
 			if auth != "Bearer test-token" {
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
-			writeJSON(w, tagsListResponse{Tags: tags})
+
+			// Determine which page to serve based on the "last" query parameter
+			last := r.URL.Query().Get("last")
+			pageIdx := 0
+			if last != "" {
+				// Find the page after the one containing "last"
+				for i, page := range pages {
+					if len(page) > 0 && page[len(page)-1] == last {
+						pageIdx = i + 1
+						break
+					}
+				}
+			}
+
+			if pageIdx >= len(pages) {
+				writeJSON(w, tagsListResponse{Tags: []string{}})
+				return
+			}
+
+			// Set Link header if there are more pages
+			if pageIdx < len(pages)-1 {
+				lastTag := pages[pageIdx][len(pages[pageIdx])-1]
+				w.Header().Set("Link", fmt.Sprintf(`<%s?last=%s&n=%d>; rel="next"`,
+					r.URL.Path, lastTag, len(pages[pageIdx])))
+			}
+
+			writeJSON(w, tagsListResponse{Tags: pages[pageIdx]})
 			return
 		}
 
@@ -66,7 +97,6 @@ func newTestServer(tags []string) *httptest.Server {
 	server := httptest.NewTLSServer(mux)
 
 	// Patch the realm URL to point to the test server
-	// We need to wrap the handler to inject the correct realm URL
 	origHandler := mux
 	mux2 := http.NewServeMux()
 	mux2.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -315,5 +345,122 @@ func TestRegistryUnreachable(t *testing.T) {
 	_, err := resolver.LatestSemver(context.Background(), "unreachable.invalid/org/repo", nil)
 	if err == nil {
 		t.Fatal("expected error for unreachable registry")
+	}
+}
+
+func TestPaginatedTags(t *testing.T) {
+	// Simulate GHCR returning tags across multiple pages - the latest version
+	// is on page 2 and must not be missed.
+	page1 := []string{"v1.0.0", "v1.1.0", "v1.2.0"}
+	page2 := []string{"v2.0.0", "v2.1.0", "v3.0.0"}
+	server := newPaginatedTestServer([][]string{page1, page2})
+	defer server.Close()
+
+	resolver := NewResolver(5 * time.Minute)
+	resolver.httpClient = server.Client()
+
+	host := strings.TrimPrefix(server.URL, "https://")
+	repo := host + "/openclaw/openclaw"
+
+	version, err := resolver.LatestSemver(context.Background(), repo, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if version != "v3.0.0" {
+		t.Errorf("expected v3.0.0 (from page 2), got %s", version)
+	}
+}
+
+func TestPaginatedTagsThreePages(t *testing.T) {
+	page1 := []string{"v1.0.0", "v1.1.0"}
+	page2 := []string{"v2.0.0", "v2.1.0"}
+	page3 := []string{"v3.0.0", "v3.1.0"}
+	server := newPaginatedTestServer([][]string{page1, page2, page3})
+	defer server.Close()
+
+	resolver := NewResolver(5 * time.Minute)
+	resolver.httpClient = server.Client()
+
+	host := strings.TrimPrefix(server.URL, "https://")
+	repo := host + "/openclaw/openclaw"
+
+	version, err := resolver.LatestSemver(context.Background(), repo, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if version != "v3.1.0" {
+		t.Errorf("expected v3.1.0 (from page 3), got %s", version)
+	}
+}
+
+func TestPaginatedSinglePage(t *testing.T) {
+	// A single page should work identically to the non-paginated case.
+	server := newPaginatedTestServer([][]string{{"v1.0.0", "v2.0.0"}})
+	defer server.Close()
+
+	resolver := NewResolver(5 * time.Minute)
+	resolver.httpClient = server.Client()
+
+	host := strings.TrimPrefix(server.URL, "https://")
+	repo := host + "/openclaw/openclaw"
+
+	version, err := resolver.LatestSemver(context.Background(), repo, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if version != "v2.0.0" {
+		t.Errorf("expected v2.0.0, got %s", version)
+	}
+}
+
+func TestParseNextLink(t *testing.T) {
+	tests := []struct {
+		name    string
+		header  string
+		baseURL string
+		want    string
+	}{
+		{
+			name:    "empty header",
+			header:  "",
+			baseURL: "https://ghcr.io/v2/openclaw/openclaw/tags/list",
+			want:    "",
+		},
+		{
+			name:    "relative link",
+			header:  `</v2/openclaw/openclaw/tags/list?last=v1.0.0&n=100>; rel="next"`,
+			baseURL: "https://ghcr.io/v2/openclaw/openclaw/tags/list",
+			want:    "https://ghcr.io/v2/openclaw/openclaw/tags/list?last=v1.0.0&n=100",
+		},
+		{
+			name:    "absolute link",
+			header:  `<https://ghcr.io/v2/openclaw/openclaw/tags/list?last=v1.0.0>; rel="next"`,
+			baseURL: "https://ghcr.io/v2/openclaw/openclaw/tags/list",
+			want:    "https://ghcr.io/v2/openclaw/openclaw/tags/list?last=v1.0.0",
+		},
+		{
+			name:    "no rel=next",
+			header:  `</v2/openclaw/openclaw/tags/list?last=v1.0.0>; rel="prev"`,
+			baseURL: "https://ghcr.io/v2/openclaw/openclaw/tags/list",
+			want:    "",
+		},
+		{
+			name:    "GHCR style with n=0",
+			header:  `</v2/openclaw/openclaw/tags/list?last=2026.3.1&n=0>; rel="next"`,
+			baseURL: "https://ghcr.io/v2/openclaw/openclaw/tags/list",
+			want:    "https://ghcr.io/v2/openclaw/openclaw/tags/list?last=2026.3.1&n=0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseNextLink(tt.header, tt.baseURL)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

@@ -21,12 +21,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
 )
+
+// maxPages is the maximum number of paginated requests to prevent infinite loops.
+const maxPages = 100
 
 // Resolver queries OCI registries for tags and resolves the latest semver version.
 type Resolver struct {
@@ -122,7 +126,8 @@ func (r *Resolver) getTags(ctx context.Context, repository string) ([]string, er
 	return tags, nil
 }
 
-// fetchTags queries the OCI Distribution API for the tag list.
+// fetchTags queries the OCI Distribution API for the tag list, following
+// pagination via the Link header as defined by the OCI Distribution Spec.
 func (r *Resolver) fetchTags(ctx context.Context, repository string) ([]string, error) {
 	host, name, err := parseRepository(repository)
 	if err != nil {
@@ -134,31 +139,86 @@ func (r *Resolver) fetchTags(ctx context.Context, repository string) ([]string, 
 		return nil, fmt.Errorf("authenticating with %s: %w", host, err)
 	}
 
-	tagsURL := fmt.Sprintf("https://%s/v2/%s/tags/list", host, name)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tagsURL, http.NoBody)
-	if err != nil {
-		return nil, err
-	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+	baseURL := fmt.Sprintf("https://%s/v2/%s/tags/list", host, name)
+	nextURL := baseURL + "?n=10000"
+	var allTags []string
+
+	for page := 0; page < maxPages; page++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, nextURL, http.NoBody)
+		if err != nil {
+			return nil, err
+		}
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+
+		resp, err := r.httpClient.Do(req) // #nosec G704 -- URL is built from operator-controlled spec.image.repository
+		if err != nil {
+			return nil, fmt.Errorf("fetching tags from %s: %w", nextURL, err)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			return nil, fmt.Errorf("unexpected status %d from %s", resp.StatusCode, nextURL)
+		}
+
+		var tagsList tagsListResponse
+		decErr := json.NewDecoder(resp.Body).Decode(&tagsList)
+		linkHeader := resp.Header.Get("Link")
+		resp.Body.Close()
+		if decErr != nil {
+			return nil, fmt.Errorf("decoding tags response: %w", decErr)
+		}
+
+		allTags = append(allTags, tagsList.Tags...)
+
+		// Check for a next page via the Link header (OCI pagination)
+		nextURL, err = parseNextLink(linkHeader, baseURL)
+		if err != nil {
+			return nil, fmt.Errorf("parsing Link header: %w", err)
+		}
+		if nextURL == "" {
+			break
+		}
 	}
 
-	resp, err := r.httpClient.Do(req) // #nosec G704 -- URL is built from operator-controlled spec.image.repository
-	if err != nil {
-		return nil, fmt.Errorf("fetching tags from %s: %w", tagsURL, err)
-	}
-	defer resp.Body.Close()
+	return allTags, nil
+}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status %d from %s", resp.StatusCode, tagsURL)
-	}
-
-	var tagsList tagsListResponse
-	if err := json.NewDecoder(resp.Body).Decode(&tagsList); err != nil {
-		return nil, fmt.Errorf("decoding tags response: %w", err)
+// parseNextLink extracts the next page URL from an OCI Distribution Link header.
+// The header format is: `</v2/.../tags/list?last=...&n=...>; rel="next"`.
+// Returns empty string if there is no next page.
+func parseNextLink(header, baseURL string) (string, error) {
+	if header == "" {
+		return "", nil
 	}
 
-	return tagsList.Tags, nil
+	// OCI spec: Link: </v2/name/tags/list?last=tag&n=100>; rel="next"
+	for _, part := range strings.Split(header, ",") {
+		part = strings.TrimSpace(part)
+		if !strings.Contains(part, `rel="next"`) {
+			continue
+		}
+		start := strings.Index(part, "<")
+		end := strings.Index(part, ">")
+		if start < 0 || end < 0 || end <= start {
+			continue
+		}
+		linkPath := part[start+1 : end]
+
+		// The link may be absolute or relative. Resolve against the base URL.
+		base, err := url.Parse(baseURL)
+		if err != nil {
+			return "", fmt.Errorf("parsing base URL %q: %w", baseURL, err)
+		}
+		ref, err := url.Parse(linkPath)
+		if err != nil {
+			return "", fmt.Errorf("parsing link %q: %w", linkPath, err)
+		}
+		return base.ResolveReference(ref).String(), nil
+	}
+
+	return "", nil
 }
 
 // getToken performs the anonymous token flow for OCI registries.
