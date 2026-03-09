@@ -110,6 +110,12 @@ spec:
       limits:
         cpu: "1000m"
         memory: "2Gi"
+    # Persist browser profiles (cookies, localStorage, session tokens) across pod restarts
+    persistence:
+      enabled: true
+      # storageClass: ""     # uses cluster default if empty
+      size: "1Gi"
+      # existingClaim: ""    # use a pre-existing PVC instead
 
   # Custom sidecar containers
   # sidecars:

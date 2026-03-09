@@ -495,6 +495,13 @@ type ChromiumSpec struct {
 	// +optional
 	Resources ResourcesSpec `json:"resources,omitempty"`
 
+	// Persistence configures persistent storage for the Chromium browser profile.
+	// When enabled, browser state (cookies, localStorage, session tokens) survives
+	// pod restarts. When disabled (default), an emptyDir is used and all browser
+	// state is lost on restart.
+	// +optional
+	Persistence ChromiumPersistenceSpec `json:"persistence,omitempty"`
+
 	// ExtraArgs specifies additional command-line arguments passed to the
 	// Chromium process. These are appended to the default arguments.
 	// Example: ["--disable-blink-features=AutomationControlled", "--user-agent=Mozilla/5.0 ..."]
@@ -505,6 +512,33 @@ type ChromiumSpec struct {
 	// sidecar container, merged with the operator-managed variables.
 	// +optional
 	ExtraEnv []corev1.EnvVar `json:"extraEnv,omitempty"`
+}
+
+// ChromiumPersistenceSpec configures persistent storage for Chromium browser profiles
+type ChromiumPersistenceSpec struct {
+	// Enabled enables persistent storage for the Chromium browser profile.
+	// When true, a PVC is created (or an existing one is used) and mounted at
+	// /chromium-data. The --user-data-dir flag is set automatically so that
+	// cookies, localStorage, session tokens, and cached credentials survive
+	// pod restarts.
+	// +kubebuilder:default=false
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
+
+	// StorageClass is the name of the StorageClass to use for the PVC.
+	// If empty, the cluster default StorageClass is used.
+	// +optional
+	StorageClass *string `json:"storageClass,omitempty"`
+
+	// Size is the requested storage size for the Chromium profile PVC.
+	// +kubebuilder:default="1Gi"
+	// +optional
+	Size string `json:"size,omitempty"`
+
+	// ExistingClaim is the name of a pre-existing PVC to use instead of
+	// creating a new one. When set, storageClass and size are ignored.
+	// +optional
+	ExistingClaim string `json:"existingClaim,omitempty"`
 }
 
 // ChromiumImageSpec defines the Chromium container image
@@ -1294,6 +1328,10 @@ type ManagedResourcesStatus struct {
 	// PVC is the name of the managed PersistentVolumeClaim
 	// +optional
 	PVC string `json:"pvc,omitempty"`
+
+	// ChromiumPVC is the name of the managed Chromium browser profile PVC
+	// +optional
+	ChromiumPVC string `json:"chromiumPVC,omitempty"`
 
 	// NetworkPolicy is the name of the managed NetworkPolicy
 	// +optional

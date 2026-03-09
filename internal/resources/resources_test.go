@@ -528,6 +528,7 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 	// Chromium volume mounts
 	assertVolumeMount(t, chromium.VolumeMounts, "chromium-tmp", "/tmp")
 	assertVolumeMount(t, chromium.VolumeMounts, "chromium-shm", "/dev/shm")
+	assertVolumeMount(t, chromium.VolumeMounts, "chromium-data", "/chromium-data")
 
 	// Volumes - check chromium-specific volumes exist
 	volumes := sts.Spec.Template.Spec.Volumes
@@ -555,6 +556,27 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 	}
 	if shmVol.EmptyDir.SizeLimit.Cmp(*expectedShmSize) != 0 {
 		t.Errorf("chromium-shm sizeLimit = %v, want 1Gi", shmVol.EmptyDir.SizeLimit.String())
+	}
+
+	// chromium-data should be emptyDir when persistence is not enabled
+	dataVol := findVolume(volumes, "chromium-data")
+	if dataVol == nil {
+		t.Fatal("chromium-data volume not found")
+	}
+	if dataVol.EmptyDir == nil {
+		t.Error("chromium-data should be emptyDir when persistence is disabled")
+	}
+
+	// Without persistence, --user-data-dir should NOT be in launch args
+	var launchArgs string
+	for _, env := range chromium.Env {
+		if env.Name == "DEFAULT_LAUNCH_ARGS" {
+			launchArgs = env.Value
+			break
+		}
+	}
+	if strings.Contains(launchArgs, "--user-data-dir") {
+		t.Error("--user-data-dir should not be set when persistence is disabled")
 	}
 }
 
@@ -2782,6 +2804,72 @@ func TestBuildPVC_CustomAccessModes(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Chromium PVC builder tests
+// ---------------------------------------------------------------------------
+
+func TestBuildChromiumPVC_Default(t *testing.T) {
+	instance := newTestInstance("chromium-pvc-test")
+	instance.Spec.Chromium.Enabled = true
+	instance.Spec.Chromium.Persistence.Enabled = true
+
+	pvc := BuildChromiumPVC(instance)
+
+	if pvc.Name != "chromium-pvc-test-chromium-data" {
+		t.Errorf("pvc name = %q, want %q", pvc.Name, "chromium-pvc-test-chromium-data")
+	}
+	if pvc.Namespace != "test-ns" {
+		t.Errorf("pvc namespace = %q, want %q", pvc.Namespace, "test-ns")
+	}
+
+	// Default size - 1Gi
+	storageReq := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+	if storageReq.Cmp(resource.MustParse("1Gi")) != 0 {
+		t.Errorf("storage size = %v, want 1Gi", storageReq.String())
+	}
+
+	// Default access mode - ReadWriteOnce
+	if len(pvc.Spec.AccessModes) != 1 {
+		t.Fatalf("expected 1 access mode, got %d", len(pvc.Spec.AccessModes))
+	}
+	if pvc.Spec.AccessModes[0] != corev1.ReadWriteOnce {
+		t.Errorf("access mode = %v, want ReadWriteOnce", pvc.Spec.AccessModes[0])
+	}
+
+	// No storage class by default
+	if pvc.Spec.StorageClassName != nil {
+		t.Errorf("storageClassName should be nil by default, got %v", *pvc.Spec.StorageClassName)
+	}
+
+	// Should NOT have backup annotation (chromium PVC is not backed up)
+	if _, ok := pvc.Annotations["openclaw.rocks/backup-enabled"]; ok {
+		t.Error("chromium PVC should not have backup-enabled annotation")
+	}
+}
+
+func TestBuildChromiumPVC_CustomSize(t *testing.T) {
+	instance := newTestInstance("chromium-pvc-custom")
+	instance.Spec.Chromium.Enabled = true
+	instance.Spec.Chromium.Persistence.Enabled = true
+	instance.Spec.Chromium.Persistence.Size = "5Gi"
+	scName := "fast-ssd"
+	instance.Spec.Chromium.Persistence.StorageClass = &scName
+
+	pvc := BuildChromiumPVC(instance)
+
+	storageReq := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+	if storageReq.Cmp(resource.MustParse("5Gi")) != 0 {
+		t.Errorf("storage size = %v, want 5Gi", storageReq.String())
+	}
+
+	if pvc.Spec.StorageClassName == nil {
+		t.Fatal("storageClassName should not be nil")
+	}
+	if *pvc.Spec.StorageClassName != "fast-ssd" {
+		t.Errorf("storageClassName = %q, want %q", *pvc.Spec.StorageClassName, "fast-ssd")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // pdb.go tests
 // ---------------------------------------------------------------------------
 
@@ -3778,6 +3866,91 @@ func TestBuildStatefulSet_ChromiumContainerDefaults(t *testing.T) {
 	}
 	if chromium.TerminationMessagePolicy != corev1.TerminationMessageReadFile {
 		t.Errorf("chromium TerminationMessagePolicy = %v, want File", chromium.TerminationMessagePolicy)
+	}
+}
+
+func TestBuildStatefulSet_ChromiumPersistenceEnabled(t *testing.T) {
+	instance := newTestInstance("chromium-persist")
+	instance.Spec.Chromium.Enabled = true
+	instance.Spec.Chromium.Persistence.Enabled = true
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	// chromium-data volume should be a PVC
+	dataVol := findVolume(sts.Spec.Template.Spec.Volumes, "chromium-data")
+	if dataVol == nil {
+		t.Fatal("chromium-data volume not found")
+	}
+	if dataVol.PersistentVolumeClaim == nil {
+		t.Fatal("chromium-data should be a PVC when persistence is enabled")
+	}
+	if dataVol.PersistentVolumeClaim.ClaimName != "chromium-persist-chromium-data" {
+		t.Errorf("PVC claim name = %q, want %q", dataVol.PersistentVolumeClaim.ClaimName, "chromium-persist-chromium-data")
+	}
+
+	// --user-data-dir should be in DEFAULT_LAUNCH_ARGS
+	var chromium *corev1.Container
+	for i := range sts.Spec.Template.Spec.Containers {
+		if sts.Spec.Template.Spec.Containers[i].Name == "chromium" {
+			chromium = &sts.Spec.Template.Spec.Containers[i]
+			break
+		}
+	}
+	if chromium == nil {
+		t.Fatal("chromium container not found")
+	}
+
+	var launchArgs string
+	for _, env := range chromium.Env {
+		if env.Name == "DEFAULT_LAUNCH_ARGS" {
+			launchArgs = env.Value
+			break
+		}
+	}
+	if !strings.Contains(launchArgs, "--user-data-dir=/chromium-data") {
+		t.Errorf("DEFAULT_LAUNCH_ARGS should contain --user-data-dir=/chromium-data, got %q", launchArgs)
+	}
+
+	// Volume mount should exist
+	assertVolumeMount(t, chromium.VolumeMounts, "chromium-data", "/chromium-data")
+}
+
+func TestBuildStatefulSet_ChromiumPersistenceExistingClaim(t *testing.T) {
+	instance := newTestInstance("chromium-existing")
+	instance.Spec.Chromium.Enabled = true
+	instance.Spec.Chromium.Persistence.Enabled = true
+	instance.Spec.Chromium.Persistence.ExistingClaim = "my-chromium-pvc"
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	dataVol := findVolume(sts.Spec.Template.Spec.Volumes, "chromium-data")
+	if dataVol == nil {
+		t.Fatal("chromium-data volume not found")
+	}
+	if dataVol.PersistentVolumeClaim == nil {
+		t.Fatal("chromium-data should be a PVC when using existing claim")
+	}
+	if dataVol.PersistentVolumeClaim.ClaimName != "my-chromium-pvc" {
+		t.Errorf("PVC claim name = %q, want %q", dataVol.PersistentVolumeClaim.ClaimName, "my-chromium-pvc")
+	}
+}
+
+func TestBuildStatefulSet_ChromiumPersistenceDisabled(t *testing.T) {
+	instance := newTestInstance("chromium-no-persist")
+	instance.Spec.Chromium.Enabled = true
+	instance.Spec.Chromium.Persistence.Enabled = false
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	dataVol := findVolume(sts.Spec.Template.Spec.Volumes, "chromium-data")
+	if dataVol == nil {
+		t.Fatal("chromium-data volume not found")
+	}
+	if dataVol.EmptyDir == nil {
+		t.Error("chromium-data should be emptyDir when persistence is disabled")
+	}
+	if dataVol.PersistentVolumeClaim != nil {
+		t.Error("chromium-data should not be a PVC when persistence is disabled")
 	}
 }
 

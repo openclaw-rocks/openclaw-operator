@@ -233,6 +233,10 @@ Optional Chromium sidecar for browser automation.
 | `resources.requests.memory`| `string`          | `512Mi`                        | Chromium minimum memory.                                                                                             |
 | `resources.limits.cpu`     | `string`          | `1000m`                        | Chromium maximum CPU.                                                                                                |
 | `resources.limits.memory`  | `string`          | `2Gi`                          | Chromium maximum memory.                                                                                             |
+| `persistence.enabled`      | `bool`            | `false`                        | Enable persistent storage for browser profiles. When true, cookies, localStorage, session tokens, and cached credentials survive pod restarts. |
+| `persistence.storageClass` | `*string`         | --                             | StorageClass for the Chromium profile PVC. Uses cluster default if empty.                                            |
+| `persistence.size`         | `string`          | `1Gi`                          | Requested storage size for the Chromium profile PVC.                                                                 |
+| `persistence.existingClaim`| `string`          | --                             | Name of a pre-existing PVC. When set, `storageClass` and `size` are ignored.                                         |
 | `extraArgs`                | `[]string`        | --                             | Additional command-line arguments passed to the Chromium process, appended to the built-in anti-bot defaults (`--disable-blink-features=AutomationControlled`, `--disable-features=AutomationControlled`, `--no-first-run`). |
 | `extraEnv`                 | `[]EnvVar`        | --                             | Additional environment variables for the Chromium sidecar container, merged with operator-managed variables.         |
 
@@ -242,6 +246,7 @@ When enabled, the sidecar:
 - Runs as UID 999 (blessuser).
 - Mounts a memory-backed emptyDir at `/dev/shm` (1Gi) for shared memory.
 - Mounts an emptyDir at `/tmp` for scratch space.
+- When `persistence.enabled` is true, mounts a PVC at `/chromium-data` and passes `--user-data-dir=/chromium-data` to Chrome, persisting cookies, localStorage, IndexedDB, cached credentials, and session tokens across pod restarts.
 
 When Chromium is enabled, the operator also auto-configures browser profiles in the OpenClaw config. Both `"default"` and `"chrome"` profiles are set to point at the sidecar's CDP endpoint (`http://localhost:3000`). This ensures browser tool calls work regardless of which profile name the LLM passes.
 
@@ -1211,6 +1216,9 @@ spec:
       limits:
         cpu: "2"
         memory: 4Gi
+    persistence:
+      enabled: true
+      size: 2Gi
 
   ollama:
     enabled: true

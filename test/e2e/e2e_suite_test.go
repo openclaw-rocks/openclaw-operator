@@ -31,6 +31,7 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -1380,6 +1381,103 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				}
 			}
 			Expect(foundChromiumPort).To(BeTrue(), "Service should have chromium port")
+
+			// Clean up
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+
+		It("Should create persistent chromium volume when persistence is enabled", func() {
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instanceName := "chromium-persist-test"
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					Chromium: openclawv1alpha1.ChromiumSpec{
+						Enabled: true,
+						Persistence: openclawv1alpha1.ChromiumPersistenceSpec{
+							Enabled: true,
+							Size:    "1Gi",
+						},
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			// Verify StatefulSet is created
+			statefulSet := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName,
+					Namespace: namespace,
+				}, statefulSet)
+			}, timeout, interval).Should(Succeed())
+
+			// Verify chromium-data volume references a PVC
+			var dataVol *corev1.Volume
+			for i := range statefulSet.Spec.Template.Spec.Volumes {
+				if statefulSet.Spec.Template.Spec.Volumes[i].Name == "chromium-data" {
+					dataVol = &statefulSet.Spec.Template.Spec.Volumes[i]
+					break
+				}
+			}
+			Expect(dataVol).NotTo(BeNil(), "chromium-data volume should exist")
+			Expect(dataVol.PersistentVolumeClaim).NotTo(BeNil(), "chromium-data should be a PVC when persistence is enabled")
+			Expect(dataVol.PersistentVolumeClaim.ClaimName).To(Equal(instanceName + "-chromium-data"))
+
+			// Verify chromium container has --user-data-dir in launch args
+			var chromiumContainer *corev1.Container
+			for i := range statefulSet.Spec.Template.Spec.Containers {
+				if statefulSet.Spec.Template.Spec.Containers[i].Name == "chromium" {
+					chromiumContainer = &statefulSet.Spec.Template.Spec.Containers[i]
+					break
+				}
+			}
+			Expect(chromiumContainer).NotTo(BeNil(), "chromium sidecar container should exist")
+
+			var launchArgs string
+			for _, env := range chromiumContainer.Env {
+				if env.Name == "DEFAULT_LAUNCH_ARGS" {
+					launchArgs = env.Value
+					break
+				}
+			}
+			Expect(launchArgs).To(ContainSubstring("--user-data-dir=/chromium-data"),
+				"DEFAULT_LAUNCH_ARGS should contain --user-data-dir=/chromium-data when persistence is enabled")
+
+			// Verify chromium container has chromium-data volume mount
+			var foundDataMount bool
+			for _, mount := range chromiumContainer.VolumeMounts {
+				if mount.Name == "chromium-data" && mount.MountPath == "/chromium-data" {
+					foundDataMount = true
+					break
+				}
+			}
+			Expect(foundDataMount).To(BeTrue(), "chromium container should mount chromium-data at /chromium-data")
+
+			// Verify Chromium PVC was created
+			pvc := &corev1.PersistentVolumeClaim{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName + "-chromium-data",
+					Namespace: namespace,
+				}, pvc)
+			}, timeout, interval).Should(Succeed())
+			Expect(pvc.Spec.Resources.Requests[corev1.ResourceStorage]).To(Equal(resource.MustParse("1Gi")))
 
 			// Clean up
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())

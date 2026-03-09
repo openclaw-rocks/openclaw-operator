@@ -1113,6 +1113,10 @@ func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.
 			Name:      "chromium-shm",
 			MountPath: "/dev/shm",
 		},
+		{
+			Name:      "chromium-data",
+			MountPath: "/chromium-data",
+		},
 	}
 
 	// Override the default listening port (3000) to avoid conflicting with
@@ -1150,6 +1154,12 @@ func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.
 		"--disable-blink-features=AutomationControlled",
 		"--disable-features=AutomationControlled",
 		"--no-first-run",
+	}
+	// When persistence is enabled, direct Chromium to store its profile data
+	// on the persistent volume so cookies, localStorage, and session tokens
+	// survive pod restarts.
+	if instance.Spec.Chromium.Persistence.Enabled {
+		allArgs = append(allArgs, "--user-data-dir=/chromium-data")
 	}
 	allArgs = append(allArgs, instance.Spec.Chromium.ExtraArgs...)
 	if launchArgs, err := json.Marshal(allArgs); err == nil {
@@ -1656,6 +1666,29 @@ func buildVolumes(instance *openclawv1alpha1.OpenClawInstance, skillPacks *Resol
 				},
 			},
 		)
+
+		// Chromium browser profile data volume - persistent PVC or ephemeral emptyDir
+		if instance.Spec.Chromium.Persistence.Enabled {
+			claimName := ChromiumPVCName(instance)
+			if instance.Spec.Chromium.Persistence.ExistingClaim != "" {
+				claimName = instance.Spec.Chromium.Persistence.ExistingClaim
+			}
+			volumes = append(volumes, corev1.Volume{
+				Name: "chromium-data",
+				VolumeSource: corev1.VolumeSource{
+					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+						ClaimName: claimName,
+					},
+				},
+			})
+		} else {
+			volumes = append(volumes, corev1.Volume{
+				Name: "chromium-data",
+				VolumeSource: corev1.VolumeSource{
+					EmptyDir: &corev1.EmptyDirVolumeSource{},
+				},
+			})
+		}
 	}
 
 	// Ollama model cache volume

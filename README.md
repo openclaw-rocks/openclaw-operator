@@ -282,6 +282,25 @@ When enabled, the operator automatically:
 - Sets up shared memory, security contexts, and health probes for the sidecar
 - Applies anti-bot-detection flags by default (`--disable-blink-features=AutomationControlled`, `--disable-features=AutomationControlled`, `--no-first-run`)
 
+#### Persistent browser profiles
+
+By default, all browser state (cookies, localStorage, session tokens) is lost on pod restart. Enable persistence to retain browser profiles across restarts:
+
+```yaml
+spec:
+  chromium:
+    enabled: true
+    persistence:
+      enabled: true          # default: false
+      storageClass: ""        # optional - uses cluster default if empty
+      size: "1Gi"             # default: 1Gi
+      existingClaim: ""       # optional - use a pre-existing PVC
+```
+
+When persistence is enabled, the operator creates a dedicated PVC and passes `--user-data-dir=/chromium-data` to Chrome so that cookies, localStorage, IndexedDB, cached credentials, and session tokens survive pod restarts. This is useful for authenticated browser automation, MFA-protected services, and long-running browser workflows.
+
+**Security note:** Persistent browser profiles contain sensitive session tokens. The PVC has the same security posture as other instance volumes. Ensure your StorageClass supports encryption at rest for sensitive workloads.
+
 ### Ollama sidecar
 
 Run local LLMs alongside your agent for private, low-latency inference without external API calls:

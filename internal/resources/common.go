@@ -185,6 +185,11 @@ func PVCName(instance *openclawv1alpha1.OpenClawInstance) string {
 	return instance.Name + "-data"
 }
 
+// ChromiumPVCName returns the name of the Chromium browser profile PVC
+func ChromiumPVCName(instance *openclawv1alpha1.OpenClawInstance) string {
+	return instance.Name + "-chromium-data"
+}
+
 // NetworkPolicyName returns the name of the NetworkPolicy
 func NetworkPolicyName(instance *openclawv1alpha1.OpenClawInstance) string {
 	return instance.Name

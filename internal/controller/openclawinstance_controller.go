@@ -355,6 +355,12 @@ func (r *OpenClawInstanceReconciler) reconcileResources(ctx context.Context, ins
 	}
 	logger.V(1).Info("PVC reconciled")
 
+	// 4a. Reconcile Chromium PVC (if persistence is enabled)
+	if err := r.reconcileChromiumPVC(ctx, instance); err != nil {
+		return fmt.Errorf("failed to reconcile Chromium PVC: %w", err)
+	}
+	logger.V(1).Info("Chromium PVC reconciled")
+
 	// 4b. Restore from backup if spec.restoreFrom is set (must happen after PVC, before StatefulSet)
 	if result, done, err := r.reconcileRestore(ctx, instance); !done {
 		if err != nil {
@@ -753,6 +759,50 @@ func (r *OpenClawInstanceReconciler) reconcilePVC(ctx context.Context, instance 
 		Message: "PersistentVolumeClaim created successfully",
 	})
 
+	return nil
+}
+
+// reconcileChromiumPVC reconciles the Chromium browser profile PersistentVolumeClaim
+func (r *OpenClawInstanceReconciler) reconcileChromiumPVC(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) error {
+	if !instance.Spec.Chromium.Enabled || !instance.Spec.Chromium.Persistence.Enabled {
+		// Clean up managed Chromium PVC if persistence was disabled
+		if instance.Status.ManagedResources.ChromiumPVC != "" &&
+			instance.Spec.Chromium.Persistence.ExistingClaim == "" {
+			pvc := &corev1.PersistentVolumeClaim{}
+			pvc.Name = resources.ChromiumPVCName(instance)
+			pvc.Namespace = instance.Namespace
+			if err := r.Delete(ctx, pvc); err != nil && !apierrors.IsNotFound(err) {
+				return err
+			}
+		}
+		instance.Status.ManagedResources.ChromiumPVC = ""
+		return nil
+	}
+
+	// Using an existing claim - just track it in status
+	if instance.Spec.Chromium.Persistence.ExistingClaim != "" {
+		instance.Status.ManagedResources.ChromiumPVC = instance.Spec.Chromium.Persistence.ExistingClaim
+		return nil
+	}
+
+	pvc := resources.BuildChromiumPVC(instance)
+	if err := controllerutil.SetControllerReference(instance, pvc, r.Scheme); err != nil {
+		return err
+	}
+
+	// PVCs are immutable after creation, so we only create if not exists
+	existing := &corev1.PersistentVolumeClaim{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(pvc), existing); err != nil {
+		if apierrors.IsNotFound(err) {
+			if createErr := r.Create(ctx, pvc); createErr != nil {
+				return createErr
+			}
+		} else {
+			return err
+		}
+	}
+
+	instance.Status.ManagedResources.ChromiumPVC = pvc.Name
 	return nil
 }
 
