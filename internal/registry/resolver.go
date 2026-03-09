@@ -158,14 +158,14 @@ func (r *Resolver) fetchTags(ctx context.Context, repository string) ([]string, 
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return nil, fmt.Errorf("unexpected status %d from %s", resp.StatusCode, nextURL)
 		}
 
 		var tagsList tagsListResponse
 		decErr := json.NewDecoder(resp.Body).Decode(&tagsList)
 		linkHeader := resp.Header.Get("Link")
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if decErr != nil {
 			return nil, fmt.Errorf("decoding tags response: %w", decErr)
 		}
