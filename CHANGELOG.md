@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.27](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.26...v0.10.27) (2026-03-09)
+
+
+### Features
+
+* support persistent Chromium browser profiles via PVC ([#271](https://github.com/openclaw-rocks/k8s-operator/issues/271)) ([9d80414](https://github.com/openclaw-rocks/k8s-operator/commit/9d804148da28ad4ab1640d1da15d7b100ade4347)), closes [#267](https://github.com/openclaw-rocks/k8s-operator/issues/267)
+
 ## [0.10.26](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.25...v0.10.26) (2026-03-09)
 
 
