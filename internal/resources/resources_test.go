@@ -878,8 +878,8 @@ func TestBuildStatefulSet_ConfigVolume_RawConfig(t *testing.T) {
 
 	// Init container should copy config from ConfigMap to data volume
 	initContainers := sts.Spec.Template.Spec.InitContainers
-	if len(initContainers) != 1 {
-		t.Fatalf("expected 1 init container, got %d", len(initContainers))
+	if len(initContainers) != 3 {
+		t.Fatalf("expected 3 init containers (init-config + init-uv + init-pip), got %d", len(initContainers))
 	}
 	initC := initContainers[0]
 	if initC.Name != "init-config" {
@@ -923,17 +923,17 @@ func TestBuildStatefulSet_ConfigVolume_ConfigMapRef(t *testing.T) {
 	// The controller reads the external CM and writes enriched content into the
 	// operator-managed CM under "openclaw.json", so the init container always uses that key.
 	initContainers := sts.Spec.Template.Spec.InitContainers
-	if len(initContainers) != 1 {
-		t.Fatalf("expected 1 init container, got %d", len(initContainers))
+	if len(initContainers) != 3 {
+		t.Fatalf("expected 3 init containers (init-config + init-uv + init-pip), got %d", len(initContainers))
 	}
 	initC := initContainers[0]
 	assertVolumeMount(t, initC.VolumeMounts, "data", "/data")
 	assertVolumeMount(t, initC.VolumeMounts, "config", "/config")
 
-	// Verify the command copies openclaw.json (not the custom key)
-	expectedCmd := "cp /config/'openclaw.json' /data/openclaw.json"
-	if len(initC.Command) != 3 || initC.Command[2] != expectedCmd {
-		t.Errorf("init container command = %v, want sh -c %q", initC.Command, expectedCmd)
+	// Verify the command starts with copying openclaw.json (not the custom key)
+	expectedPrefix := "cp /config/'openclaw.json' /data/openclaw.json"
+	if len(initC.Command) != 3 || !strings.HasPrefix(initC.Command[2], expectedPrefix) {
+		t.Errorf("init container command should start with %q, got %v", expectedPrefix, initC.Command)
 	}
 
 	// Volume should reference the operator-managed ConfigMap (not the external one)
@@ -958,12 +958,12 @@ func TestBuildStatefulSet_ConfigMapRef_DefaultKey(t *testing.T) {
 
 	// Init container should use "openclaw.json" (operator-managed key)
 	initContainers := sts.Spec.Template.Spec.InitContainers
-	if len(initContainers) != 1 {
-		t.Fatalf("expected 1 init container, got %d", len(initContainers))
+	if len(initContainers) != 3 {
+		t.Fatalf("expected 3 init containers (init-config + init-uv + init-pip), got %d", len(initContainers))
 	}
-	expectedCmd := "cp /config/'openclaw.json' /data/openclaw.json"
-	if initContainers[0].Command[2] != expectedCmd {
-		t.Errorf("init container command = %q, want %q", initContainers[0].Command[2], expectedCmd)
+	expectedPrefix := "cp /config/'openclaw.json' /data/openclaw.json"
+	if !strings.HasPrefix(initContainers[0].Command[2], expectedPrefix) {
+		t.Errorf("init container command should start with %q, got %q", expectedPrefix, initContainers[0].Command[2])
 	}
 
 	// Volume should reference the operator-managed ConfigMap
@@ -982,9 +982,9 @@ func TestBuildStatefulSet_VanillaDeployment_HasInitContainer(t *testing.T) {
 
 	sts := BuildStatefulSet(instance, "", nil)
 
-	// Vanilla deployments should still get an init container (gateway.bind=lan)
-	if len(sts.Spec.Template.Spec.InitContainers) != 1 {
-		t.Fatalf("expected 1 init container for vanilla deployment, got %d", len(sts.Spec.Template.Spec.InitContainers))
+	// Vanilla deployments get init-config + init-uv + init-pip
+	if len(sts.Spec.Template.Spec.InitContainers) != 3 {
+		t.Fatalf("expected 3 init containers for vanilla deployment, got %d", len(sts.Spec.Template.Spec.InitContainers))
 	}
 	if sts.Spec.Template.Spec.InitContainers[0].Name != "init-config" {
 		t.Errorf("init container name = %q, want %q", sts.Spec.Template.Spec.InitContainers[0].Name, "init-config")
@@ -1293,8 +1293,16 @@ func TestBuildStatefulSet_EnvAndEnvFrom(t *testing.T) {
 	sts := BuildStatefulSet(instance, "", nil)
 	main := sts.Spec.Template.Spec.Containers[0]
 
-	if len(main.Env) != 3 || main.Env[0].Name != "HOME" || main.Env[1].Name != "OPENCLAW_DISABLE_BONJOUR" || main.Env[2].Name != "MY_VAR" {
-		t.Errorf("env vars should include HOME, OPENCLAW_DISABLE_BONJOUR, then user-defined vars, got %v", envNames(main.Env))
+	names := envNames(main.Env)
+	expectedPrefix := []string{"HOME", "OPENCLAW_DISABLE_BONJOUR", "NPM_CONFIG_PREFIX", "NPM_CONFIG_CACHE", "PIP_USER"}
+	for i, want := range expectedPrefix {
+		if i >= len(names) || names[i] != want {
+			t.Fatalf("env vars should start with %v, got %v", expectedPrefix, names)
+		}
+	}
+	// User-defined vars come after operator-injected vars
+	if names[len(names)-1] != "MY_VAR" {
+		t.Errorf("user-defined MY_VAR should be last, got %v", names)
 	}
 	if len(main.EnvFrom) != 1 || main.EnvFrom[0].SecretRef.Name != "api-keys" {
 		t.Error("envFrom not passed through")
@@ -4016,8 +4024,12 @@ func TestBuildWorkspaceConfigMap_Nil(t *testing.T) {
 	instance.Spec.Workspace = nil
 
 	cm := BuildWorkspaceConfigMap(instance, nil)
-	if cm != nil {
-		t.Fatal("expected nil ConfigMap when workspace is nil")
+	// ENVIRONMENT.md is always injected
+	if cm == nil {
+		t.Fatal("expected non-nil ConfigMap (ENVIRONMENT.md is always injected)")
+	}
+	if _, ok := cm.Data["ENVIRONMENT.md"]; !ok {
+		t.Error("expected ENVIRONMENT.md in workspace ConfigMap")
 	}
 }
 
@@ -4028,8 +4040,12 @@ func TestBuildWorkspaceConfigMap_EmptyFiles(t *testing.T) {
 	}
 
 	cm := BuildWorkspaceConfigMap(instance, nil)
-	if cm != nil {
-		t.Fatal("expected nil ConfigMap when initialFiles is empty")
+	// ENVIRONMENT.md is always injected
+	if cm == nil {
+		t.Fatal("expected non-nil ConfigMap (ENVIRONMENT.md is always injected)")
+	}
+	if _, ok := cm.Data["ENVIRONMENT.md"]; !ok {
+		t.Error("expected ENVIRONMENT.md in workspace ConfigMap")
 	}
 }
 
@@ -4052,14 +4068,18 @@ func TestBuildWorkspaceConfigMap_WithFiles(t *testing.T) {
 	if cm.Namespace != "test-ns" {
 		t.Errorf("ConfigMap namespace = %q, want %q", cm.Namespace, "test-ns")
 	}
-	if len(cm.Data) != 2 {
-		t.Fatalf("expected 2 data entries, got %d", len(cm.Data))
+	// 2 user files + ENVIRONMENT.md = 3
+	if len(cm.Data) != 3 {
+		t.Fatalf("expected 3 data entries (2 user + ENVIRONMENT.md), got %d", len(cm.Data))
 	}
 	if cm.Data["SOUL.md"] != "# Personality\nBe helpful." {
 		t.Errorf("SOUL.md content mismatch")
 	}
 	if cm.Data["AGENTS.md"] != "# Agents config" {
 		t.Errorf("AGENTS.md content mismatch")
+	}
+	if _, ok := cm.Data["ENVIRONMENT.md"]; !ok {
+		t.Error("expected ENVIRONMENT.md in workspace ConfigMap")
 	}
 }
 
@@ -4092,6 +4112,9 @@ func TestShellQuote(t *testing.T) {
 	}
 }
 
+// envSeedLines is the init script suffix that seeds ENVIRONMENT.md (always present).
+const envSeedLines = "mkdir -p /data/workspace\n[ -f /data/workspace/'ENVIRONMENT.md' ] || cp /workspace-init/'ENVIRONMENT.md' /data/workspace/'ENVIRONMENT.md'"
+
 func TestBuildInitScript_ConfigOnly(t *testing.T) {
 	instance := newTestInstance("init-config-only")
 	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
@@ -4099,8 +4122,9 @@ func TestBuildInitScript_ConfigOnly(t *testing.T) {
 	}
 
 	script := BuildInitScript(instance, nil)
-	if script != "cp /config/'openclaw.json' /data/openclaw.json" {
-		t.Errorf("unexpected script:\n%s", script)
+	expected := "cp /config/'openclaw.json' /data/openclaw.json\n" + envSeedLines
+	if script != expected {
+		t.Errorf("unexpected script:\ngot:  %q\nwant: %q", script, expected)
 	}
 }
 
@@ -4114,7 +4138,7 @@ func TestBuildInitScript_WorkspaceOnly(t *testing.T) {
 	}
 
 	script := BuildInitScript(instance, nil)
-	expected := "cp /config/'openclaw.json' /data/openclaw.json\nmkdir -p /data/workspace/'memory'\nmkdir -p /data/workspace\n[ -f /data/workspace/'SOUL.md' ] || cp /workspace-init/'SOUL.md' /data/workspace/'SOUL.md'"
+	expected := "cp /config/'openclaw.json' /data/openclaw.json\nmkdir -p /data/workspace/'memory'\nmkdir -p /data/workspace\n[ -f /data/workspace/'ENVIRONMENT.md' ] || cp /workspace-init/'ENVIRONMENT.md' /data/workspace/'ENVIRONMENT.md'\n[ -f /data/workspace/'SOUL.md' ] || cp /workspace-init/'SOUL.md' /data/workspace/'SOUL.md'"
 	if script != expected {
 		t.Errorf("unexpected script:\ngot:  %q\nwant: %q", script, expected)
 	}
@@ -4135,10 +4159,10 @@ func TestBuildInitScript_Both(t *testing.T) {
 
 	script := BuildInitScript(instance, nil)
 
-	// Verify all expected lines are present (sorted order)
+	// Verify all expected lines are present (sorted order, ENVIRONMENT.md included)
 	lines := strings.Split(script, "\n")
-	if len(lines) != 6 {
-		t.Fatalf("expected 6 lines, got %d:\n%s", len(lines), script)
+	if len(lines) != 7 {
+		t.Fatalf("expected 7 lines, got %d:\n%s", len(lines), script)
 	}
 	if lines[0] != "cp /config/'openclaw.json' /data/openclaw.json" {
 		t.Errorf("line 0: %q", lines[0])
@@ -4155,8 +4179,11 @@ func TestBuildInitScript_Both(t *testing.T) {
 	if lines[4] != "[ -f /data/workspace/'AGENTS.md' ] || cp /workspace-init/'AGENTS.md' /data/workspace/'AGENTS.md'" {
 		t.Errorf("line 4: %q", lines[4])
 	}
-	if lines[5] != "[ -f /data/workspace/'SOUL.md' ] || cp /workspace-init/'SOUL.md' /data/workspace/'SOUL.md'" {
+	if lines[5] != "[ -f /data/workspace/'ENVIRONMENT.md' ] || cp /workspace-init/'ENVIRONMENT.md' /data/workspace/'ENVIRONMENT.md'" {
 		t.Errorf("line 5: %q", lines[5])
+	}
+	if lines[6] != "[ -f /data/workspace/'SOUL.md' ] || cp /workspace-init/'SOUL.md' /data/workspace/'SOUL.md'" {
+		t.Errorf("line 6: %q", lines[6])
 	}
 }
 
@@ -4167,7 +4194,7 @@ func TestBuildInitScript_DirsOnly(t *testing.T) {
 	}
 
 	script := BuildInitScript(instance, nil)
-	expected := "cp /config/'openclaw.json' /data/openclaw.json\nmkdir -p /data/workspace/'memory'\nmkdir -p /data/workspace/'tools/scripts'"
+	expected := "cp /config/'openclaw.json' /data/openclaw.json\nmkdir -p /data/workspace/'memory'\nmkdir -p /data/workspace/'tools/scripts'\n" + envSeedLines
 	if script != expected {
 		t.Errorf("unexpected script:\ngot:  %q\nwant: %q", script, expected)
 	}
@@ -4182,7 +4209,7 @@ func TestBuildInitScript_ShellQuotesSpecialChars(t *testing.T) {
 	}
 
 	script := BuildInitScript(instance, nil)
-	expected := "cp /config/'openclaw.json' /data/openclaw.json\nmkdir -p /data/workspace\n[ -f /data/workspace/'it'\\''s a file.md' ] || cp /workspace-init/'it'\\''s a file.md' /data/workspace/'it'\\''s a file.md'"
+	expected := "cp /config/'openclaw.json' /data/openclaw.json\nmkdir -p /data/workspace\n[ -f /data/workspace/'ENVIRONMENT.md' ] || cp /workspace-init/'ENVIRONMENT.md' /data/workspace/'ENVIRONMENT.md'\n[ -f /data/workspace/'it'\\''s a file.md' ] || cp /workspace-init/'it'\\''s a file.md' /data/workspace/'it'\\''s a file.md'"
 	if script != expected {
 		t.Errorf("unexpected script:\ngot:  %q\nwant: %q", script, expected)
 	}
@@ -4207,8 +4234,8 @@ func TestBuildInitScript_FilesOnly_MkdirWorkspace(t *testing.T) {
 func TestBuildInitScript_VanillaDeployment(t *testing.T) {
 	instance := newTestInstance("init-empty")
 	script := BuildInitScript(instance, nil)
-	// Vanilla deployments now get a config copy (gateway.bind=lan)
-	expected := "cp /config/'openclaw.json' /data/openclaw.json"
+	// Vanilla deployments get config copy + ENVIRONMENT.md seeding
+	expected := "cp /config/'openclaw.json' /data/openclaw.json\n" + envSeedLines
 	if script != expected {
 		t.Errorf("unexpected script:\ngot:  %q\nwant: %q", script, expected)
 	}
@@ -4290,7 +4317,7 @@ func TestBuildStatefulSet_WorkspaceVolume(t *testing.T) {
 	assertVolumeMount(t, init.VolumeMounts, "workspace-init", "/workspace-init")
 }
 
-func TestBuildStatefulSet_NoWorkspaceVolume(t *testing.T) {
+func TestBuildStatefulSet_AlwaysHasWorkspaceVolume(t *testing.T) {
 	instance := newTestInstance("no-ws-vol")
 	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
@@ -4298,14 +4325,14 @@ func TestBuildStatefulSet_NoWorkspaceVolume(t *testing.T) {
 
 	sts := BuildStatefulSet(instance, "", nil)
 
-	// No workspace-init volume
+	// workspace-init volume always exists because ENVIRONMENT.md is always injected
 	wsVol := findVolume(sts.Spec.Template.Spec.Volumes, "workspace-init")
-	if wsVol != nil {
-		t.Error("workspace-init volume should not exist without workspace files")
+	if wsVol == nil {
+		t.Error("workspace-init volume should always exist (ENVIRONMENT.md is always injected)")
 	}
 }
 
-func TestBuildStatefulSet_WorkspaceDirsOnly_NoVolume(t *testing.T) {
+func TestBuildStatefulSet_WorkspaceDirsOnly_StillHasVolume(t *testing.T) {
 	instance := newTestInstance("ws-dirs-no-vol")
 	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
@@ -4316,13 +4343,13 @@ func TestBuildStatefulSet_WorkspaceDirsOnly_NoVolume(t *testing.T) {
 
 	sts := BuildStatefulSet(instance, "", nil)
 
-	// Dirs only — no workspace-init volume needed (no files to mount)
+	// workspace-init volume always exists because ENVIRONMENT.md is always injected
 	wsVol := findVolume(sts.Spec.Template.Spec.Volumes, "workspace-init")
-	if wsVol != nil {
-		t.Error("workspace-init volume should not exist with only directories")
+	if wsVol == nil {
+		t.Error("workspace-init volume should exist (ENVIRONMENT.md is always injected)")
 	}
 
-	// But init container should still exist (for mkdir commands)
+	// Init container should exist (for mkdir + file seeding)
 	if len(sts.Spec.Template.Spec.InitContainers) == 0 {
 		t.Fatal("expected init container for workspace directories")
 	}
@@ -4375,6 +4402,36 @@ func TestBuildStatefulSet_ReadOnlyRootFilesystem_ExplicitFalse(t *testing.T) {
 
 	if main.SecurityContext.ReadOnlyRootFilesystem == nil || *main.SecurityContext.ReadOnlyRootFilesystem {
 		t.Error("readOnlyRootFilesystem should be false when explicitly overridden")
+	}
+}
+
+func TestBuildStatefulSet_WritablePVCSubPaths(t *testing.T) {
+	instance := newTestInstance("writable-subpaths")
+	sts := BuildStatefulSet(instance, "", nil)
+	main := sts.Spec.Template.Spec.Containers[0]
+
+	// Verify ~/.local and ~/.cache are mounted as PVC subPaths for pip/package installs
+	wantMounts := []struct {
+		mountPath string
+		subPath   string
+	}{
+		{"/home/openclaw/.local", ".local"},
+		{"/home/openclaw/.cache", ".cache"},
+	}
+	for _, want := range wantMounts {
+		found := false
+		for _, m := range main.VolumeMounts {
+			if m.Name == "data" && m.MountPath == want.mountPath {
+				found = true
+				if m.SubPath != want.subPath {
+					t.Errorf("mount %s: subPath = %q, want %q", want.mountPath, m.SubPath, want.subPath)
+				}
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected PVC subPath mount at %s not found", want.mountPath)
+		}
 	}
 }
 
@@ -5545,17 +5602,23 @@ func TestBuildStatefulSet_CustomInitContainers_AfterOperatorManaged(t *testing.T
 	sts := BuildStatefulSet(instance, "", nil)
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
-	if len(initContainers) != 3 {
-		t.Fatalf("expected 3 init containers, got %d", len(initContainers))
+	if len(initContainers) != 5 {
+		t.Fatalf("expected 5 init containers, got %d", len(initContainers))
 	}
 	if initContainers[0].Name != "init-config" {
 		t.Errorf("initContainers[0] = %q, want init-config", initContainers[0].Name)
 	}
-	if initContainers[1].Name != "init-skills" {
-		t.Errorf("initContainers[1] = %q, want init-skills", initContainers[1].Name)
+	if initContainers[1].Name != "init-uv" {
+		t.Errorf("initContainers[1] = %q, want init-uv", initContainers[1].Name)
 	}
-	if initContainers[2].Name != "user-init" {
-		t.Errorf("initContainers[2] = %q, want user-init", initContainers[2].Name)
+	if initContainers[2].Name != "init-pip" {
+		t.Errorf("initContainers[2] = %q, want init-pip", initContainers[2].Name)
+	}
+	if initContainers[3].Name != "init-skills" {
+		t.Errorf("initContainers[3] = %q, want init-skills", initContainers[3].Name)
+	}
+	if initContainers[4].Name != "user-init" {
+		t.Errorf("initContainers[4] = %q, want user-init", initContainers[4].Name)
 	}
 }
 
@@ -5899,7 +5962,7 @@ func TestBuildStatefulSet_RuntimeDeps_InitContainerOrder(t *testing.T) {
 	sts := BuildStatefulSet(instance, "", nil)
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
-	expected := []string{"init-config", "init-pnpm", "init-python", "init-skills", "user-init"}
+	expected := []string{"init-config", "init-uv", "init-pip", "init-pnpm", "init-python", "init-skills", "user-init"}
 	if len(initContainers) != len(expected) {
 		t.Fatalf("expected %d init containers, got %d: %v", len(expected), len(initContainers),
 			func() []string {
@@ -6164,11 +6227,12 @@ func TestBuildStatefulSet_TailscaleSidecar(t *testing.T) {
 	if envMap["TS_HOSTNAME"].Value != "ts-sidecar" {
 		t.Errorf("TS_HOSTNAME = %q, want %q", envMap["TS_HOSTNAME"].Value, "ts-sidecar")
 	}
-	if envMap["TS_KUBE_SECRET"].Value != "" {
-		t.Errorf("TS_KUBE_SECRET = %q, want empty string", envMap["TS_KUBE_SECRET"].Value)
+	expectedStateSecret := TailscaleStateSecretName(instance)
+	if envMap["TS_KUBE_SECRET"].Value != expectedStateSecret {
+		t.Errorf("TS_KUBE_SECRET = %q, want %q", envMap["TS_KUBE_SECRET"].Value, expectedStateSecret)
 	}
-	if envMap["KUBERNETES_SERVICE_HOST"].Value != "" {
-		t.Errorf("KUBERNETES_SERVICE_HOST = %q, want empty string", envMap["KUBERNETES_SERVICE_HOST"].Value)
+	if _, hasKSH := envMap["KUBERNETES_SERVICE_HOST"]; hasKSH {
+		t.Error("KUBERNETES_SERVICE_HOST should not be set (containerboot needs kube API access)")
 	}
 
 	tsAuthKey, ok := envMap["TS_AUTHKEY"]
@@ -6804,6 +6868,100 @@ func TestBuildStatefulSet_TailscaleFunnel_UsesHTTPProbes(t *testing.T) {
 	}
 	if container.StartupProbe.HTTPGet == nil {
 		t.Fatal("startup probe should use HTTPGet handler when Tailscale funnel is enabled")
+	}
+}
+
+func TestBuildStatefulSet_TailscaleStateSecretName(t *testing.T) {
+	instance := newTestInstance("ts-state")
+	got := TailscaleStateSecretName(instance)
+	want := "ts-state-ts-state"
+	if got != want {
+		t.Errorf("TailscaleStateSecretName = %q, want %q", got, want)
+	}
+}
+
+func TestBuildTailscaleStateSecret(t *testing.T) {
+	instance := newTestInstance("ts-secret")
+	secret := BuildTailscaleStateSecret(instance)
+
+	if secret.Name != TailscaleStateSecretName(instance) {
+		t.Errorf("secret name = %q, want %q", secret.Name, TailscaleStateSecretName(instance))
+	}
+	if secret.Namespace != instance.Namespace {
+		t.Errorf("secret namespace = %q, want %q", secret.Namespace, instance.Namespace)
+	}
+	if secret.Data != nil {
+		t.Error("state secret should have nil Data (containerboot manages content)")
+	}
+}
+
+func TestBuildStatefulSet_TailscaleAutoMountToken(t *testing.T) {
+	instance := newTestInstance("ts-automount")
+	instance.Spec.Tailscale.Enabled = true
+
+	sts := BuildStatefulSet(instance, "", nil)
+	token := sts.Spec.Template.Spec.AutomountServiceAccountToken
+	if token == nil || !*token {
+		t.Error("AutomountServiceAccountToken should be true when Tailscale is enabled")
+	}
+}
+
+func TestBuildServiceAccount_TailscaleAutoMountToken(t *testing.T) {
+	instance := newTestInstance("ts-sa-token")
+	instance.Spec.Tailscale.Enabled = true
+
+	sa := BuildServiceAccount(instance)
+	if sa.AutomountServiceAccountToken == nil || !*sa.AutomountServiceAccountToken {
+		t.Error("AutomountServiceAccountToken should be true when Tailscale is enabled")
+	}
+}
+
+func TestBuildRole_TailscaleStateSecretRule(t *testing.T) {
+	instance := newTestInstance("ts-role")
+	instance.Spec.Tailscale.Enabled = true
+
+	role := BuildRole(instance)
+
+	var found bool
+	for _, rule := range role.Rules {
+		for _, res := range rule.Resources {
+			if res == "secrets" {
+				for _, name := range rule.ResourceNames {
+					if name == TailscaleStateSecretName(instance) {
+						found = true
+						// Verify verbs
+						verbSet := make(map[string]bool)
+						for _, v := range rule.Verbs {
+							verbSet[v] = true
+						}
+						if !verbSet["get"] || !verbSet["update"] || !verbSet["patch"] {
+							t.Errorf("expected get/update/patch verbs, got %v", rule.Verbs)
+						}
+					}
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("Role should include a rule for the Tailscale state Secret")
+	}
+}
+
+func TestBuildRole_NoTailscaleRule_WhenDisabled(t *testing.T) {
+	instance := newTestInstance("no-ts-role")
+
+	role := BuildRole(instance)
+
+	for _, rule := range role.Rules {
+		for _, res := range rule.Resources {
+			if res == "secrets" {
+				for _, name := range rule.ResourceNames {
+					if name == TailscaleStateSecretName(instance) {
+						t.Error("Role should not include Tailscale state Secret rule when Tailscale is disabled")
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -7946,8 +8104,15 @@ func TestBuildWorkspaceConfigMap_SelfConfigureDisabledNoFiles(t *testing.T) {
 
 	cm := BuildWorkspaceConfigMap(instance, nil)
 
-	if cm != nil {
-		t.Error("BuildWorkspaceConfigMap should return nil when no workspace files and self-configure disabled")
+	// ENVIRONMENT.md is always injected, so ConfigMap is never nil
+	if cm == nil {
+		t.Fatal("expected non-nil ConfigMap (ENVIRONMENT.md is always injected)")
+	}
+	if _, ok := cm.Data["ENVIRONMENT.md"]; !ok {
+		t.Error("expected ENVIRONMENT.md in workspace ConfigMap")
+	}
+	if _, ok := cm.Data["SELFCONFIG.md"]; ok {
+		t.Error("SELFCONFIG.md should not be present when self-configure is disabled")
 	}
 }
 
@@ -9585,7 +9750,360 @@ func TestBuildWorkspaceConfigMap_NilWorkspace(t *testing.T) {
 	instance := newTestInstance("ws-nil")
 	instance.Spec.Workspace = nil
 	cm := BuildWorkspaceConfigMap(instance, nil)
-	if cm != nil {
-		t.Error("expected nil ConfigMap when workspace is nil")
+	// ENVIRONMENT.md is always injected, so the ConfigMap is never nil
+	if cm == nil {
+		t.Fatal("expected non-nil ConfigMap (ENVIRONMENT.md is always injected)")
+	}
+	if _, ok := cm.Data["ENVIRONMENT.md"]; !ok {
+		t.Error("expected ENVIRONMENT.md in workspace ConfigMap")
+	}
+	if len(cm.Data) != 1 {
+		t.Errorf("expected exactly 1 file (ENVIRONMENT.md), got %d", len(cm.Data))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Container security context - runAsNonRoot / runAsUser propagation (#263)
+// ---------------------------------------------------------------------------
+
+func TestBuildStatefulSet_RunAsNonRoot_DefaultBehavior(t *testing.T) {
+	// When no security context overrides are set, all containers should
+	// default to runAsNonRoot: true.
+	instance := newTestInstance("default-sec")
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.AuthKeySecretRef = &corev1.LocalObjectReference{Name: "ts-secret"}
+	instance.Spec.WebTerminal.Enabled = true
+	instance.Spec.Skills = []string{"@test/skill"}
+
+	sts := BuildStatefulSet(instance, "", nil)
+	containers := sts.Spec.Template.Spec.Containers
+	initContainers := sts.Spec.Template.Spec.InitContainers
+
+	// Main container
+	main := containers[0]
+	if main.SecurityContext.RunAsNonRoot == nil || !*main.SecurityContext.RunAsNonRoot {
+		t.Error("main container: runAsNonRoot should default to true")
+	}
+
+	// Check all init containers
+	for _, ic := range initContainers {
+		if ic.SecurityContext == nil || ic.SecurityContext.RunAsNonRoot == nil {
+			t.Errorf("init container %q: security context or runAsNonRoot is nil", ic.Name)
+			continue
+		}
+		// Ollama init runs as root intentionally
+		if ic.Name == "init-ollama" {
+			continue
+		}
+		if !*ic.SecurityContext.RunAsNonRoot {
+			t.Errorf("init container %q: runAsNonRoot should default to true", ic.Name)
+		}
+	}
+
+	// Tailscale sidecar
+	for _, c := range containers {
+		if c.Name == "tailscale" {
+			if c.SecurityContext.RunAsNonRoot == nil || !*c.SecurityContext.RunAsNonRoot {
+				t.Error("tailscale sidecar: runAsNonRoot should default to true")
+			}
+		}
+		if c.Name == "web-terminal" {
+			if c.SecurityContext.RunAsNonRoot == nil || !*c.SecurityContext.RunAsNonRoot {
+				t.Error("web-terminal sidecar: runAsNonRoot should default to true")
+			}
+		}
+	}
+}
+
+func TestBuildStatefulSet_PodLevelRunAsNonRootFalse_Propagation(t *testing.T) {
+	// When podSecurityContext.runAsNonRoot is explicitly set to false,
+	// it should propagate to the main container, init containers, and
+	// applicable sidecars.
+	instance := newTestInstance("pod-nonroot-false")
+	instance.Spec.Security.PodSecurityContext = &openclawv1alpha1.PodSecurityContextSpec{
+		RunAsNonRoot: Ptr(false),
+	}
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.AuthKeySecretRef = &corev1.LocalObjectReference{Name: "ts-secret"}
+	instance.Spec.WebTerminal.Enabled = true
+	instance.Spec.Chromium.Enabled = true
+	instance.Spec.Skills = []string{"@test/skill"}
+	instance.Spec.RuntimeDeps.Pnpm = true
+	instance.Spec.RuntimeDeps.Python = true
+
+	sts := BuildStatefulSet(instance, "", nil)
+	containers := sts.Spec.Template.Spec.Containers
+	initContainers := sts.Spec.Template.Spec.InitContainers
+
+	// Main container should inherit pod-level runAsNonRoot: false
+	main := containers[0]
+	if main.SecurityContext.RunAsNonRoot == nil || *main.SecurityContext.RunAsNonRoot {
+		t.Error("main container: runAsNonRoot should be false (inherited from pod)")
+	}
+
+	// Init containers that should inherit pod-level runAsNonRoot: false
+	wantFalse := map[string]bool{
+		"init-config":        true,
+		"init-skills":        true,
+		"init-pnpm":          true,
+		"init-python":        true,
+		"init-tailscale-bin": true,
+	}
+	for _, ic := range initContainers {
+		if !wantFalse[ic.Name] {
+			continue
+		}
+		if ic.SecurityContext == nil || ic.SecurityContext.RunAsNonRoot == nil {
+			t.Errorf("init container %q: security context or runAsNonRoot is nil", ic.Name)
+			continue
+		}
+		if *ic.SecurityContext.RunAsNonRoot {
+			t.Errorf("init container %q: runAsNonRoot should be false (inherited from pod)", ic.Name)
+		}
+	}
+
+	// Tailscale sidecar should inherit pod-level runAsNonRoot: false
+	for _, c := range containers {
+		if c.Name == "tailscale" {
+			if c.SecurityContext.RunAsNonRoot == nil || *c.SecurityContext.RunAsNonRoot {
+				t.Error("tailscale sidecar: runAsNonRoot should be false (inherited from pod)")
+			}
+		}
+		// Web terminal should also inherit pod-level runAsNonRoot: false
+		if c.Name == "web-terminal" {
+			if c.SecurityContext.RunAsNonRoot == nil || *c.SecurityContext.RunAsNonRoot {
+				t.Error("web-terminal sidecar: runAsNonRoot should be false (inherited from pod)")
+			}
+		}
+	}
+
+	// Gateway proxy should STILL have runAsNonRoot: true (has its own RunAsUser: 101)
+	for _, c := range containers {
+		if c.Name == "gateway-proxy" {
+			if c.SecurityContext.RunAsNonRoot == nil || !*c.SecurityContext.RunAsNonRoot {
+				t.Error("gateway-proxy: runAsNonRoot should still be true (self-consistent with RunAsUser: 101)")
+			}
+			if c.SecurityContext.RunAsUser == nil || *c.SecurityContext.RunAsUser != 101 {
+				t.Error("gateway-proxy: runAsUser should be 101")
+			}
+		}
+	}
+
+	// Chromium should STILL have runAsNonRoot: true (has its own RunAsUser: 999)
+	for _, c := range containers {
+		if c.Name == "chromium" {
+			if c.SecurityContext.RunAsNonRoot == nil || !*c.SecurityContext.RunAsNonRoot {
+				t.Error("chromium: runAsNonRoot should still be true (self-consistent with RunAsUser: 999)")
+			}
+			if c.SecurityContext.RunAsUser == nil || *c.SecurityContext.RunAsUser != 999 {
+				t.Error("chromium: runAsUser should be 999")
+			}
+		}
+	}
+}
+
+func TestBuildStatefulSet_ContainerLevelRunAsNonRootOverride(t *testing.T) {
+	// When containerSecurityContext.runAsNonRoot is explicitly set to false
+	// but pod-level is default (true), only the main container should change.
+	instance := newTestInstance("container-nonroot-false")
+	instance.Spec.Security.ContainerSecurityContext = &openclawv1alpha1.ContainerSecurityContextSpec{
+		RunAsNonRoot: Ptr(false),
+	}
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.AuthKeySecretRef = &corev1.LocalObjectReference{Name: "ts-secret"}
+
+	sts := BuildStatefulSet(instance, "", nil)
+	containers := sts.Spec.Template.Spec.Containers
+	initContainers := sts.Spec.Template.Spec.InitContainers
+
+	// Main container should have runAsNonRoot: false (from container-level override)
+	main := containers[0]
+	if main.SecurityContext.RunAsNonRoot == nil || *main.SecurityContext.RunAsNonRoot {
+		t.Error("main container: runAsNonRoot should be false (container-level override)")
+	}
+
+	// Init containers should still be true (they use pod-level, not container-level)
+	for _, ic := range initContainers {
+		if ic.SecurityContext == nil || ic.SecurityContext.RunAsNonRoot == nil {
+			continue
+		}
+		// Skip ollama init (runs as root)
+		if ic.Name == "init-ollama" {
+			continue
+		}
+		if !*ic.SecurityContext.RunAsNonRoot {
+			t.Errorf("init container %q: runAsNonRoot should still be true (pod-level default)", ic.Name)
+		}
+	}
+
+	// Tailscale sidecar should still be true (uses pod-level)
+	for _, c := range containers {
+		if c.Name == "tailscale" {
+			if c.SecurityContext.RunAsNonRoot == nil || !*c.SecurityContext.RunAsNonRoot {
+				t.Error("tailscale sidecar: runAsNonRoot should still be true (pod-level default)")
+			}
+		}
+	}
+}
+
+func TestBuildStatefulSet_ContainerLevelRunAsUser(t *testing.T) {
+	// When containerSecurityContext.runAsUser is set, it should appear on
+	// the main container only.
+	instance := newTestInstance("container-runasuser")
+	instance.Spec.Security.ContainerSecurityContext = &openclawv1alpha1.ContainerSecurityContextSpec{
+		RunAsUser: Ptr(int64(2000)),
+	}
+
+	sts := BuildStatefulSet(instance, "", nil)
+	main := sts.Spec.Template.Spec.Containers[0]
+
+	if main.SecurityContext.RunAsUser == nil || *main.SecurityContext.RunAsUser != 2000 {
+		t.Errorf("main container: runAsUser = %v, want 2000", main.SecurityContext.RunAsUser)
+	}
+	// runAsNonRoot should still be true (default)
+	if main.SecurityContext.RunAsNonRoot == nil || !*main.SecurityContext.RunAsNonRoot {
+		t.Error("main container: runAsNonRoot should still be true (default)")
+	}
+}
+
+func TestBuildStatefulSet_FullNonRootFalseScenario(t *testing.T) {
+	// Both pod-level runAsNonRoot: false and container-level runAsNonRoot: false.
+	// Verify no contradictions exist in any container.
+	instance := newTestInstance("full-nonroot-false")
+	instance.Spec.Security.PodSecurityContext = &openclawv1alpha1.PodSecurityContextSpec{
+		RunAsNonRoot: Ptr(false),
+		RunAsUser:    Ptr(int64(1000)), // non-zero to keep it valid
+	}
+	instance.Spec.Security.ContainerSecurityContext = &openclawv1alpha1.ContainerSecurityContextSpec{
+		RunAsNonRoot: Ptr(false),
+		RunAsUser:    Ptr(int64(1000)),
+	}
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.AuthKeySecretRef = &corev1.LocalObjectReference{Name: "ts-secret"}
+	instance.Spec.WebTerminal.Enabled = true
+	instance.Spec.Chromium.Enabled = true
+	instance.Spec.Ollama.Enabled = true
+	instance.Spec.Skills = []string{"@test/skill"}
+	instance.Spec.RuntimeDeps.Pnpm = true
+	instance.Spec.RuntimeDeps.Python = true
+
+	sts := BuildStatefulSet(instance, "", nil)
+	var allContainers []corev1.Container
+	allContainers = append(allContainers, sts.Spec.Template.Spec.InitContainers...)
+	allContainers = append(allContainers, sts.Spec.Template.Spec.Containers...)
+
+	for _, c := range allContainers {
+		if c.SecurityContext == nil {
+			continue
+		}
+		sc := c.SecurityContext
+
+		// Self-consistent containers (have their own RunAsUser) should not
+		// contradict their own RunAsNonRoot
+		if sc.RunAsNonRoot != nil && sc.RunAsUser != nil {
+			nonRoot := *sc.RunAsNonRoot
+			uid := *sc.RunAsUser
+			if nonRoot && uid == 0 {
+				t.Errorf("container %q: runAsNonRoot=true contradicts runAsUser=0", c.Name)
+			}
+		}
+	}
+
+	// Main container should have runAsNonRoot: false and runAsUser: 1000
+	main := sts.Spec.Template.Spec.Containers[0]
+	if main.SecurityContext.RunAsNonRoot == nil || *main.SecurityContext.RunAsNonRoot {
+		t.Error("main container: runAsNonRoot should be false")
+	}
+	if main.SecurityContext.RunAsUser == nil || *main.SecurityContext.RunAsUser != 1000 {
+		t.Errorf("main container: runAsUser should be 1000, got %v", main.SecurityContext.RunAsUser)
+	}
+
+	// Verify init containers with pod-level inheritance
+	for _, ic := range sts.Spec.Template.Spec.InitContainers {
+		switch ic.Name {
+		case "init-config", "init-skills", "init-pnpm", "init-python", "init-tailscale-bin":
+			if ic.SecurityContext.RunAsNonRoot == nil || *ic.SecurityContext.RunAsNonRoot {
+				t.Errorf("init container %q: runAsNonRoot should be false", ic.Name)
+			}
+		case "init-ollama":
+			// Ollama init always runs as root - should be unchanged
+			if ic.SecurityContext.RunAsNonRoot == nil || *ic.SecurityContext.RunAsNonRoot {
+				t.Errorf("init-ollama: runAsNonRoot should be false (always root)")
+			}
+			if ic.SecurityContext.RunAsUser == nil || *ic.SecurityContext.RunAsUser != 0 {
+				t.Error("init-ollama: runAsUser should be 0")
+			}
+		}
+	}
+
+	// Verify self-consistent sidecars are unchanged
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		switch c.Name {
+		case "gateway-proxy":
+			if !*c.SecurityContext.RunAsNonRoot {
+				t.Error("gateway-proxy: runAsNonRoot should be true (self-consistent)")
+			}
+			if *c.SecurityContext.RunAsUser != 101 {
+				t.Error("gateway-proxy: runAsUser should be 101")
+			}
+		case "chromium":
+			if !*c.SecurityContext.RunAsNonRoot {
+				t.Error("chromium: runAsNonRoot should be true (self-consistent)")
+			}
+			if *c.SecurityContext.RunAsUser != 999 {
+				t.Error("chromium: runAsUser should be 999")
+			}
+		case "ollama":
+			if *c.SecurityContext.RunAsNonRoot {
+				t.Error("ollama: runAsNonRoot should be false (always root)")
+			}
+			if *c.SecurityContext.RunAsUser != 0 {
+				t.Error("ollama: runAsUser should be 0")
+			}
+		}
+	}
+}
+
+func TestPodRunAsNonRoot_Helper(t *testing.T) {
+	tests := []struct {
+		name     string
+		psc      *openclawv1alpha1.PodSecurityContextSpec
+		expected bool
+	}{
+		{
+			name:     "nil pod security context defaults to true",
+			psc:      nil,
+			expected: true,
+		},
+		{
+			name:     "empty pod security context defaults to true",
+			psc:      &openclawv1alpha1.PodSecurityContextSpec{},
+			expected: true,
+		},
+		{
+			name: "explicit true",
+			psc: &openclawv1alpha1.PodSecurityContextSpec{
+				RunAsNonRoot: Ptr(true),
+			},
+			expected: true,
+		},
+		{
+			name: "explicit false",
+			psc: &openclawv1alpha1.PodSecurityContextSpec{
+				RunAsNonRoot: Ptr(false),
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			instance := newTestInstance("helper-test")
+			instance.Spec.Security.PodSecurityContext = tt.psc
+			got := podRunAsNonRoot(instance)
+			if got != tt.expected {
+				t.Errorf("podRunAsNonRoot() = %v, want %v", got, tt.expected)
+			}
+		})
 	}
 }

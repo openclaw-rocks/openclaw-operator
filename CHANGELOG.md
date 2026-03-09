@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.26](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.25...v0.10.26) (2026-03-09)
+
+
+### Features
+
+* persist Tailscale state across pod restarts via TS_KUBE_SECRET ([#265](https://github.com/openclaw-rocks/k8s-operator/issues/265)) ([0a9601d](https://github.com/openclaw-rocks/k8s-operator/commit/0a9601d06972f6d507705c350987d1c12d6c5759)), closes [#262](https://github.com/openclaw-rocks/k8s-operator/issues/262)
+
+
+### Bug Fixes
+
+* remove invalid llmConfig from webhook validation and docs ([#261](https://github.com/openclaw-rocks/k8s-operator/issues/261)) ([e8f7399](https://github.com/openclaw-rocks/k8s-operator/commit/e8f739940e92d2a0a5b2b27ee7cadcab07df6026))
+* respect pod-level runAsNonRoot in container security contexts ([#266](https://github.com/openclaw-rocks/k8s-operator/issues/266)) ([ad21b4c](https://github.com/openclaw-rocks/k8s-operator/commit/ad21b4c59260117ed9d2f13ba8278fb4fe7e56d1)), closes [#263](https://github.com/openclaw-rocks/k8s-operator/issues/263)
+
+## [0.10.25](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.24...v0.10.25) (2026-03-07)
+
+
+### Features
+
+* enable writable package installs on read-only root filesystem ([#254](https://github.com/openclaw-rocks/k8s-operator/issues/254)) ([8d5f4ba](https://github.com/openclaw-rocks/k8s-operator/commit/8d5f4ba3795980589a566cf2866d3af2bf588987))
+
 ## [0.10.24](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.23...v0.10.24) (2026-03-06)
 
 

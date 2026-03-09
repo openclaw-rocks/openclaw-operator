@@ -57,7 +57,6 @@ var knownProviderEnvVars = map[string]bool{
 // knownConfigKeys lists known top-level keys in openclaw.json configuration.
 var knownConfigKeys = map[string]bool{
 	"mcpServers":         true,
-	"llmConfig":          true,
 	"skills":             true,
 	"apiKeys":            true,
 	"settings":           true,
@@ -397,7 +396,7 @@ func validateConfigSchema(instance *openclawv1alpha1.OpenClawInstance) admission
 	var warnings admission.Warnings
 	for key := range topLevel {
 		if !knownConfigKeys[key] {
-			warnings = append(warnings, fmt.Sprintf("Unknown config key %q in spec.config.raw — known keys are: mcpServers, llmConfig, skills, apiKeys, settings, tools, customInstructions", key))
+			warnings = append(warnings, fmt.Sprintf("Unknown config key %q in spec.config.raw — known keys are: mcpServers, skills, apiKeys, settings, tools, customInstructions", key))
 		}
 	}
 	return warnings

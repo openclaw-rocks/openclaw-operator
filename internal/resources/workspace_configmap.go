@@ -37,6 +37,9 @@ func BuildWorkspaceConfigMap(instance *openclawv1alpha1.OpenClawInstance, skillP
 		}
 	}
 
+	// Operator-injected environment documentation (always present)
+	files["ENVIRONMENT.md"] = EnvironmentSkillContent
+
 	// Operator-injected self-configure files
 	if instance.Spec.SelfConfigure.Enabled {
 		files["SELFCONFIG.md"] = SelfConfigureSkillContent
@@ -48,10 +51,6 @@ func BuildWorkspaceConfigMap(instance *openclawv1alpha1.OpenClawInstance, skillP
 		for cmKey, content := range skillPacks.Files {
 			files[cmKey] = content
 		}
-	}
-
-	if len(files) == 0 {
-		return nil
 	}
 
 	return &corev1.ConfigMap{

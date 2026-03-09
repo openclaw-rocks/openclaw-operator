@@ -5637,6 +5637,17 @@ spec:
                           ReadOnlyRootFilesystem mounts the container's root filesystem as read-only
                           The PVC at ~/.openclaw/ provides writable home, and a /tmp emptyDir handles temp files
                         type: boolean
+                      runAsNonRoot:
+                        description: |-
+                          RunAsNonRoot indicates that the container must run as a non-root user.
+                          When not set, inherits from podSecurityContext.runAsNonRoot.
+                        type: boolean
+                      runAsUser:
+                        description: |-
+                          RunAsUser is the UID to run the entrypoint of the container process.
+                          When not set, inherits from podSecurityContext.runAsUser.
+                        format: int64
+                        type: integer
                     type: object
                   networkPolicy:
                     description: NetworkPolicy configures network isolation
@@ -9622,6 +9633,11 @@ spec:
                     type: string
                   statefulSet:
                     description: StatefulSet is the name of the managed StatefulSet
+                    type: string
+                  tailscaleStateSecret:
+                    description: |-
+                      TailscaleStateSecret is the name of the Secret used to persist Tailscale
+                      node identity and TLS certificate state across pod restarts
                     type: string
                 type: object
               observedGeneration:

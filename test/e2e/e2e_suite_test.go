@@ -31,6 +31,7 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -1151,6 +1152,60 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			}
 			Expect(foundSTUN).To(BeTrue(), "NetworkPolicy should have STUN egress (UDP 3478)")
 			Expect(foundWG).To(BeTrue(), "NetworkPolicy should have WireGuard egress (UDP 41641)")
+
+			// Verify Tailscale state Secret is created
+			tsStateSecret := &corev1.Secret{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.TailscaleStateSecretName(instance),
+					Namespace: namespace,
+				}, tsStateSecret)
+			}, timeout, interval).Should(Succeed())
+
+			// Verify TS_KUBE_SECRET env var points to the state Secret
+			var foundTSKubeSecret bool
+			for _, env := range tsSidecar.Env {
+				if env.Name == "TS_KUBE_SECRET" {
+					foundTSKubeSecret = true
+					Expect(env.Value).To(Equal(resources.TailscaleStateSecretName(instance)),
+						"TS_KUBE_SECRET should point to the state Secret")
+				}
+			}
+			Expect(foundTSKubeSecret).To(BeTrue(), "TS_KUBE_SECRET should be set on sidecar")
+
+			// Verify KUBERNETES_SERVICE_HOST is NOT set (containerboot needs kube API access)
+			for _, env := range tsSidecar.Env {
+				Expect(env.Name).NotTo(Equal("KUBERNETES_SERVICE_HOST"),
+					"KUBERNETES_SERVICE_HOST should not be set when using TS_KUBE_SECRET")
+			}
+
+			// Verify AutomountServiceAccountToken is enabled
+			Expect(statefulSet.Spec.Template.Spec.AutomountServiceAccountToken).NotTo(BeNil())
+			Expect(*statefulSet.Spec.Template.Spec.AutomountServiceAccountToken).To(BeTrue(),
+				"AutomountServiceAccountToken should be true when Tailscale is enabled")
+
+			// Verify Role includes Tailscale state Secret rule
+			role := &rbacv1.Role{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.RoleName(instance),
+					Namespace: namespace,
+				}, role)
+			}, timeout, interval).Should(Succeed())
+
+			var foundTSSecretRule bool
+			for _, rule := range role.Rules {
+				for _, res := range rule.Resources {
+					if res == "secrets" {
+						for _, name := range rule.ResourceNames {
+							if name == resources.TailscaleStateSecretName(instance) {
+								foundTSSecretRule = true
+							}
+						}
+					}
+				}
+			}
+			Expect(foundTSSecretRule).To(BeTrue(), "Role should include Tailscale state Secret rule")
 
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})

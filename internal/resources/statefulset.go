@@ -76,7 +76,7 @@ func BuildStatefulSet(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenS
 				Spec: corev1.PodSpec{
 					ServiceAccountName:            ServiceAccountName(instance),
 					DeprecatedServiceAccount:      ServiceAccountName(instance),
-					AutomountServiceAccountToken:  Ptr(instance.Spec.SelfConfigure.Enabled),
+					AutomountServiceAccountToken:  Ptr(instance.Spec.SelfConfigure.Enabled || instance.Spec.Tailscale.Enabled),
 					SecurityContext:               buildPodSecurityContext(instance),
 					InitContainers:                buildInitContainers(instance, skillPacks),
 					Containers:                    buildContainers(instance, gwSecretName),
@@ -145,12 +145,23 @@ func buildPodSecurityContext(instance *openclawv1alpha1.OpenClawInstance) *corev
 	return psc
 }
 
+// podRunAsNonRoot returns the effective RunAsNonRoot value from the pod security context.
+// Returns true if not explicitly configured (secure default).
+func podRunAsNonRoot(instance *openclawv1alpha1.OpenClawInstance) bool {
+	if spec := instance.Spec.Security.PodSecurityContext; spec != nil && spec.RunAsNonRoot != nil {
+		return *spec.RunAsNonRoot
+	}
+	return true
+}
+
 // buildContainerSecurityContext creates the container-level security context
 func buildContainerSecurityContext(instance *openclawv1alpha1.OpenClawInstance) *corev1.SecurityContext {
+	nonRoot := podRunAsNonRoot(instance)
+
 	sc := &corev1.SecurityContext{
 		AllowPrivilegeEscalation: Ptr(false),
-		ReadOnlyRootFilesystem:   Ptr(true), // PVC at ~/.openclaw/ + /tmp emptyDir provide writable paths
-		RunAsNonRoot:             Ptr(true),
+		ReadOnlyRootFilesystem:   Ptr(true), // PVC subpaths at ~/.openclaw/, ~/.local/, ~/.cache/ + /tmp emptyDir provide writable paths
+		RunAsNonRoot:             Ptr(nonRoot),
 		Capabilities: &corev1.Capabilities{
 			Drop: []corev1.Capability{"ALL"},
 		},
@@ -170,6 +181,12 @@ func buildContainerSecurityContext(instance *openclawv1alpha1.OpenClawInstance) 
 		}
 		if spec.Capabilities != nil {
 			sc.Capabilities = spec.Capabilities
+		}
+		if spec.RunAsNonRoot != nil {
+			sc.RunAsNonRoot = spec.RunAsNonRoot
+		}
+		if spec.RunAsUser != nil {
+			sc.RunAsUser = spec.RunAsUser
 		}
 	}
 
@@ -255,6 +272,16 @@ func buildMainContainer(instance *openclawv1alpha1.OpenClawInstance, gatewayToke
 				MountPath: "/home/openclaw/.openclaw",
 			},
 			{
+				Name:      "data",
+				MountPath: "/home/openclaw/.local",
+				SubPath:   ".local",
+			},
+			{
+				Name:      "data",
+				MountPath: "/home/openclaw/.cache",
+				SubPath:   ".cache",
+			},
+			{
 				Name:      "tmp",
 				MountPath: "/tmp",
 			},
@@ -335,6 +362,13 @@ func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecre
 		{Name: "HOME", Value: "/home/openclaw"},
 		// mDNS/Bonjour pairing is unusable in Kubernetes — always disable it
 		{Name: "OPENCLAW_DISABLE_BONJOUR", Value: "1"},
+		// npm: redirect global installs to the writable PVC subpath at ~/.local
+		{Name: "NPM_CONFIG_PREFIX", Value: "/home/openclaw/.local"},
+		// npm/npx: redirect cache to the writable PVC subpath at ~/.cache
+		{Name: "NPM_CONFIG_CACHE", Value: "/home/openclaw/.cache/npm"},
+		// pip: default to user-level installs so "pip install <pkg>" writes to
+		// the writable ~/.local/ PVC subpath instead of read-only system site-packages
+		{Name: "PIP_USER", Value: "1"},
 	}
 
 	if instance.Spec.Chromium.Enabled {
@@ -484,7 +518,7 @@ func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance, skillPacks
 			SecurityContext: &corev1.SecurityContext{
 				AllowPrivilegeEscalation: Ptr(false),
 				ReadOnlyRootFilesystem:   Ptr(readOnlyRoot),
-				RunAsNonRoot:             Ptr(true),
+				RunAsNonRoot:             Ptr(podRunAsNonRoot(instance)),
 				Capabilities: &corev1.Capabilities{
 					Drop: []corev1.Capability{"ALL"},
 				},
@@ -500,6 +534,12 @@ func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance, skillPacks
 	if instance.Spec.Tailscale.Enabled {
 		initContainers = append(initContainers, buildTailscaleBinInitContainer(instance))
 	}
+
+	// uv + pip init containers:
+	// - init-uv: copies uv binary so agents can "uv tool install" CLI tools
+	// - init-pip: bootstraps pip via ensurepip so agents can "pip install <pkg>"
+	//   (PIP_USER=1 makes pip write to the writable ~/.local/ PVC subpath)
+	initContainers = append(initContainers, buildUvInitContainer(), buildPipInitContainer(instance))
 
 	// Runtime dependency init containers (run before skills so skills can use pnpm/python)
 	if instance.Spec.RuntimeDeps.Pnpm {
@@ -598,6 +638,8 @@ func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance, skillPacks *Re
 				allFiles[name] = true
 			}
 		}
+		// Always inject environment documentation
+		allFiles["ENVIRONMENT.md"] = true
 		if instance.Spec.SelfConfigure.Enabled {
 			allFiles["SELFCONFIG.md"] = true
 			allFiles["selfconfig.sh"] = true
@@ -722,7 +764,7 @@ func buildSkillsInitContainer(instance *openclawv1alpha1.OpenClawInstance) *core
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: Ptr(false),
 			ReadOnlyRootFilesystem:   Ptr(false), // npx needs to write to node_modules
-			RunAsNonRoot:             Ptr(true),
+			RunAsNonRoot:             Ptr(podRunAsNonRoot(instance)),
 			Capabilities: &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
 			},
@@ -780,7 +822,7 @@ pnpm --version`
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: Ptr(false),
 			ReadOnlyRootFilesystem:   Ptr(false), // corepack writes to node internals
-			RunAsNonRoot:             Ptr(true),
+			RunAsNonRoot:             Ptr(podRunAsNonRoot(instance)),
 			Capabilities: &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
 			},
@@ -789,6 +831,79 @@ pnpm --version`
 			},
 		},
 		VolumeMounts: mounts,
+	}
+}
+
+// buildUvInitContainer creates an init container that copies the uv binary from
+// the uv image into the PVC-backed ~/.local/bin/. This gives agents immediate
+// access to "uv pip install" for Python packages and "uv tool install" for CLI
+// tools without any manual bootstrapping. The check is idempotent - subsequent
+// pod starts skip the copy if uv is already present.
+func buildUvInitContainer() corev1.Container {
+	script := `set -e
+if [ -x /home/openclaw/.local/bin/uv ]; then echo "uv already installed"; exit 0; fi
+mkdir -p /home/openclaw/.local/bin
+cp /usr/local/bin/uv /home/openclaw/.local/bin/uv
+echo "uv $(/home/openclaw/.local/bin/uv --version) installed"`
+
+	return corev1.Container{
+		Name:                     "init-uv",
+		Image:                    UvImage,
+		Command:                  []string{"sh", "-c", script},
+		ImagePullPolicy:          corev1.PullIfNotPresent,
+		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
+		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+		Resources:                corev1.ResourceRequirements{},
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: Ptr(false),
+			ReadOnlyRootFilesystem:   Ptr(true),
+			RunAsNonRoot:             Ptr(true),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+			SeccompProfile: &corev1.SeccompProfile{
+				Type: corev1.SeccompProfileTypeRuntimeDefault,
+			},
+		},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: "data", MountPath: "/home/openclaw/.local", SubPath: ".local"},
+		},
+	}
+}
+
+// buildPipInitContainer creates an init container that bootstraps pip via ensurepip.
+// Uses the same image as the main container so pip targets the correct Python version.
+// Combined with PIP_USER=1 env var, "pip install <pkg>" writes to the writable
+// ~/.local/ PVC subpath. Runs on every pod start (fast, no network needed).
+func buildPipInitContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
+	script := `python3 -m ensurepip --upgrade --user 2>/dev/null || echo "ensurepip unavailable, skipping"`
+
+	return corev1.Container{
+		Name:                     "init-pip",
+		Image:                    GetImage(instance),
+		Command:                  []string{"sh", "-c", script},
+		ImagePullPolicy:          getPullPolicy(instance),
+		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
+		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+		Resources:                corev1.ResourceRequirements{},
+		Env: []corev1.EnvVar{
+			{Name: "HOME", Value: "/home/openclaw"},
+		},
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: Ptr(false),
+			ReadOnlyRootFilesystem:   Ptr(true),
+			RunAsNonRoot:             Ptr(true),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+			SeccompProfile: &corev1.SeccompProfile{
+				Type: corev1.SeccompProfileTypeRuntimeDefault,
+			},
+		},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: "data", MountPath: "/home/openclaw/.local", SubPath: ".local"},
+			{Name: "tmp", MountPath: "/tmp"},
+		},
 	}
 }
 
@@ -845,7 +960,7 @@ uv --version`
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: Ptr(false),
 			ReadOnlyRootFilesystem:   Ptr(false), // uv needs writable paths
-			RunAsNonRoot:             Ptr(true),
+			RunAsNonRoot:             Ptr(podRunAsNonRoot(instance)),
 			Capabilities: &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
 			},
@@ -857,16 +972,10 @@ uv --version`
 	}
 }
 
-// hasWorkspaceFiles returns true if the instance has workspace files to seed,
-// either from user-defined workspace files or operator-injected self-configure files.
-func hasWorkspaceFiles(instance *openclawv1alpha1.OpenClawInstance, skillPacks *ResolvedSkillPacks) bool {
-	if instance.Spec.SelfConfigure.Enabled {
-		return true
-	}
-	if HasSkillPackFiles(skillPacks) {
-		return true
-	}
-	return instance.Spec.Workspace != nil && len(instance.Spec.Workspace.InitialFiles) > 0
+// hasWorkspaceFiles returns true if the instance has workspace files to seed.
+// Always returns true because the operator always injects ENVIRONMENT.md.
+func hasWorkspaceFiles(_ *openclawv1alpha1.OpenClawInstance, _ *ResolvedSkillPacks) bool {
+	return true
 }
 
 // configMapKey returns the ConfigMap key for the config file.
@@ -895,14 +1004,11 @@ func buildTailscaleContainer(instance *openclawv1alpha1.OpenClawInstance) corev1
 		{Name: "TS_SOCKET", Value: TailscaleSocketPath},
 		{Name: "TS_SERVE_CONFIG", Value: "/etc/tailscale/serve/" + TailscaleServeConfigKey},
 		{Name: "TS_HOSTNAME", Value: hostname},
-		// Disable Kubernetes Secret-based state storage so containerboot
-		// does not try to create a kube client (which requires a service
-		// account token the pod intentionally does not mount).
-		{Name: "TS_KUBE_SECRET", Value: ""},
-		// Override the auto-injected KUBERNETES_SERVICE_HOST so containerboot
-		// does not attempt kube client init (tailscale/tailscale#8188).
-		// State is persisted to TS_STATE_DIR on the emptyDir volume instead.
-		{Name: "KUBERNETES_SERVICE_HOST", Value: ""},
+		// Persist Tailscale node identity and TLS certificates to a
+		// Kubernetes Secret so state survives pod restarts. This prevents
+		// hostname incrementing (device-1, device-2, ...) and Let's Encrypt
+		// certificate re-issuance on every restart.
+		{Name: "TS_KUBE_SECRET", Value: TailscaleStateSecretName(instance)},
 	}
 
 	// Inject TS_AUTHKEY from Secret
@@ -948,7 +1054,7 @@ func buildTailscaleContainer(instance *openclawv1alpha1.OpenClawInstance) corev1
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: Ptr(false),
 			ReadOnlyRootFilesystem:   Ptr(true),
-			RunAsNonRoot:             Ptr(true),
+			RunAsNonRoot:             Ptr(podRunAsNonRoot(instance)),
 			Capabilities: &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
 			},
@@ -1016,7 +1122,7 @@ func buildTailscaleBinInitContainer(instance *openclawv1alpha1.OpenClawInstance)
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: Ptr(false),
 			ReadOnlyRootFilesystem:   Ptr(true),
-			RunAsNonRoot:             Ptr(true),
+			RunAsNonRoot:             Ptr(podRunAsNonRoot(instance)),
 			Capabilities: &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
 			},
@@ -1357,7 +1463,7 @@ func buildWebTerminalContainer(instance *openclawv1alpha1.OpenClawInstance) core
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: Ptr(false),
 			ReadOnlyRootFilesystem:   Ptr(false), // ttyd needs writable rootfs
-			RunAsNonRoot:             Ptr(true),
+			RunAsNonRoot:             Ptr(podRunAsNonRoot(instance)),
 			RunAsUser:                Ptr(int64(1000)), // same as main container
 			Capabilities: &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
