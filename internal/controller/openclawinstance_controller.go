@@ -307,7 +307,15 @@ func (r *OpenClawInstanceReconciler) reconcileResources(ctx context.Context, ins
 	}
 	logger.V(1).Info("Gateway token secret reconciled")
 
-	// 2c. Resolve skill packs from GitHub (non-blocking - failures degrade but don't block provisioning)
+	// 2c. Reconcile Tailscale state Secret (must precede StatefulSet)
+	if instance.Spec.Tailscale.Enabled {
+		if err := r.reconcileTailscaleStateSecret(ctx, instance); err != nil {
+			return fmt.Errorf("failed to reconcile Tailscale state secret: %w", err)
+		}
+		logger.V(1).Info("Tailscale state secret reconciled")
+	}
+
+	// 2d. Resolve skill packs from GitHub (non-blocking - failures degrade but don't block provisioning)
 	var skillPacks *resources.ResolvedSkillPacks
 	packNames := resources.ExtractPackSkills(instance.Spec.Skills)
 	if len(packNames) > 0 && r.SkillPackResolver != nil {
@@ -354,6 +362,12 @@ func (r *OpenClawInstanceReconciler) reconcileResources(ctx context.Context, ins
 		return fmt.Errorf("failed to reconcile PVC: %w", err)
 	}
 	logger.V(1).Info("PVC reconciled")
+
+	// 4a. Reconcile Chromium PVC (if persistence is enabled)
+	if err := r.reconcileChromiumPVC(ctx, instance); err != nil {
+		return fmt.Errorf("failed to reconcile Chromium PVC: %w", err)
+	}
+	logger.V(1).Info("Chromium PVC reconciled")
 
 	// 4b. Restore from backup if spec.restoreFrom is set (must happen after PVC, before StatefulSet)
 	if result, done, err := r.reconcileRestore(ctx, instance); !done {
@@ -609,6 +623,30 @@ func (r *OpenClawInstanceReconciler) reconcileGatewayTokenSecret(ctx context.Con
 	return tokenHex, nil
 }
 
+// reconcileTailscaleStateSecret ensures an empty Secret exists for Tailscale to
+// persist node identity and TLS certificate state. The containerboot process
+// reads and writes state to this Secret via the Kubernetes API (TS_KUBE_SECRET).
+// The operator pre-creates the Secret so that the pod's ServiceAccount only needs
+// get/update/patch (not create) permissions, keeping RBAC minimal.
+func (r *OpenClawInstanceReconciler) reconcileTailscaleStateSecret(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) error {
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      resources.TailscaleStateSecretName(instance),
+			Namespace: instance.Namespace,
+		},
+	}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
+		desired := resources.BuildTailscaleStateSecret(instance)
+		secret.Labels = desired.Labels
+		// Do not overwrite Data - containerboot manages the content
+		return controllerutil.SetControllerReference(instance, secret, r.Scheme)
+	}); err != nil {
+		return fmt.Errorf("failed to reconcile Tailscale state secret: %w", err)
+	}
+	instance.Status.ManagedResources.TailscaleStateSecret = secret.Name
+	return nil
+}
+
 // reconcileConfigMap reconciles the operator-managed ConfigMap for openclaw.json.
 // It always creates the enriched ConfigMap regardless of config source (raw,
 // configMapRef, or none). When configMapRef is set, the external ConfigMap is
@@ -767,6 +805,50 @@ func (r *OpenClawInstanceReconciler) reconcilePVC(ctx context.Context, instance 
 		Message: "PersistentVolumeClaim created successfully",
 	})
 
+	return nil
+}
+
+// reconcileChromiumPVC reconciles the Chromium browser profile PersistentVolumeClaim
+func (r *OpenClawInstanceReconciler) reconcileChromiumPVC(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) error {
+	if !instance.Spec.Chromium.Enabled || !instance.Spec.Chromium.Persistence.Enabled {
+		// Clean up managed Chromium PVC if persistence was disabled
+		if instance.Status.ManagedResources.ChromiumPVC != "" &&
+			instance.Spec.Chromium.Persistence.ExistingClaim == "" {
+			pvc := &corev1.PersistentVolumeClaim{}
+			pvc.Name = resources.ChromiumPVCName(instance)
+			pvc.Namespace = instance.Namespace
+			if err := r.Delete(ctx, pvc); err != nil && !apierrors.IsNotFound(err) {
+				return err
+			}
+		}
+		instance.Status.ManagedResources.ChromiumPVC = ""
+		return nil
+	}
+
+	// Using an existing claim - just track it in status
+	if instance.Spec.Chromium.Persistence.ExistingClaim != "" {
+		instance.Status.ManagedResources.ChromiumPVC = instance.Spec.Chromium.Persistence.ExistingClaim
+		return nil
+	}
+
+	pvc := resources.BuildChromiumPVC(instance)
+	if err := controllerutil.SetControllerReference(instance, pvc, r.Scheme); err != nil {
+		return err
+	}
+
+	// PVCs are immutable after creation, so we only create if not exists
+	existing := &corev1.PersistentVolumeClaim{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(pvc), existing); err != nil {
+		if apierrors.IsNotFound(err) {
+			if createErr := r.Create(ctx, pvc); createErr != nil {
+				return createErr
+			}
+		} else {
+			return err
+		}
+	}
+
+	instance.Status.ManagedResources.ChromiumPVC = pvc.Name
 	return nil
 }
 

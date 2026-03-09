@@ -62,3 +62,35 @@ func BuildPVC(instance *openclawv1alpha1.OpenClawInstance) *corev1.PersistentVol
 
 	return pvc
 }
+
+// BuildChromiumPVC creates a PersistentVolumeClaim for the Chromium browser profile
+func BuildChromiumPVC(instance *openclawv1alpha1.OpenClawInstance) *corev1.PersistentVolumeClaim {
+	labels := Labels(instance)
+
+	size := instance.Spec.Chromium.Persistence.Size
+	if size == "" {
+		size = "1Gi"
+	}
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ChromiumPVCName(instance),
+			Namespace: instance.Namespace,
+			Labels:    labels,
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse(size),
+				},
+			},
+		},
+	}
+
+	if instance.Spec.Chromium.Persistence.StorageClass != nil {
+		pvc.Spec.StorageClassName = instance.Spec.Chromium.Persistence.StorageClass
+	}
+
+	return pvc
+}

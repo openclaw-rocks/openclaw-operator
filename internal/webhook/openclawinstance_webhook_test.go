@@ -1252,7 +1252,7 @@ func TestValidateCreate_ConfigSchema_ValidKeys(t *testing.T) {
 	instance := newTestInstance()
 	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
 		RawExtension: k8sruntime.RawExtension{
-			Raw: []byte(`{"mcpServers":{},"llmConfig":{},"settings":{}}`),
+			Raw: []byte(`{"mcpServers":{},"settings":{},"apiKeys":{}}`),
 		},
 	}
 

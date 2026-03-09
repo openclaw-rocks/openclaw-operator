@@ -528,6 +528,7 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 	// Chromium volume mounts
 	assertVolumeMount(t, chromium.VolumeMounts, "chromium-tmp", "/tmp")
 	assertVolumeMount(t, chromium.VolumeMounts, "chromium-shm", "/dev/shm")
+	assertVolumeMount(t, chromium.VolumeMounts, "chromium-data", "/chromium-data")
 
 	// Volumes - check chromium-specific volumes exist
 	volumes := sts.Spec.Template.Spec.Volumes
@@ -555,6 +556,27 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 	}
 	if shmVol.EmptyDir.SizeLimit.Cmp(*expectedShmSize) != 0 {
 		t.Errorf("chromium-shm sizeLimit = %v, want 1Gi", shmVol.EmptyDir.SizeLimit.String())
+	}
+
+	// chromium-data should be emptyDir when persistence is not enabled
+	dataVol := findVolume(volumes, "chromium-data")
+	if dataVol == nil {
+		t.Fatal("chromium-data volume not found")
+	}
+	if dataVol.EmptyDir == nil {
+		t.Error("chromium-data should be emptyDir when persistence is disabled")
+	}
+
+	// Without persistence, --user-data-dir should NOT be in launch args
+	var launchArgs string
+	for _, env := range chromium.Env {
+		if env.Name == "DEFAULT_LAUNCH_ARGS" {
+			launchArgs = env.Value
+			break
+		}
+	}
+	if strings.Contains(launchArgs, "--user-data-dir") {
+		t.Error("--user-data-dir should not be set when persistence is disabled")
 	}
 }
 
@@ -2790,6 +2812,72 @@ func TestBuildPVC_CustomAccessModes(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Chromium PVC builder tests
+// ---------------------------------------------------------------------------
+
+func TestBuildChromiumPVC_Default(t *testing.T) {
+	instance := newTestInstance("chromium-pvc-test")
+	instance.Spec.Chromium.Enabled = true
+	instance.Spec.Chromium.Persistence.Enabled = true
+
+	pvc := BuildChromiumPVC(instance)
+
+	if pvc.Name != "chromium-pvc-test-chromium-data" {
+		t.Errorf("pvc name = %q, want %q", pvc.Name, "chromium-pvc-test-chromium-data")
+	}
+	if pvc.Namespace != "test-ns" {
+		t.Errorf("pvc namespace = %q, want %q", pvc.Namespace, "test-ns")
+	}
+
+	// Default size - 1Gi
+	storageReq := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+	if storageReq.Cmp(resource.MustParse("1Gi")) != 0 {
+		t.Errorf("storage size = %v, want 1Gi", storageReq.String())
+	}
+
+	// Default access mode - ReadWriteOnce
+	if len(pvc.Spec.AccessModes) != 1 {
+		t.Fatalf("expected 1 access mode, got %d", len(pvc.Spec.AccessModes))
+	}
+	if pvc.Spec.AccessModes[0] != corev1.ReadWriteOnce {
+		t.Errorf("access mode = %v, want ReadWriteOnce", pvc.Spec.AccessModes[0])
+	}
+
+	// No storage class by default
+	if pvc.Spec.StorageClassName != nil {
+		t.Errorf("storageClassName should be nil by default, got %v", *pvc.Spec.StorageClassName)
+	}
+
+	// Should NOT have backup annotation (chromium PVC is not backed up)
+	if _, ok := pvc.Annotations["openclaw.rocks/backup-enabled"]; ok {
+		t.Error("chromium PVC should not have backup-enabled annotation")
+	}
+}
+
+func TestBuildChromiumPVC_CustomSize(t *testing.T) {
+	instance := newTestInstance("chromium-pvc-custom")
+	instance.Spec.Chromium.Enabled = true
+	instance.Spec.Chromium.Persistence.Enabled = true
+	instance.Spec.Chromium.Persistence.Size = "5Gi"
+	scName := "fast-ssd"
+	instance.Spec.Chromium.Persistence.StorageClass = &scName
+
+	pvc := BuildChromiumPVC(instance)
+
+	storageReq := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+	if storageReq.Cmp(resource.MustParse("5Gi")) != 0 {
+		t.Errorf("storage size = %v, want 5Gi", storageReq.String())
+	}
+
+	if pvc.Spec.StorageClassName == nil {
+		t.Fatal("storageClassName should not be nil")
+	}
+	if *pvc.Spec.StorageClassName != "fast-ssd" {
+		t.Errorf("storageClassName = %q, want %q", *pvc.Spec.StorageClassName, "fast-ssd")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // pdb.go tests
 // ---------------------------------------------------------------------------
 
@@ -3786,6 +3874,91 @@ func TestBuildStatefulSet_ChromiumContainerDefaults(t *testing.T) {
 	}
 	if chromium.TerminationMessagePolicy != corev1.TerminationMessageReadFile {
 		t.Errorf("chromium TerminationMessagePolicy = %v, want File", chromium.TerminationMessagePolicy)
+	}
+}
+
+func TestBuildStatefulSet_ChromiumPersistenceEnabled(t *testing.T) {
+	instance := newTestInstance("chromium-persist")
+	instance.Spec.Chromium.Enabled = true
+	instance.Spec.Chromium.Persistence.Enabled = true
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	// chromium-data volume should be a PVC
+	dataVol := findVolume(sts.Spec.Template.Spec.Volumes, "chromium-data")
+	if dataVol == nil {
+		t.Fatal("chromium-data volume not found")
+	}
+	if dataVol.PersistentVolumeClaim == nil {
+		t.Fatal("chromium-data should be a PVC when persistence is enabled")
+	}
+	if dataVol.PersistentVolumeClaim.ClaimName != "chromium-persist-chromium-data" {
+		t.Errorf("PVC claim name = %q, want %q", dataVol.PersistentVolumeClaim.ClaimName, "chromium-persist-chromium-data")
+	}
+
+	// --user-data-dir should be in DEFAULT_LAUNCH_ARGS
+	var chromium *corev1.Container
+	for i := range sts.Spec.Template.Spec.Containers {
+		if sts.Spec.Template.Spec.Containers[i].Name == "chromium" {
+			chromium = &sts.Spec.Template.Spec.Containers[i]
+			break
+		}
+	}
+	if chromium == nil {
+		t.Fatal("chromium container not found")
+	}
+
+	var launchArgs string
+	for _, env := range chromium.Env {
+		if env.Name == "DEFAULT_LAUNCH_ARGS" {
+			launchArgs = env.Value
+			break
+		}
+	}
+	if !strings.Contains(launchArgs, "--user-data-dir=/chromium-data") {
+		t.Errorf("DEFAULT_LAUNCH_ARGS should contain --user-data-dir=/chromium-data, got %q", launchArgs)
+	}
+
+	// Volume mount should exist
+	assertVolumeMount(t, chromium.VolumeMounts, "chromium-data", "/chromium-data")
+}
+
+func TestBuildStatefulSet_ChromiumPersistenceExistingClaim(t *testing.T) {
+	instance := newTestInstance("chromium-existing")
+	instance.Spec.Chromium.Enabled = true
+	instance.Spec.Chromium.Persistence.Enabled = true
+	instance.Spec.Chromium.Persistence.ExistingClaim = "my-chromium-pvc"
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	dataVol := findVolume(sts.Spec.Template.Spec.Volumes, "chromium-data")
+	if dataVol == nil {
+		t.Fatal("chromium-data volume not found")
+	}
+	if dataVol.PersistentVolumeClaim == nil {
+		t.Fatal("chromium-data should be a PVC when using existing claim")
+	}
+	if dataVol.PersistentVolumeClaim.ClaimName != "my-chromium-pvc" {
+		t.Errorf("PVC claim name = %q, want %q", dataVol.PersistentVolumeClaim.ClaimName, "my-chromium-pvc")
+	}
+}
+
+func TestBuildStatefulSet_ChromiumPersistenceDisabled(t *testing.T) {
+	instance := newTestInstance("chromium-no-persist")
+	instance.Spec.Chromium.Enabled = true
+	instance.Spec.Chromium.Persistence.Enabled = false
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	dataVol := findVolume(sts.Spec.Template.Spec.Volumes, "chromium-data")
+	if dataVol == nil {
+		t.Fatal("chromium-data volume not found")
+	}
+	if dataVol.EmptyDir == nil {
+		t.Error("chromium-data should be emptyDir when persistence is disabled")
+	}
+	if dataVol.PersistentVolumeClaim != nil {
+		t.Error("chromium-data should not be a PVC when persistence is disabled")
 	}
 }
 
@@ -6054,11 +6227,12 @@ func TestBuildStatefulSet_TailscaleSidecar(t *testing.T) {
 	if envMap["TS_HOSTNAME"].Value != "ts-sidecar" {
 		t.Errorf("TS_HOSTNAME = %q, want %q", envMap["TS_HOSTNAME"].Value, "ts-sidecar")
 	}
-	if envMap["TS_KUBE_SECRET"].Value != "" {
-		t.Errorf("TS_KUBE_SECRET = %q, want empty string", envMap["TS_KUBE_SECRET"].Value)
+	expectedStateSecret := TailscaleStateSecretName(instance)
+	if envMap["TS_KUBE_SECRET"].Value != expectedStateSecret {
+		t.Errorf("TS_KUBE_SECRET = %q, want %q", envMap["TS_KUBE_SECRET"].Value, expectedStateSecret)
 	}
-	if envMap["KUBERNETES_SERVICE_HOST"].Value != "" {
-		t.Errorf("KUBERNETES_SERVICE_HOST = %q, want empty string", envMap["KUBERNETES_SERVICE_HOST"].Value)
+	if _, hasKSH := envMap["KUBERNETES_SERVICE_HOST"]; hasKSH {
+		t.Error("KUBERNETES_SERVICE_HOST should not be set (containerboot needs kube API access)")
 	}
 
 	tsAuthKey, ok := envMap["TS_AUTHKEY"]
@@ -6694,6 +6868,100 @@ func TestBuildStatefulSet_TailscaleFunnel_UsesHTTPProbes(t *testing.T) {
 	}
 	if container.StartupProbe.HTTPGet == nil {
 		t.Fatal("startup probe should use HTTPGet handler when Tailscale funnel is enabled")
+	}
+}
+
+func TestBuildStatefulSet_TailscaleStateSecretName(t *testing.T) {
+	instance := newTestInstance("ts-state")
+	got := TailscaleStateSecretName(instance)
+	want := "ts-state-ts-state"
+	if got != want {
+		t.Errorf("TailscaleStateSecretName = %q, want %q", got, want)
+	}
+}
+
+func TestBuildTailscaleStateSecret(t *testing.T) {
+	instance := newTestInstance("ts-secret")
+	secret := BuildTailscaleStateSecret(instance)
+
+	if secret.Name != TailscaleStateSecretName(instance) {
+		t.Errorf("secret name = %q, want %q", secret.Name, TailscaleStateSecretName(instance))
+	}
+	if secret.Namespace != instance.Namespace {
+		t.Errorf("secret namespace = %q, want %q", secret.Namespace, instance.Namespace)
+	}
+	if secret.Data != nil {
+		t.Error("state secret should have nil Data (containerboot manages content)")
+	}
+}
+
+func TestBuildStatefulSet_TailscaleAutoMountToken(t *testing.T) {
+	instance := newTestInstance("ts-automount")
+	instance.Spec.Tailscale.Enabled = true
+
+	sts := BuildStatefulSet(instance, "", nil)
+	token := sts.Spec.Template.Spec.AutomountServiceAccountToken
+	if token == nil || !*token {
+		t.Error("AutomountServiceAccountToken should be true when Tailscale is enabled")
+	}
+}
+
+func TestBuildServiceAccount_TailscaleAutoMountToken(t *testing.T) {
+	instance := newTestInstance("ts-sa-token")
+	instance.Spec.Tailscale.Enabled = true
+
+	sa := BuildServiceAccount(instance)
+	if sa.AutomountServiceAccountToken == nil || !*sa.AutomountServiceAccountToken {
+		t.Error("AutomountServiceAccountToken should be true when Tailscale is enabled")
+	}
+}
+
+func TestBuildRole_TailscaleStateSecretRule(t *testing.T) {
+	instance := newTestInstance("ts-role")
+	instance.Spec.Tailscale.Enabled = true
+
+	role := BuildRole(instance)
+
+	var found bool
+	for _, rule := range role.Rules {
+		for _, res := range rule.Resources {
+			if res == "secrets" {
+				for _, name := range rule.ResourceNames {
+					if name == TailscaleStateSecretName(instance) {
+						found = true
+						// Verify verbs
+						verbSet := make(map[string]bool)
+						for _, v := range rule.Verbs {
+							verbSet[v] = true
+						}
+						if !verbSet["get"] || !verbSet["update"] || !verbSet["patch"] {
+							t.Errorf("expected get/update/patch verbs, got %v", rule.Verbs)
+						}
+					}
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("Role should include a rule for the Tailscale state Secret")
+	}
+}
+
+func TestBuildRole_NoTailscaleRule_WhenDisabled(t *testing.T) {
+	instance := newTestInstance("no-ts-role")
+
+	role := BuildRole(instance)
+
+	for _, rule := range role.Rules {
+		for _, res := range rule.Resources {
+			if res == "secrets" {
+				for _, name := range rule.ResourceNames {
+					if name == TailscaleStateSecretName(instance) {
+						t.Error("Role should not include Tailscale state Secret rule when Tailscale is disabled")
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -9491,5 +9759,351 @@ func TestBuildWorkspaceConfigMap_NilWorkspace(t *testing.T) {
 	}
 	if len(cm.Data) != 1 {
 		t.Errorf("expected exactly 1 file (ENVIRONMENT.md), got %d", len(cm.Data))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Container security context - runAsNonRoot / runAsUser propagation (#263)
+// ---------------------------------------------------------------------------
+
+func TestBuildStatefulSet_RunAsNonRoot_DefaultBehavior(t *testing.T) {
+	// When no security context overrides are set, all containers should
+	// default to runAsNonRoot: true.
+	instance := newTestInstance("default-sec")
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.AuthKeySecretRef = &corev1.LocalObjectReference{Name: "ts-secret"}
+	instance.Spec.WebTerminal.Enabled = true
+	instance.Spec.Skills = []string{"@test/skill"}
+
+	sts := BuildStatefulSet(instance, "", nil)
+	containers := sts.Spec.Template.Spec.Containers
+	initContainers := sts.Spec.Template.Spec.InitContainers
+
+	// Main container
+	main := containers[0]
+	if main.SecurityContext.RunAsNonRoot == nil || !*main.SecurityContext.RunAsNonRoot {
+		t.Error("main container: runAsNonRoot should default to true")
+	}
+
+	// Check all init containers
+	for _, ic := range initContainers {
+		if ic.SecurityContext == nil || ic.SecurityContext.RunAsNonRoot == nil {
+			t.Errorf("init container %q: security context or runAsNonRoot is nil", ic.Name)
+			continue
+		}
+		// Ollama init runs as root intentionally
+		if ic.Name == "init-ollama" {
+			continue
+		}
+		if !*ic.SecurityContext.RunAsNonRoot {
+			t.Errorf("init container %q: runAsNonRoot should default to true", ic.Name)
+		}
+	}
+
+	// Tailscale sidecar
+	for _, c := range containers {
+		if c.Name == "tailscale" {
+			if c.SecurityContext.RunAsNonRoot == nil || !*c.SecurityContext.RunAsNonRoot {
+				t.Error("tailscale sidecar: runAsNonRoot should default to true")
+			}
+		}
+		if c.Name == "web-terminal" {
+			if c.SecurityContext.RunAsNonRoot == nil || !*c.SecurityContext.RunAsNonRoot {
+				t.Error("web-terminal sidecar: runAsNonRoot should default to true")
+			}
+		}
+	}
+}
+
+func TestBuildStatefulSet_PodLevelRunAsNonRootFalse_Propagation(t *testing.T) {
+	// When podSecurityContext.runAsNonRoot is explicitly set to false,
+	// it should propagate to the main container, init containers, and
+	// applicable sidecars.
+	instance := newTestInstance("pod-nonroot-false")
+	instance.Spec.Security.PodSecurityContext = &openclawv1alpha1.PodSecurityContextSpec{
+		RunAsNonRoot: Ptr(false),
+	}
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.AuthKeySecretRef = &corev1.LocalObjectReference{Name: "ts-secret"}
+	instance.Spec.WebTerminal.Enabled = true
+	instance.Spec.Chromium.Enabled = true
+	instance.Spec.Skills = []string{"@test/skill"}
+	instance.Spec.RuntimeDeps.Pnpm = true
+	instance.Spec.RuntimeDeps.Python = true
+
+	sts := BuildStatefulSet(instance, "", nil)
+	containers := sts.Spec.Template.Spec.Containers
+	initContainers := sts.Spec.Template.Spec.InitContainers
+
+	// Main container should inherit pod-level runAsNonRoot: false
+	main := containers[0]
+	if main.SecurityContext.RunAsNonRoot == nil || *main.SecurityContext.RunAsNonRoot {
+		t.Error("main container: runAsNonRoot should be false (inherited from pod)")
+	}
+
+	// Init containers that should inherit pod-level runAsNonRoot: false
+	wantFalse := map[string]bool{
+		"init-config":        true,
+		"init-skills":        true,
+		"init-pnpm":          true,
+		"init-python":        true,
+		"init-tailscale-bin": true,
+	}
+	for _, ic := range initContainers {
+		if !wantFalse[ic.Name] {
+			continue
+		}
+		if ic.SecurityContext == nil || ic.SecurityContext.RunAsNonRoot == nil {
+			t.Errorf("init container %q: security context or runAsNonRoot is nil", ic.Name)
+			continue
+		}
+		if *ic.SecurityContext.RunAsNonRoot {
+			t.Errorf("init container %q: runAsNonRoot should be false (inherited from pod)", ic.Name)
+		}
+	}
+
+	// Tailscale sidecar should inherit pod-level runAsNonRoot: false
+	for _, c := range containers {
+		if c.Name == "tailscale" {
+			if c.SecurityContext.RunAsNonRoot == nil || *c.SecurityContext.RunAsNonRoot {
+				t.Error("tailscale sidecar: runAsNonRoot should be false (inherited from pod)")
+			}
+		}
+		// Web terminal should also inherit pod-level runAsNonRoot: false
+		if c.Name == "web-terminal" {
+			if c.SecurityContext.RunAsNonRoot == nil || *c.SecurityContext.RunAsNonRoot {
+				t.Error("web-terminal sidecar: runAsNonRoot should be false (inherited from pod)")
+			}
+		}
+	}
+
+	// Gateway proxy should STILL have runAsNonRoot: true (has its own RunAsUser: 101)
+	for _, c := range containers {
+		if c.Name == "gateway-proxy" {
+			if c.SecurityContext.RunAsNonRoot == nil || !*c.SecurityContext.RunAsNonRoot {
+				t.Error("gateway-proxy: runAsNonRoot should still be true (self-consistent with RunAsUser: 101)")
+			}
+			if c.SecurityContext.RunAsUser == nil || *c.SecurityContext.RunAsUser != 101 {
+				t.Error("gateway-proxy: runAsUser should be 101")
+			}
+		}
+	}
+
+	// Chromium should STILL have runAsNonRoot: true (has its own RunAsUser: 999)
+	for _, c := range containers {
+		if c.Name == "chromium" {
+			if c.SecurityContext.RunAsNonRoot == nil || !*c.SecurityContext.RunAsNonRoot {
+				t.Error("chromium: runAsNonRoot should still be true (self-consistent with RunAsUser: 999)")
+			}
+			if c.SecurityContext.RunAsUser == nil || *c.SecurityContext.RunAsUser != 999 {
+				t.Error("chromium: runAsUser should be 999")
+			}
+		}
+	}
+}
+
+func TestBuildStatefulSet_ContainerLevelRunAsNonRootOverride(t *testing.T) {
+	// When containerSecurityContext.runAsNonRoot is explicitly set to false
+	// but pod-level is default (true), only the main container should change.
+	instance := newTestInstance("container-nonroot-false")
+	instance.Spec.Security.ContainerSecurityContext = &openclawv1alpha1.ContainerSecurityContextSpec{
+		RunAsNonRoot: Ptr(false),
+	}
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.AuthKeySecretRef = &corev1.LocalObjectReference{Name: "ts-secret"}
+
+	sts := BuildStatefulSet(instance, "", nil)
+	containers := sts.Spec.Template.Spec.Containers
+	initContainers := sts.Spec.Template.Spec.InitContainers
+
+	// Main container should have runAsNonRoot: false (from container-level override)
+	main := containers[0]
+	if main.SecurityContext.RunAsNonRoot == nil || *main.SecurityContext.RunAsNonRoot {
+		t.Error("main container: runAsNonRoot should be false (container-level override)")
+	}
+
+	// Init containers should still be true (they use pod-level, not container-level)
+	for _, ic := range initContainers {
+		if ic.SecurityContext == nil || ic.SecurityContext.RunAsNonRoot == nil {
+			continue
+		}
+		// Skip ollama init (runs as root)
+		if ic.Name == "init-ollama" {
+			continue
+		}
+		if !*ic.SecurityContext.RunAsNonRoot {
+			t.Errorf("init container %q: runAsNonRoot should still be true (pod-level default)", ic.Name)
+		}
+	}
+
+	// Tailscale sidecar should still be true (uses pod-level)
+	for _, c := range containers {
+		if c.Name == "tailscale" {
+			if c.SecurityContext.RunAsNonRoot == nil || !*c.SecurityContext.RunAsNonRoot {
+				t.Error("tailscale sidecar: runAsNonRoot should still be true (pod-level default)")
+			}
+		}
+	}
+}
+
+func TestBuildStatefulSet_ContainerLevelRunAsUser(t *testing.T) {
+	// When containerSecurityContext.runAsUser is set, it should appear on
+	// the main container only.
+	instance := newTestInstance("container-runasuser")
+	instance.Spec.Security.ContainerSecurityContext = &openclawv1alpha1.ContainerSecurityContextSpec{
+		RunAsUser: Ptr(int64(2000)),
+	}
+
+	sts := BuildStatefulSet(instance, "", nil)
+	main := sts.Spec.Template.Spec.Containers[0]
+
+	if main.SecurityContext.RunAsUser == nil || *main.SecurityContext.RunAsUser != 2000 {
+		t.Errorf("main container: runAsUser = %v, want 2000", main.SecurityContext.RunAsUser)
+	}
+	// runAsNonRoot should still be true (default)
+	if main.SecurityContext.RunAsNonRoot == nil || !*main.SecurityContext.RunAsNonRoot {
+		t.Error("main container: runAsNonRoot should still be true (default)")
+	}
+}
+
+func TestBuildStatefulSet_FullNonRootFalseScenario(t *testing.T) {
+	// Both pod-level runAsNonRoot: false and container-level runAsNonRoot: false.
+	// Verify no contradictions exist in any container.
+	instance := newTestInstance("full-nonroot-false")
+	instance.Spec.Security.PodSecurityContext = &openclawv1alpha1.PodSecurityContextSpec{
+		RunAsNonRoot: Ptr(false),
+		RunAsUser:    Ptr(int64(1000)), // non-zero to keep it valid
+	}
+	instance.Spec.Security.ContainerSecurityContext = &openclawv1alpha1.ContainerSecurityContextSpec{
+		RunAsNonRoot: Ptr(false),
+		RunAsUser:    Ptr(int64(1000)),
+	}
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.AuthKeySecretRef = &corev1.LocalObjectReference{Name: "ts-secret"}
+	instance.Spec.WebTerminal.Enabled = true
+	instance.Spec.Chromium.Enabled = true
+	instance.Spec.Ollama.Enabled = true
+	instance.Spec.Skills = []string{"@test/skill"}
+	instance.Spec.RuntimeDeps.Pnpm = true
+	instance.Spec.RuntimeDeps.Python = true
+
+	sts := BuildStatefulSet(instance, "", nil)
+	var allContainers []corev1.Container
+	allContainers = append(allContainers, sts.Spec.Template.Spec.InitContainers...)
+	allContainers = append(allContainers, sts.Spec.Template.Spec.Containers...)
+
+	for _, c := range allContainers {
+		if c.SecurityContext == nil {
+			continue
+		}
+		sc := c.SecurityContext
+
+		// Self-consistent containers (have their own RunAsUser) should not
+		// contradict their own RunAsNonRoot
+		if sc.RunAsNonRoot != nil && sc.RunAsUser != nil {
+			nonRoot := *sc.RunAsNonRoot
+			uid := *sc.RunAsUser
+			if nonRoot && uid == 0 {
+				t.Errorf("container %q: runAsNonRoot=true contradicts runAsUser=0", c.Name)
+			}
+		}
+	}
+
+	// Main container should have runAsNonRoot: false and runAsUser: 1000
+	main := sts.Spec.Template.Spec.Containers[0]
+	if main.SecurityContext.RunAsNonRoot == nil || *main.SecurityContext.RunAsNonRoot {
+		t.Error("main container: runAsNonRoot should be false")
+	}
+	if main.SecurityContext.RunAsUser == nil || *main.SecurityContext.RunAsUser != 1000 {
+		t.Errorf("main container: runAsUser should be 1000, got %v", main.SecurityContext.RunAsUser)
+	}
+
+	// Verify init containers with pod-level inheritance
+	for _, ic := range sts.Spec.Template.Spec.InitContainers {
+		switch ic.Name {
+		case "init-config", "init-skills", "init-pnpm", "init-python", "init-tailscale-bin":
+			if ic.SecurityContext.RunAsNonRoot == nil || *ic.SecurityContext.RunAsNonRoot {
+				t.Errorf("init container %q: runAsNonRoot should be false", ic.Name)
+			}
+		case "init-ollama":
+			// Ollama init always runs as root - should be unchanged
+			if ic.SecurityContext.RunAsNonRoot == nil || *ic.SecurityContext.RunAsNonRoot {
+				t.Errorf("init-ollama: runAsNonRoot should be false (always root)")
+			}
+			if ic.SecurityContext.RunAsUser == nil || *ic.SecurityContext.RunAsUser != 0 {
+				t.Error("init-ollama: runAsUser should be 0")
+			}
+		}
+	}
+
+	// Verify self-consistent sidecars are unchanged
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		switch c.Name {
+		case "gateway-proxy":
+			if !*c.SecurityContext.RunAsNonRoot {
+				t.Error("gateway-proxy: runAsNonRoot should be true (self-consistent)")
+			}
+			if *c.SecurityContext.RunAsUser != 101 {
+				t.Error("gateway-proxy: runAsUser should be 101")
+			}
+		case "chromium":
+			if !*c.SecurityContext.RunAsNonRoot {
+				t.Error("chromium: runAsNonRoot should be true (self-consistent)")
+			}
+			if *c.SecurityContext.RunAsUser != 999 {
+				t.Error("chromium: runAsUser should be 999")
+			}
+		case "ollama":
+			if *c.SecurityContext.RunAsNonRoot {
+				t.Error("ollama: runAsNonRoot should be false (always root)")
+			}
+			if *c.SecurityContext.RunAsUser != 0 {
+				t.Error("ollama: runAsUser should be 0")
+			}
+		}
+	}
+}
+
+func TestPodRunAsNonRoot_Helper(t *testing.T) {
+	tests := []struct {
+		name     string
+		psc      *openclawv1alpha1.PodSecurityContextSpec
+		expected bool
+	}{
+		{
+			name:     "nil pod security context defaults to true",
+			psc:      nil,
+			expected: true,
+		},
+		{
+			name:     "empty pod security context defaults to true",
+			psc:      &openclawv1alpha1.PodSecurityContextSpec{},
+			expected: true,
+		},
+		{
+			name: "explicit true",
+			psc: &openclawv1alpha1.PodSecurityContextSpec{
+				RunAsNonRoot: Ptr(true),
+			},
+			expected: true,
+		},
+		{
+			name: "explicit false",
+			psc: &openclawv1alpha1.PodSecurityContextSpec{
+				RunAsNonRoot: Ptr(false),
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			instance := newTestInstance("helper-test")
+			instance.Spec.Security.PodSecurityContext = tt.psc
+			got := podRunAsNonRoot(instance)
+			if got != tt.expected {
+				t.Errorf("podRunAsNonRoot() = %v, want %v", got, tt.expected)
+			}
+		})
 	}
 }

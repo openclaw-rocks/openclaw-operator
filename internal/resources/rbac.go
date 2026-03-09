@@ -37,7 +37,7 @@ func BuildServiceAccount(instance *openclawv1alpha1.OpenClawInstance) *corev1.Se
 			Labels:      labels,
 			Annotations: instance.Spec.Security.RBAC.ServiceAccountAnnotations,
 		},
-		AutomountServiceAccountToken: Ptr(instance.Spec.SelfConfigure.Enabled),
+		AutomountServiceAccountToken: Ptr(instance.Spec.SelfConfigure.Enabled || instance.Spec.Tailscale.Enabled),
 	}
 }
 
@@ -83,6 +83,16 @@ func BuildRole(instance *openclawv1alpha1.OpenClawInstance) *rbacv1.Role {
 				Verbs:         []string{"get"},
 			})
 		}
+	}
+
+	// Tailscale state Secret - containerboot needs to read/write its state
+	if instance.Spec.Tailscale.Enabled {
+		rules = append(rules, rbacv1.PolicyRule{
+			APIGroups:     []string{""},
+			Resources:     []string{"secrets"},
+			ResourceNames: []string{TailscaleStateSecretName(instance)},
+			Verbs:         []string{"get", "update", "patch"},
+		})
 	}
 
 	// Add additional rules from spec

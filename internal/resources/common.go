@@ -187,6 +187,11 @@ func PVCName(instance *openclawv1alpha1.OpenClawInstance) string {
 	return instance.Name + "-data"
 }
 
+// ChromiumPVCName returns the name of the Chromium browser profile PVC
+func ChromiumPVCName(instance *openclawv1alpha1.OpenClawInstance) string {
+	return instance.Name + "-chromium-data"
+}
+
 // NetworkPolicyName returns the name of the NetworkPolicy
 func NetworkPolicyName(instance *openclawv1alpha1.OpenClawInstance) string {
 	return instance.Name
@@ -210,6 +215,11 @@ func GatewayTokenSecretName(instance *openclawv1alpha1.OpenClawInstance) string 
 // BasicAuthSecretName returns the name of the auto-generated Ingress Basic Auth Secret
 func BasicAuthSecretName(instance *openclawv1alpha1.OpenClawInstance) string {
 	return instance.Name + "-basic-auth"
+}
+
+// TailscaleStateSecretName returns the name of the Tailscale state Secret
+func TailscaleStateSecretName(instance *openclawv1alpha1.OpenClawInstance) string {
+	return instance.Name + "-ts-state"
 }
 
 // GetImageRepository returns the image repository with defaults

@@ -1480,6 +1480,38 @@ spec:
                         description: Tag is the container image tag
                         type: string
                     type: object
+                  persistence:
+                    description: |-
+                      Persistence configures persistent storage for the Chromium browser profile.
+                      When enabled, browser state (cookies, localStorage, session tokens) survives
+                      pod restarts. When disabled (default), an emptyDir is used and all browser
+                      state is lost on restart.
+                    properties:
+                      enabled:
+                        default: false
+                        description: |-
+                          Enabled enables persistent storage for the Chromium browser profile.
+                          When true, a PVC is created (or an existing one is used) and mounted at
+                          /chromium-data. The --user-data-dir flag is set automatically so that
+                          cookies, localStorage, session tokens, and cached credentials survive
+                          pod restarts.
+                        type: boolean
+                      existingClaim:
+                        description: |-
+                          ExistingClaim is the name of a pre-existing PVC to use instead of
+                          creating a new one. When set, storageClass and size are ignored.
+                        type: string
+                      size:
+                        default: 1Gi
+                        description: Size is the requested storage size for the Chromium
+                          profile PVC.
+                        type: string
+                      storageClass:
+                        description: |-
+                          StorageClass is the name of the StorageClass to use for the PVC.
+                          If empty, the cluster default StorageClass is used.
+                        type: string
+                    type: object
                   resources:
                     description: Resources specifies compute resources for the Chromium
                       container
@@ -5599,6 +5631,17 @@ spec:
                           ReadOnlyRootFilesystem mounts the container's root filesystem as read-only
                           The PVC at ~/.openclaw/ provides writable home, and a /tmp emptyDir handles temp files
                         type: boolean
+                      runAsNonRoot:
+                        description: |-
+                          RunAsNonRoot indicates that the container must run as a non-root user.
+                          When not set, inherits from podSecurityContext.runAsNonRoot.
+                        type: boolean
+                      runAsUser:
+                        description: |-
+                          RunAsUser is the UID to run the entrypoint of the container process.
+                          When not set, inherits from podSecurityContext.runAsUser.
+                        format: int64
+                        type: integer
                     type: object
                   networkPolicy:
                     description: NetworkPolicy configures network isolation
@@ -9531,6 +9574,10 @@ spec:
                     description: BasicAuthSecret is the name of the auto-generated
                       Ingress Basic Auth htpasswd Secret
                     type: string
+                  chromiumPVC:
+                    description: ChromiumPVC is the name of the managed Chromium browser
+                      profile PVC
+                    type: string
                   configMap:
                     description: ConfigMap is the name of the managed ConfigMap
                     type: string
@@ -9580,6 +9627,11 @@ spec:
                     type: string
                   statefulSet:
                     description: StatefulSet is the name of the managed StatefulSet
+                    type: string
+                  tailscaleStateSecret:
+                    description: |-
+                      TailscaleStateSecret is the name of the Secret used to persist Tailscale
+                      node identity and TLS certificate state across pod restarts
                     type: string
                 type: object
               observedGeneration:

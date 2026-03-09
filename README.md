@@ -282,6 +282,25 @@ When enabled, the operator automatically:
 - Sets up shared memory, security contexts, and health probes for the sidecar
 - Applies anti-bot-detection flags by default (`--disable-blink-features=AutomationControlled`, `--disable-features=AutomationControlled`, `--no-first-run`)
 
+#### Persistent browser profiles
+
+By default, all browser state (cookies, localStorage, session tokens) is lost on pod restart. Enable persistence to retain browser profiles across restarts:
+
+```yaml
+spec:
+  chromium:
+    enabled: true
+    persistence:
+      enabled: true          # default: false
+      storageClass: ""        # optional - uses cluster default if empty
+      size: "1Gi"             # default: 1Gi
+      existingClaim: ""       # optional - use a pre-existing PVC
+```
+
+When persistence is enabled, the operator creates a dedicated PVC and passes `--user-data-dir=/chromium-data` to Chrome so that cookies, localStorage, IndexedDB, cached credentials, and session tokens survive pod restarts. This is useful for authenticated browser automation, MFA-protected services, and long-running browser workflows.
+
+**Security note:** Persistent browser profiles contain sensitive session tokens. The PVC has the same security posture as other instance volumes. Ensure your StorageClass supports encryption at rest for sensitive workloads.
+
 ### Ollama sidecar
 
 Run local LLMs alongside your agent for private, low-latency inference without external API calls:
@@ -311,7 +330,7 @@ When enabled, the operator:
 - Configures GPU resource limits when `gpu` is set (`nvidia.com/gpu`)
 - Mounts a model cache volume (emptyDir by default, or an existing PVC via `storage.existingClaim`)
 
-See [Custom AI Providers](docs/custom-providers.md) for configuring OpenClaw to use Ollama models via `llmConfig`.
+See [Custom AI Providers](docs/custom-providers.md) for configuring OpenClaw to use Ollama models via environment variables.
 
 ### Web terminal sidecar
 
@@ -367,6 +386,8 @@ spec:
 ```
 
 When enabled, the operator runs a **Tailscale sidecar** (`tailscaled`) that handles serve/funnel declaratively via `TS_SERVE_CONFIG`. An **init container** copies the `tailscale` CLI binary to a shared volume so the main container can call `tailscale whois` for SSO authentication. The sidecar runs in userspace mode (`TS_USERSPACE=true`) - no `NET_ADMIN` capability needed.
+
+**State persistence:** Tailscale node identity and TLS certificates are automatically persisted to a Kubernetes Secret (`<instance>-ts-state`) via `TS_KUBE_SECRET`. This prevents hostname incrementing (device-1, device-2, ...) and Let's Encrypt certificate re-issuance across pod restarts. The operator pre-creates the state Secret, grants the pod's ServiceAccount `get/update/patch` access to it, and mounts the SA token automatically.
 
 Use ephemeral+reusable auth keys from the [Tailscale admin console](https://login.tailscale.com/admin/settings/keys). When `authSSO` is enabled, tailnet members can authenticate without a gateway token.
 
@@ -707,6 +728,7 @@ These behaviors are always applied - no configuration needed:
 | `OPENCLAW_DISABLE_BONJOUR=1` | Always set (mDNS does not work in Kubernetes) |
 | Browser profiles | When Chromium is enabled, `"default"` and `"chrome"` profiles are auto-configured with the sidecar's CDP endpoint |
 | Tailscale serve config | When Tailscale is enabled, a `tailscale-serve.json` key is added to the ConfigMap for the sidecar's `TS_SERVE_CONFIG` |
+| Tailscale state persistence | When Tailscale is enabled, node identity and TLS certs are persisted to a `<instance>-ts-state` Secret via `TS_KUBE_SECRET` |
 | Config hash rollouts | Config changes trigger rolling updates via SHA-256 hash annotation |
 | Config restoration | The init container restores config on every pod restart (overwrite or merge mode) |
 
@@ -726,6 +748,7 @@ The operator follows a **secure-by-default** philosophy. Every instance ships wi
 - **Minimal RBAC**: each instance gets its own ServiceAccount with read-only access to its own ConfigMap; operator can create/update Secrets only for operator-managed gateway tokens
 - **No automatic token mounting**: `automountServiceAccountToken: false` on both ServiceAccounts and pod specs (enabled only when `selfConfigure` is active)
 - **Secret validation**: the operator checks that all referenced Secrets exist and sets a `SecretsReady` condition
+- **Security context propagation**: when `podSecurityContext.runAsNonRoot` is set to `false`, the operator propagates this to init containers and applicable sidecars (tailscale, web terminal) so there is no contradiction between pod-level and container-level settings. Self-consistent sidecars (gateway-proxy, chromium, ollama) retain their own security contexts. The `containerSecurityContext.runAsNonRoot` and `containerSecurityContext.runAsUser` fields allow granular control over the main container independently of the pod level.
 
 ### Validating webhook
 

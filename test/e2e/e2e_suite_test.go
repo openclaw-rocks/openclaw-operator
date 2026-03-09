@@ -31,6 +31,8 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -1151,6 +1153,60 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			Expect(foundSTUN).To(BeTrue(), "NetworkPolicy should have STUN egress (UDP 3478)")
 			Expect(foundWG).To(BeTrue(), "NetworkPolicy should have WireGuard egress (UDP 41641)")
 
+			// Verify Tailscale state Secret is created
+			tsStateSecret := &corev1.Secret{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.TailscaleStateSecretName(instance),
+					Namespace: namespace,
+				}, tsStateSecret)
+			}, timeout, interval).Should(Succeed())
+
+			// Verify TS_KUBE_SECRET env var points to the state Secret
+			var foundTSKubeSecret bool
+			for _, env := range tsSidecar.Env {
+				if env.Name == "TS_KUBE_SECRET" {
+					foundTSKubeSecret = true
+					Expect(env.Value).To(Equal(resources.TailscaleStateSecretName(instance)),
+						"TS_KUBE_SECRET should point to the state Secret")
+				}
+			}
+			Expect(foundTSKubeSecret).To(BeTrue(), "TS_KUBE_SECRET should be set on sidecar")
+
+			// Verify KUBERNETES_SERVICE_HOST is NOT set (containerboot needs kube API access)
+			for _, env := range tsSidecar.Env {
+				Expect(env.Name).NotTo(Equal("KUBERNETES_SERVICE_HOST"),
+					"KUBERNETES_SERVICE_HOST should not be set when using TS_KUBE_SECRET")
+			}
+
+			// Verify AutomountServiceAccountToken is enabled
+			Expect(statefulSet.Spec.Template.Spec.AutomountServiceAccountToken).NotTo(BeNil())
+			Expect(*statefulSet.Spec.Template.Spec.AutomountServiceAccountToken).To(BeTrue(),
+				"AutomountServiceAccountToken should be true when Tailscale is enabled")
+
+			// Verify Role includes Tailscale state Secret rule
+			role := &rbacv1.Role{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.RoleName(instance),
+					Namespace: namespace,
+				}, role)
+			}, timeout, interval).Should(Succeed())
+
+			var foundTSSecretRule bool
+			for _, rule := range role.Rules {
+				for _, res := range rule.Resources {
+					if res == "secrets" {
+						for _, name := range rule.ResourceNames {
+							if name == resources.TailscaleStateSecretName(instance) {
+								foundTSSecretRule = true
+							}
+						}
+					}
+				}
+			}
+			Expect(foundTSSecretRule).To(BeTrue(), "Role should include Tailscale state Secret rule")
+
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})
 	})
@@ -1380,6 +1436,103 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				}
 			}
 			Expect(foundChromiumPort).To(BeTrue(), "Service should have chromium port")
+
+			// Clean up
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+
+		It("Should create persistent chromium volume when persistence is enabled", func() {
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instanceName := "chromium-persist-test"
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					Chromium: openclawv1alpha1.ChromiumSpec{
+						Enabled: true,
+						Persistence: openclawv1alpha1.ChromiumPersistenceSpec{
+							Enabled: true,
+							Size:    "1Gi",
+						},
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			// Verify StatefulSet is created
+			statefulSet := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName,
+					Namespace: namespace,
+				}, statefulSet)
+			}, timeout, interval).Should(Succeed())
+
+			// Verify chromium-data volume references a PVC
+			var dataVol *corev1.Volume
+			for i := range statefulSet.Spec.Template.Spec.Volumes {
+				if statefulSet.Spec.Template.Spec.Volumes[i].Name == "chromium-data" {
+					dataVol = &statefulSet.Spec.Template.Spec.Volumes[i]
+					break
+				}
+			}
+			Expect(dataVol).NotTo(BeNil(), "chromium-data volume should exist")
+			Expect(dataVol.PersistentVolumeClaim).NotTo(BeNil(), "chromium-data should be a PVC when persistence is enabled")
+			Expect(dataVol.PersistentVolumeClaim.ClaimName).To(Equal(instanceName + "-chromium-data"))
+
+			// Verify chromium container has --user-data-dir in launch args
+			var chromiumContainer *corev1.Container
+			for i := range statefulSet.Spec.Template.Spec.Containers {
+				if statefulSet.Spec.Template.Spec.Containers[i].Name == "chromium" {
+					chromiumContainer = &statefulSet.Spec.Template.Spec.Containers[i]
+					break
+				}
+			}
+			Expect(chromiumContainer).NotTo(BeNil(), "chromium sidecar container should exist")
+
+			var launchArgs string
+			for _, env := range chromiumContainer.Env {
+				if env.Name == "DEFAULT_LAUNCH_ARGS" {
+					launchArgs = env.Value
+					break
+				}
+			}
+			Expect(launchArgs).To(ContainSubstring("--user-data-dir=/chromium-data"),
+				"DEFAULT_LAUNCH_ARGS should contain --user-data-dir=/chromium-data when persistence is enabled")
+
+			// Verify chromium container has chromium-data volume mount
+			var foundDataMount bool
+			for _, mount := range chromiumContainer.VolumeMounts {
+				if mount.Name == "chromium-data" && mount.MountPath == "/chromium-data" {
+					foundDataMount = true
+					break
+				}
+			}
+			Expect(foundDataMount).To(BeTrue(), "chromium container should mount chromium-data at /chromium-data")
+
+			// Verify Chromium PVC was created
+			pvc := &corev1.PersistentVolumeClaim{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName + "-chromium-data",
+					Namespace: namespace,
+				}, pvc)
+			}, timeout, interval).Should(Succeed())
+			Expect(pvc.Spec.Resources.Requests[corev1.ResourceStorage]).To(Equal(resource.MustParse("1Gi")))
 
 			// Clean up
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
