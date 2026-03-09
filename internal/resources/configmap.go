@@ -55,7 +55,7 @@ func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseCo
 		configBytes = []byte("{}")
 	}
 
-	// Enrichment pipeline: gateway auth -> device auth -> tailscale -> browser -> gateway bind -> skill packs
+	// Enrichment pipeline: gateway auth -> device auth -> tailscale -> browser -> gateway bind -> trusted proxies -> control UI origins -> skill packs
 	if gatewayToken != "" {
 		if enriched, err := enrichConfigWithGatewayAuth(configBytes, gatewayToken); err == nil {
 			configBytes = enriched
@@ -75,6 +75,9 @@ func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseCo
 		}
 	}
 	if enriched, err := enrichConfigWithGatewayBind(configBytes, instance); err == nil {
+		configBytes = enriched
+	}
+	if enriched, err := enrichConfigWithTrustedProxies(configBytes); err == nil {
 		configBytes = enriched
 	}
 	if enriched, err := enrichConfigWithControlUIOrigins(configBytes, instance); err == nil {
@@ -360,6 +363,44 @@ func enrichConfigWithGatewayBind(configJSON []byte, instance *openclawv1alpha1.O
 	}
 
 	gw["bind"] = GatewayBindLoopback
+	config["gateway"] = gw
+
+	return json.Marshal(config)
+}
+
+// enrichConfigWithTrustedProxies ensures 127.0.0.0/8 is present in
+// gateway.trustedProxies. The nginx proxy sidecar forwards all traffic from
+// 127.0.0.1, so the gateway must trust that CIDR to honor proxy headers
+// (X-Forwarded-For, etc.). Unlike other enrichments this merges with any
+// user-supplied entries rather than skipping when the field is already set.
+func enrichConfigWithTrustedProxies(configJSON []byte) ([]byte, error) {
+	const loopbackCIDR = "127.0.0.0/8"
+
+	var config map[string]interface{}
+	if err := json.Unmarshal(configJSON, &config); err != nil {
+		return configJSON, nil // not a JSON object, return unchanged
+	}
+
+	gw, _ := config["gateway"].(map[string]interface{})
+	if gw == nil {
+		gw = make(map[string]interface{})
+	}
+
+	// Read existing trustedProxies (may be user-set)
+	var proxies []interface{}
+	if existing, ok := gw["trustedProxies"].([]interface{}); ok {
+		proxies = existing
+	}
+
+	// Check if loopback CIDR is already present
+	for _, p := range proxies {
+		if s, ok := p.(string); ok && s == loopbackCIDR {
+			return configJSON, nil
+		}
+	}
+
+	proxies = append(proxies, loopbackCIDR)
+	gw["trustedProxies"] = proxies
 	config["gateway"] = gw
 
 	return json.Marshal(config)

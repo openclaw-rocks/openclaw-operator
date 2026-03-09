@@ -2344,6 +2344,171 @@ func TestEnrichConfigWithDeviceAuth_InvalidJSON(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// enrichConfigWithTrustedProxies tests
+// ---------------------------------------------------------------------------
+
+func TestEnrichConfigWithTrustedProxies(t *testing.T) {
+	input := []byte(`{}`)
+	out, err := enrichConfigWithTrustedProxies(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	gw, ok := cfg["gateway"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected gateway key")
+	}
+	proxies, ok := gw["trustedProxies"].([]interface{})
+	if !ok {
+		t.Fatal("expected gateway.trustedProxies array")
+	}
+	if len(proxies) != 1 || proxies[0] != "127.0.0.0/8" {
+		t.Errorf("gateway.trustedProxies = %v, want [127.0.0.0/8]", proxies)
+	}
+}
+
+func TestEnrichConfigWithTrustedProxies_MergesWithUserEntries(t *testing.T) {
+	input := []byte(`{"gateway":{"trustedProxies":["10.0.0.0/8"]}}`)
+	out, err := enrichConfigWithTrustedProxies(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	gw := cfg["gateway"].(map[string]interface{})
+	proxies := gw["trustedProxies"].([]interface{})
+	if len(proxies) != 2 {
+		t.Fatalf("expected 2 entries, got %d: %v", len(proxies), proxies)
+	}
+	if proxies[0] != "10.0.0.0/8" {
+		t.Errorf("proxies[0] = %v, want 10.0.0.0/8", proxies[0])
+	}
+	if proxies[1] != "127.0.0.0/8" {
+		t.Errorf("proxies[1] = %v, want 127.0.0.0/8", proxies[1])
+	}
+}
+
+func TestEnrichConfigWithTrustedProxies_SkipsIfAlreadyPresent(t *testing.T) {
+	input := []byte(`{"gateway":{"trustedProxies":["127.0.0.0/8","10.0.0.0/8"]}}`)
+	out, err := enrichConfigWithTrustedProxies(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	gw := cfg["gateway"].(map[string]interface{})
+	proxies := gw["trustedProxies"].([]interface{})
+	if len(proxies) != 2 {
+		t.Errorf("expected 2 entries (no duplicate), got %d: %v", len(proxies), proxies)
+	}
+}
+
+func TestEnrichConfigWithTrustedProxies_PreservesOtherFields(t *testing.T) {
+	input := []byte(`{"gateway":{"bind":"loopback","auth":{"mode":"token"}},"mcpServers":{}}`)
+	out, err := enrichConfigWithTrustedProxies(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	gw := cfg["gateway"].(map[string]interface{})
+	if gw["bind"] != "loopback" {
+		t.Errorf("gateway.bind should be preserved, got %v", gw["bind"])
+	}
+	if _, ok := gw["auth"].(map[string]interface{}); !ok {
+		t.Error("gateway.auth should be preserved")
+	}
+	if _, ok := cfg["mcpServers"]; !ok {
+		t.Error("mcpServers should be preserved")
+	}
+}
+
+func TestEnrichConfigWithTrustedProxies_InvalidJSON(t *testing.T) {
+	input := []byte(`not valid json`)
+	out, err := enrichConfigWithTrustedProxies(input)
+	if err != nil {
+		t.Fatal("should not error on invalid JSON")
+	}
+
+	if !bytes.Equal(out, input) {
+		t.Errorf("invalid JSON should be returned unchanged")
+	}
+}
+
+func TestBuildConfigMap_TrustedProxiesInjected(t *testing.T) {
+	instance := newTestInstance("cm-proxies-inject")
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{
+			Raw: []byte(`{}`),
+		},
+	}
+
+	cm := BuildConfigMap(instance, "", nil)
+	content := cm.Data["openclaw.json"]
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config: %v", err)
+	}
+
+	gw, ok := parsed["gateway"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected gateway key")
+	}
+	proxies, ok := gw["trustedProxies"].([]interface{})
+	if !ok {
+		t.Fatal("expected gateway.trustedProxies")
+	}
+	if len(proxies) != 1 || proxies[0] != "127.0.0.0/8" {
+		t.Errorf("gateway.trustedProxies = %v, want [127.0.0.0/8]", proxies)
+	}
+}
+
+func TestBuildConfigMap_TrustedProxiesMergesWithUserConfig(t *testing.T) {
+	instance := newTestInstance("cm-proxies-merge")
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{
+			Raw: []byte(`{"gateway":{"trustedProxies":["10.0.0.0/8"]}}`),
+		},
+	}
+
+	cm := BuildConfigMap(instance, "", nil)
+	content := cm.Data["openclaw.json"]
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config: %v", err)
+	}
+
+	gw := parsed["gateway"].(map[string]interface{})
+	proxies := gw["trustedProxies"].([]interface{})
+	if len(proxies) != 2 {
+		t.Fatalf("expected 2 entries, got %d: %v", len(proxies), proxies)
+	}
+	// User entry preserved, loopback appended
+	if proxies[0] != "10.0.0.0/8" || proxies[1] != "127.0.0.0/8" {
+		t.Errorf("gateway.trustedProxies = %v, want [10.0.0.0/8 127.0.0.0/8]", proxies)
+	}
+}
+
 func TestBuildConfigMap_RawConfig_GatewayBindInjected(t *testing.T) {
 	instance := newTestInstance("cm-bind-inject")
 	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
