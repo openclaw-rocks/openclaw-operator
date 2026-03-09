@@ -9588,3 +9588,349 @@ func TestBuildWorkspaceConfigMap_NilWorkspace(t *testing.T) {
 		t.Errorf("expected exactly 1 file (ENVIRONMENT.md), got %d", len(cm.Data))
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Container security context - runAsNonRoot / runAsUser propagation (#263)
+// ---------------------------------------------------------------------------
+
+func TestBuildStatefulSet_RunAsNonRoot_DefaultBehavior(t *testing.T) {
+	// When no security context overrides are set, all containers should
+	// default to runAsNonRoot: true.
+	instance := newTestInstance("default-sec")
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.AuthKeySecretRef = &corev1.LocalObjectReference{Name: "ts-secret"}
+	instance.Spec.WebTerminal.Enabled = true
+	instance.Spec.Skills = []string{"@test/skill"}
+
+	sts := BuildStatefulSet(instance, "", nil)
+	containers := sts.Spec.Template.Spec.Containers
+	initContainers := sts.Spec.Template.Spec.InitContainers
+
+	// Main container
+	main := containers[0]
+	if main.SecurityContext.RunAsNonRoot == nil || !*main.SecurityContext.RunAsNonRoot {
+		t.Error("main container: runAsNonRoot should default to true")
+	}
+
+	// Check all init containers
+	for _, ic := range initContainers {
+		if ic.SecurityContext == nil || ic.SecurityContext.RunAsNonRoot == nil {
+			t.Errorf("init container %q: security context or runAsNonRoot is nil", ic.Name)
+			continue
+		}
+		// Ollama init runs as root intentionally
+		if ic.Name == "init-ollama" {
+			continue
+		}
+		if !*ic.SecurityContext.RunAsNonRoot {
+			t.Errorf("init container %q: runAsNonRoot should default to true", ic.Name)
+		}
+	}
+
+	// Tailscale sidecar
+	for _, c := range containers {
+		if c.Name == "tailscale" {
+			if c.SecurityContext.RunAsNonRoot == nil || !*c.SecurityContext.RunAsNonRoot {
+				t.Error("tailscale sidecar: runAsNonRoot should default to true")
+			}
+		}
+		if c.Name == "web-terminal" {
+			if c.SecurityContext.RunAsNonRoot == nil || !*c.SecurityContext.RunAsNonRoot {
+				t.Error("web-terminal sidecar: runAsNonRoot should default to true")
+			}
+		}
+	}
+}
+
+func TestBuildStatefulSet_PodLevelRunAsNonRootFalse_Propagation(t *testing.T) {
+	// When podSecurityContext.runAsNonRoot is explicitly set to false,
+	// it should propagate to the main container, init containers, and
+	// applicable sidecars.
+	instance := newTestInstance("pod-nonroot-false")
+	instance.Spec.Security.PodSecurityContext = &openclawv1alpha1.PodSecurityContextSpec{
+		RunAsNonRoot: Ptr(false),
+	}
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.AuthKeySecretRef = &corev1.LocalObjectReference{Name: "ts-secret"}
+	instance.Spec.WebTerminal.Enabled = true
+	instance.Spec.Chromium.Enabled = true
+	instance.Spec.Skills = []string{"@test/skill"}
+	instance.Spec.RuntimeDeps.Pnpm = true
+	instance.Spec.RuntimeDeps.Python = true
+
+	sts := BuildStatefulSet(instance, "", nil)
+	containers := sts.Spec.Template.Spec.Containers
+	initContainers := sts.Spec.Template.Spec.InitContainers
+
+	// Main container should inherit pod-level runAsNonRoot: false
+	main := containers[0]
+	if main.SecurityContext.RunAsNonRoot == nil || *main.SecurityContext.RunAsNonRoot {
+		t.Error("main container: runAsNonRoot should be false (inherited from pod)")
+	}
+
+	// Init containers that should inherit pod-level runAsNonRoot: false
+	wantFalse := map[string]bool{
+		"init-config":        true,
+		"init-skills":        true,
+		"init-pnpm":          true,
+		"init-python":        true,
+		"init-tailscale-bin": true,
+	}
+	for _, ic := range initContainers {
+		if !wantFalse[ic.Name] {
+			continue
+		}
+		if ic.SecurityContext == nil || ic.SecurityContext.RunAsNonRoot == nil {
+			t.Errorf("init container %q: security context or runAsNonRoot is nil", ic.Name)
+			continue
+		}
+		if *ic.SecurityContext.RunAsNonRoot {
+			t.Errorf("init container %q: runAsNonRoot should be false (inherited from pod)", ic.Name)
+		}
+	}
+
+	// Tailscale sidecar should inherit pod-level runAsNonRoot: false
+	for _, c := range containers {
+		if c.Name == "tailscale" {
+			if c.SecurityContext.RunAsNonRoot == nil || *c.SecurityContext.RunAsNonRoot {
+				t.Error("tailscale sidecar: runAsNonRoot should be false (inherited from pod)")
+			}
+		}
+		// Web terminal should also inherit pod-level runAsNonRoot: false
+		if c.Name == "web-terminal" {
+			if c.SecurityContext.RunAsNonRoot == nil || *c.SecurityContext.RunAsNonRoot {
+				t.Error("web-terminal sidecar: runAsNonRoot should be false (inherited from pod)")
+			}
+		}
+	}
+
+	// Gateway proxy should STILL have runAsNonRoot: true (has its own RunAsUser: 101)
+	for _, c := range containers {
+		if c.Name == "gateway-proxy" {
+			if c.SecurityContext.RunAsNonRoot == nil || !*c.SecurityContext.RunAsNonRoot {
+				t.Error("gateway-proxy: runAsNonRoot should still be true (self-consistent with RunAsUser: 101)")
+			}
+			if c.SecurityContext.RunAsUser == nil || *c.SecurityContext.RunAsUser != 101 {
+				t.Error("gateway-proxy: runAsUser should be 101")
+			}
+		}
+	}
+
+	// Chromium should STILL have runAsNonRoot: true (has its own RunAsUser: 999)
+	for _, c := range containers {
+		if c.Name == "chromium" {
+			if c.SecurityContext.RunAsNonRoot == nil || !*c.SecurityContext.RunAsNonRoot {
+				t.Error("chromium: runAsNonRoot should still be true (self-consistent with RunAsUser: 999)")
+			}
+			if c.SecurityContext.RunAsUser == nil || *c.SecurityContext.RunAsUser != 999 {
+				t.Error("chromium: runAsUser should be 999")
+			}
+		}
+	}
+}
+
+func TestBuildStatefulSet_ContainerLevelRunAsNonRootOverride(t *testing.T) {
+	// When containerSecurityContext.runAsNonRoot is explicitly set to false
+	// but pod-level is default (true), only the main container should change.
+	instance := newTestInstance("container-nonroot-false")
+	instance.Spec.Security.ContainerSecurityContext = &openclawv1alpha1.ContainerSecurityContextSpec{
+		RunAsNonRoot: Ptr(false),
+	}
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.AuthKeySecretRef = &corev1.LocalObjectReference{Name: "ts-secret"}
+
+	sts := BuildStatefulSet(instance, "", nil)
+	containers := sts.Spec.Template.Spec.Containers
+	initContainers := sts.Spec.Template.Spec.InitContainers
+
+	// Main container should have runAsNonRoot: false (from container-level override)
+	main := containers[0]
+	if main.SecurityContext.RunAsNonRoot == nil || *main.SecurityContext.RunAsNonRoot {
+		t.Error("main container: runAsNonRoot should be false (container-level override)")
+	}
+
+	// Init containers should still be true (they use pod-level, not container-level)
+	for _, ic := range initContainers {
+		if ic.SecurityContext == nil || ic.SecurityContext.RunAsNonRoot == nil {
+			continue
+		}
+		// Skip ollama init (runs as root)
+		if ic.Name == "init-ollama" {
+			continue
+		}
+		if !*ic.SecurityContext.RunAsNonRoot {
+			t.Errorf("init container %q: runAsNonRoot should still be true (pod-level default)", ic.Name)
+		}
+	}
+
+	// Tailscale sidecar should still be true (uses pod-level)
+	for _, c := range containers {
+		if c.Name == "tailscale" {
+			if c.SecurityContext.RunAsNonRoot == nil || !*c.SecurityContext.RunAsNonRoot {
+				t.Error("tailscale sidecar: runAsNonRoot should still be true (pod-level default)")
+			}
+		}
+	}
+}
+
+func TestBuildStatefulSet_ContainerLevelRunAsUser(t *testing.T) {
+	// When containerSecurityContext.runAsUser is set, it should appear on
+	// the main container only.
+	instance := newTestInstance("container-runasuser")
+	instance.Spec.Security.ContainerSecurityContext = &openclawv1alpha1.ContainerSecurityContextSpec{
+		RunAsUser: Ptr(int64(2000)),
+	}
+
+	sts := BuildStatefulSet(instance, "", nil)
+	main := sts.Spec.Template.Spec.Containers[0]
+
+	if main.SecurityContext.RunAsUser == nil || *main.SecurityContext.RunAsUser != 2000 {
+		t.Errorf("main container: runAsUser = %v, want 2000", main.SecurityContext.RunAsUser)
+	}
+	// runAsNonRoot should still be true (default)
+	if main.SecurityContext.RunAsNonRoot == nil || !*main.SecurityContext.RunAsNonRoot {
+		t.Error("main container: runAsNonRoot should still be true (default)")
+	}
+}
+
+func TestBuildStatefulSet_FullNonRootFalseScenario(t *testing.T) {
+	// Both pod-level runAsNonRoot: false and container-level runAsNonRoot: false.
+	// Verify no contradictions exist in any container.
+	instance := newTestInstance("full-nonroot-false")
+	instance.Spec.Security.PodSecurityContext = &openclawv1alpha1.PodSecurityContextSpec{
+		RunAsNonRoot: Ptr(false),
+		RunAsUser:    Ptr(int64(1000)), // non-zero to keep it valid
+	}
+	instance.Spec.Security.ContainerSecurityContext = &openclawv1alpha1.ContainerSecurityContextSpec{
+		RunAsNonRoot: Ptr(false),
+		RunAsUser:    Ptr(int64(1000)),
+	}
+	instance.Spec.Tailscale.Enabled = true
+	instance.Spec.Tailscale.AuthKeySecretRef = &corev1.LocalObjectReference{Name: "ts-secret"}
+	instance.Spec.WebTerminal.Enabled = true
+	instance.Spec.Chromium.Enabled = true
+	instance.Spec.Ollama.Enabled = true
+	instance.Spec.Skills = []string{"@test/skill"}
+	instance.Spec.RuntimeDeps.Pnpm = true
+	instance.Spec.RuntimeDeps.Python = true
+
+	sts := BuildStatefulSet(instance, "", nil)
+	var allContainers []corev1.Container
+	allContainers = append(allContainers, sts.Spec.Template.Spec.InitContainers...)
+	allContainers = append(allContainers, sts.Spec.Template.Spec.Containers...)
+
+	for _, c := range allContainers {
+		if c.SecurityContext == nil {
+			continue
+		}
+		sc := c.SecurityContext
+
+		// Self-consistent containers (have their own RunAsUser) should not
+		// contradict their own RunAsNonRoot
+		if sc.RunAsNonRoot != nil && sc.RunAsUser != nil {
+			nonRoot := *sc.RunAsNonRoot
+			uid := *sc.RunAsUser
+			if nonRoot && uid == 0 {
+				t.Errorf("container %q: runAsNonRoot=true contradicts runAsUser=0", c.Name)
+			}
+		}
+	}
+
+	// Main container should have runAsNonRoot: false and runAsUser: 1000
+	main := sts.Spec.Template.Spec.Containers[0]
+	if main.SecurityContext.RunAsNonRoot == nil || *main.SecurityContext.RunAsNonRoot {
+		t.Error("main container: runAsNonRoot should be false")
+	}
+	if main.SecurityContext.RunAsUser == nil || *main.SecurityContext.RunAsUser != 1000 {
+		t.Errorf("main container: runAsUser should be 1000, got %v", main.SecurityContext.RunAsUser)
+	}
+
+	// Verify init containers with pod-level inheritance
+	for _, ic := range sts.Spec.Template.Spec.InitContainers {
+		switch ic.Name {
+		case "init-config", "init-skills", "init-pnpm", "init-python", "init-tailscale-bin":
+			if ic.SecurityContext.RunAsNonRoot == nil || *ic.SecurityContext.RunAsNonRoot {
+				t.Errorf("init container %q: runAsNonRoot should be false", ic.Name)
+			}
+		case "init-ollama":
+			// Ollama init always runs as root - should be unchanged
+			if ic.SecurityContext.RunAsNonRoot == nil || *ic.SecurityContext.RunAsNonRoot {
+				t.Errorf("init-ollama: runAsNonRoot should be false (always root)")
+			}
+			if ic.SecurityContext.RunAsUser == nil || *ic.SecurityContext.RunAsUser != 0 {
+				t.Error("init-ollama: runAsUser should be 0")
+			}
+		}
+	}
+
+	// Verify self-consistent sidecars are unchanged
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		switch c.Name {
+		case "gateway-proxy":
+			if !*c.SecurityContext.RunAsNonRoot {
+				t.Error("gateway-proxy: runAsNonRoot should be true (self-consistent)")
+			}
+			if *c.SecurityContext.RunAsUser != 101 {
+				t.Error("gateway-proxy: runAsUser should be 101")
+			}
+		case "chromium":
+			if !*c.SecurityContext.RunAsNonRoot {
+				t.Error("chromium: runAsNonRoot should be true (self-consistent)")
+			}
+			if *c.SecurityContext.RunAsUser != 999 {
+				t.Error("chromium: runAsUser should be 999")
+			}
+		case "ollama":
+			if *c.SecurityContext.RunAsNonRoot {
+				t.Error("ollama: runAsNonRoot should be false (always root)")
+			}
+			if *c.SecurityContext.RunAsUser != 0 {
+				t.Error("ollama: runAsUser should be 0")
+			}
+		}
+	}
+}
+
+func TestPodRunAsNonRoot_Helper(t *testing.T) {
+	tests := []struct {
+		name     string
+		psc      *openclawv1alpha1.PodSecurityContextSpec
+		expected bool
+	}{
+		{
+			name:     "nil pod security context defaults to true",
+			psc:      nil,
+			expected: true,
+		},
+		{
+			name:     "empty pod security context defaults to true",
+			psc:      &openclawv1alpha1.PodSecurityContextSpec{},
+			expected: true,
+		},
+		{
+			name: "explicit true",
+			psc: &openclawv1alpha1.PodSecurityContextSpec{
+				RunAsNonRoot: Ptr(true),
+			},
+			expected: true,
+		},
+		{
+			name: "explicit false",
+			psc: &openclawv1alpha1.PodSecurityContextSpec{
+				RunAsNonRoot: Ptr(false),
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			instance := newTestInstance("helper-test")
+			instance.Spec.Security.PodSecurityContext = tt.psc
+			got := podRunAsNonRoot(instance)
+			if got != tt.expected {
+				t.Errorf("podRunAsNonRoot() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}

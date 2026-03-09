@@ -343,6 +343,16 @@ type ContainerSecurityContextSpec struct {
 	// Capabilities to add/drop
 	// +optional
 	Capabilities *corev1.Capabilities `json:"capabilities,omitempty"`
+
+	// RunAsNonRoot indicates that the container must run as a non-root user.
+	// When not set, inherits from podSecurityContext.runAsNonRoot.
+	// +optional
+	RunAsNonRoot *bool `json:"runAsNonRoot,omitempty"`
+
+	// RunAsUser is the UID to run the entrypoint of the container process.
+	// When not set, inherits from podSecurityContext.runAsUser.
+	// +optional
+	RunAsUser *int64 `json:"runAsUser,omitempty"`
 }
 
 // NetworkPolicySpec configures network isolation for the OpenClaw instance
