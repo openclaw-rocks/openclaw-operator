@@ -1321,7 +1321,7 @@ func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.
 			PeriodSeconds:       2,
 			FailureThreshold:    15,
 			SuccessThreshold:    1,
-			TimeoutSeconds:      2,
+			TimeoutSeconds:      5,
 		},
 	}
 }
