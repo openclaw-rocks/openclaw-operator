@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.28](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.27...v0.10.28) (2026-03-09)
+
+
+### Bug Fixes
+
+* auto-inject 127.0.0.0/8 into gateway.trustedProxies ([#276](https://github.com/openclaw-rocks/k8s-operator/issues/276)) ([e7ecc5c](https://github.com/openclaw-rocks/k8s-operator/commit/e7ecc5c6f1c50b1b6f26621b9e99d22266dadd34)), closes [#274](https://github.com/openclaw-rocks/k8s-operator/issues/274)
+* handle OCI pagination in registry tag resolver ([#275](https://github.com/openclaw-rocks/k8s-operator/issues/275)) ([2fcf3dd](https://github.com/openclaw-rocks/k8s-operator/commit/2fcf3dd41e2e3c24a440fed155019ae664b36255))
+
 ## [0.10.27](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.26...v0.10.27) (2026-03-09)
 
 
