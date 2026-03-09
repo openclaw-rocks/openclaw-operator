@@ -307,7 +307,15 @@ func (r *OpenClawInstanceReconciler) reconcileResources(ctx context.Context, ins
 	}
 	logger.V(1).Info("Gateway token secret reconciled")
 
-	// 2c. Resolve skill packs from GitHub (non-blocking - failures degrade but don't block provisioning)
+	// 2c. Reconcile Tailscale state Secret (must precede StatefulSet)
+	if instance.Spec.Tailscale.Enabled {
+		if err := r.reconcileTailscaleStateSecret(ctx, instance); err != nil {
+			return fmt.Errorf("failed to reconcile Tailscale state secret: %w", err)
+		}
+		logger.V(1).Info("Tailscale state secret reconciled")
+	}
+
+	// 2d. Resolve skill packs from GitHub (non-blocking - failures degrade but don't block provisioning)
 	var skillPacks *resources.ResolvedSkillPacks
 	packNames := resources.ExtractPackSkills(instance.Spec.Skills)
 	if len(packNames) > 0 && r.SkillPackResolver != nil {
@@ -607,6 +615,30 @@ func (r *OpenClawInstanceReconciler) reconcileGatewayTokenSecret(ctx context.Con
 	r.Recorder.Event(instance, corev1.EventTypeNormal, "GatewayTokenCreated", "Auto-generated gateway authentication token")
 
 	return tokenHex, nil
+}
+
+// reconcileTailscaleStateSecret ensures an empty Secret exists for Tailscale to
+// persist node identity and TLS certificate state. The containerboot process
+// reads and writes state to this Secret via the Kubernetes API (TS_KUBE_SECRET).
+// The operator pre-creates the Secret so that the pod's ServiceAccount only needs
+// get/update/patch (not create) permissions, keeping RBAC minimal.
+func (r *OpenClawInstanceReconciler) reconcileTailscaleStateSecret(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) error {
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      resources.TailscaleStateSecretName(instance),
+			Namespace: instance.Namespace,
+		},
+	}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
+		desired := resources.BuildTailscaleStateSecret(instance)
+		secret.Labels = desired.Labels
+		// Do not overwrite Data - containerboot manages the content
+		return controllerutil.SetControllerReference(instance, secret, r.Scheme)
+	}); err != nil {
+		return fmt.Errorf("failed to reconcile Tailscale state secret: %w", err)
+	}
+	instance.Status.ManagedResources.TailscaleStateSecret = secret.Name
+	return nil
 }
 
 // reconcileConfigMap reconciles the operator-managed ConfigMap for openclaw.json.

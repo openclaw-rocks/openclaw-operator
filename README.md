@@ -368,6 +368,8 @@ spec:
 
 When enabled, the operator runs a **Tailscale sidecar** (`tailscaled`) that handles serve/funnel declaratively via `TS_SERVE_CONFIG`. An **init container** copies the `tailscale` CLI binary to a shared volume so the main container can call `tailscale whois` for SSO authentication. The sidecar runs in userspace mode (`TS_USERSPACE=true`) - no `NET_ADMIN` capability needed.
 
+**State persistence:** Tailscale node identity and TLS certificates are automatically persisted to a Kubernetes Secret (`<instance>-ts-state`) via `TS_KUBE_SECRET`. This prevents hostname incrementing (device-1, device-2, ...) and Let's Encrypt certificate re-issuance across pod restarts. The operator pre-creates the state Secret, grants the pod's ServiceAccount `get/update/patch` access to it, and mounts the SA token automatically.
+
 Use ephemeral+reusable auth keys from the [Tailscale admin console](https://login.tailscale.com/admin/settings/keys). When `authSSO` is enabled, tailnet members can authenticate without a gateway token.
 
 ### Config merge mode
@@ -707,6 +709,7 @@ These behaviors are always applied - no configuration needed:
 | `OPENCLAW_DISABLE_BONJOUR=1` | Always set (mDNS does not work in Kubernetes) |
 | Browser profiles | When Chromium is enabled, `"default"` and `"chrome"` profiles are auto-configured with the sidecar's CDP endpoint |
 | Tailscale serve config | When Tailscale is enabled, a `tailscale-serve.json` key is added to the ConfigMap for the sidecar's `TS_SERVE_CONFIG` |
+| Tailscale state persistence | When Tailscale is enabled, node identity and TLS certs are persisted to a `<instance>-ts-state` Secret via `TS_KUBE_SECRET` |
 | Config hash rollouts | Config changes trigger rolling updates via SHA-256 hash annotation |
 | Config restoration | The init container restores config on every pod restart (overwrite or merge mode) |
 

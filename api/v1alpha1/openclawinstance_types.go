@@ -1342,6 +1342,11 @@ type ManagedResourcesStatus struct {
 	// BackupCronJob is the name of the managed periodic backup CronJob
 	// +optional
 	BackupCronJob string `json:"backupCronJob,omitempty"`
+
+	// TailscaleStateSecret is the name of the Secret used to persist Tailscale
+	// node identity and TLS certificate state across pod restarts
+	// +optional
+	TailscaleStateSecret string `json:"tailscaleStateSecret,omitempty"`
 }
 
 // +kubebuilder:object:root=true

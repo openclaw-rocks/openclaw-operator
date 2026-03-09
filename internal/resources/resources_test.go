@@ -5991,11 +5991,12 @@ func TestBuildStatefulSet_TailscaleSidecar(t *testing.T) {
 	if envMap["TS_HOSTNAME"].Value != "ts-sidecar" {
 		t.Errorf("TS_HOSTNAME = %q, want %q", envMap["TS_HOSTNAME"].Value, "ts-sidecar")
 	}
-	if envMap["TS_KUBE_SECRET"].Value != "" {
-		t.Errorf("TS_KUBE_SECRET = %q, want empty string", envMap["TS_KUBE_SECRET"].Value)
+	expectedStateSecret := TailscaleStateSecretName(instance)
+	if envMap["TS_KUBE_SECRET"].Value != expectedStateSecret {
+		t.Errorf("TS_KUBE_SECRET = %q, want %q", envMap["TS_KUBE_SECRET"].Value, expectedStateSecret)
 	}
-	if envMap["KUBERNETES_SERVICE_HOST"].Value != "" {
-		t.Errorf("KUBERNETES_SERVICE_HOST = %q, want empty string", envMap["KUBERNETES_SERVICE_HOST"].Value)
+	if _, hasKSH := envMap["KUBERNETES_SERVICE_HOST"]; hasKSH {
+		t.Error("KUBERNETES_SERVICE_HOST should not be set (containerboot needs kube API access)")
 	}
 
 	tsAuthKey, ok := envMap["TS_AUTHKEY"]
@@ -6631,6 +6632,100 @@ func TestBuildStatefulSet_TailscaleFunnel_UsesHTTPProbes(t *testing.T) {
 	}
 	if container.StartupProbe.HTTPGet == nil {
 		t.Fatal("startup probe should use HTTPGet handler when Tailscale funnel is enabled")
+	}
+}
+
+func TestBuildStatefulSet_TailscaleStateSecretName(t *testing.T) {
+	instance := newTestInstance("ts-state")
+	got := TailscaleStateSecretName(instance)
+	want := "ts-state-ts-state"
+	if got != want {
+		t.Errorf("TailscaleStateSecretName = %q, want %q", got, want)
+	}
+}
+
+func TestBuildTailscaleStateSecret(t *testing.T) {
+	instance := newTestInstance("ts-secret")
+	secret := BuildTailscaleStateSecret(instance)
+
+	if secret.Name != TailscaleStateSecretName(instance) {
+		t.Errorf("secret name = %q, want %q", secret.Name, TailscaleStateSecretName(instance))
+	}
+	if secret.Namespace != instance.Namespace {
+		t.Errorf("secret namespace = %q, want %q", secret.Namespace, instance.Namespace)
+	}
+	if secret.Data != nil {
+		t.Error("state secret should have nil Data (containerboot manages content)")
+	}
+}
+
+func TestBuildStatefulSet_TailscaleAutoMountToken(t *testing.T) {
+	instance := newTestInstance("ts-automount")
+	instance.Spec.Tailscale.Enabled = true
+
+	sts := BuildStatefulSet(instance, "", nil)
+	token := sts.Spec.Template.Spec.AutomountServiceAccountToken
+	if token == nil || !*token {
+		t.Error("AutomountServiceAccountToken should be true when Tailscale is enabled")
+	}
+}
+
+func TestBuildServiceAccount_TailscaleAutoMountToken(t *testing.T) {
+	instance := newTestInstance("ts-sa-token")
+	instance.Spec.Tailscale.Enabled = true
+
+	sa := BuildServiceAccount(instance)
+	if sa.AutomountServiceAccountToken == nil || !*sa.AutomountServiceAccountToken {
+		t.Error("AutomountServiceAccountToken should be true when Tailscale is enabled")
+	}
+}
+
+func TestBuildRole_TailscaleStateSecretRule(t *testing.T) {
+	instance := newTestInstance("ts-role")
+	instance.Spec.Tailscale.Enabled = true
+
+	role := BuildRole(instance)
+
+	var found bool
+	for _, rule := range role.Rules {
+		for _, res := range rule.Resources {
+			if res == "secrets" {
+				for _, name := range rule.ResourceNames {
+					if name == TailscaleStateSecretName(instance) {
+						found = true
+						// Verify verbs
+						verbSet := make(map[string]bool)
+						for _, v := range rule.Verbs {
+							verbSet[v] = true
+						}
+						if !verbSet["get"] || !verbSet["update"] || !verbSet["patch"] {
+							t.Errorf("expected get/update/patch verbs, got %v", rule.Verbs)
+						}
+					}
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("Role should include a rule for the Tailscale state Secret")
+	}
+}
+
+func TestBuildRole_NoTailscaleRule_WhenDisabled(t *testing.T) {
+	instance := newTestInstance("no-ts-role")
+
+	role := BuildRole(instance)
+
+	for _, rule := range role.Rules {
+		for _, res := range rule.Resources {
+			if res == "secrets" {
+				for _, name := range rule.ResourceNames {
+					if name == TailscaleStateSecretName(instance) {
+						t.Error("Role should not include Tailscale state Secret rule when Tailscale is disabled")
+					}
+				}
+			}
+		}
 	}
 }
 

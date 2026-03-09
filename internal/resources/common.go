@@ -210,6 +210,11 @@ func BasicAuthSecretName(instance *openclawv1alpha1.OpenClawInstance) string {
 	return instance.Name + "-basic-auth"
 }
 
+// TailscaleStateSecretName returns the name of the Tailscale state Secret
+func TailscaleStateSecretName(instance *openclawv1alpha1.OpenClawInstance) string {
+	return instance.Name + "-ts-state"
+}
+
 // GetImageRepository returns the image repository with defaults
 func GetImageRepository(instance *openclawv1alpha1.OpenClawInstance) string {
 	if instance.Spec.Image.Repository != "" {

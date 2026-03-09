@@ -76,7 +76,7 @@ func BuildStatefulSet(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenS
 				Spec: corev1.PodSpec{
 					ServiceAccountName:            ServiceAccountName(instance),
 					DeprecatedServiceAccount:      ServiceAccountName(instance),
-					AutomountServiceAccountToken:  Ptr(instance.Spec.SelfConfigure.Enabled),
+					AutomountServiceAccountToken:  Ptr(instance.Spec.SelfConfigure.Enabled || instance.Spec.Tailscale.Enabled),
 					SecurityContext:               buildPodSecurityContext(instance),
 					InitContainers:                buildInitContainers(instance, skillPacks),
 					Containers:                    buildContainers(instance, gwSecretName),
@@ -895,14 +895,11 @@ func buildTailscaleContainer(instance *openclawv1alpha1.OpenClawInstance) corev1
 		{Name: "TS_SOCKET", Value: TailscaleSocketPath},
 		{Name: "TS_SERVE_CONFIG", Value: "/etc/tailscale/serve/" + TailscaleServeConfigKey},
 		{Name: "TS_HOSTNAME", Value: hostname},
-		// Disable Kubernetes Secret-based state storage so containerboot
-		// does not try to create a kube client (which requires a service
-		// account token the pod intentionally does not mount).
-		{Name: "TS_KUBE_SECRET", Value: ""},
-		// Override the auto-injected KUBERNETES_SERVICE_HOST so containerboot
-		// does not attempt kube client init (tailscale/tailscale#8188).
-		// State is persisted to TS_STATE_DIR on the emptyDir volume instead.
-		{Name: "KUBERNETES_SERVICE_HOST", Value: ""},
+		// Persist Tailscale node identity and TLS certificates to a
+		// Kubernetes Secret so state survives pod restarts. This prevents
+		// hostname incrementing (device-1, device-2, ...) and Let's Encrypt
+		// certificate re-issuance on every restart.
+		{Name: "TS_KUBE_SECRET", Value: TailscaleStateSecretName(instance)},
 	}
 
 	// Inject TS_AUTHKEY from Secret

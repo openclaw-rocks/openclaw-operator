@@ -269,6 +269,8 @@ When enabled, the operator:
 
 - Adds a **Tailscale sidecar** running `tailscaled` in userspace mode (`TS_USERSPACE=true`). The sidecar handles serve/funnel declaratively via `TS_SERVE_CONFIG`.
 - Adds an **init container** (`init-tailscale-bin`) that copies the `tailscale` CLI binary to a shared volume (`/tailscale-bin`), making it available to the main container for `tailscale whois` (SSO auth).
+- Creates a **state Secret** (`<instance>-ts-state`) and sets `TS_KUBE_SECRET` so Tailscale persists node identity and TLS certificates across pod restarts. This prevents hostname incrementing and Let's Encrypt certificate re-issuance.
+- Grants the pod's ServiceAccount `get/update/patch` on the state Secret and enables `AutomountServiceAccountToken` so containerboot can access the Kubernetes API.
 - Sets `TS_SOCKET` on the main container pointing to the sidecar's Unix socket.
 - Prepends `/tailscale-bin` to the main container's `PATH`.
 - Adds `tailscale-serve.json` to the ConfigMap with the serve/funnel configuration.
@@ -869,6 +871,7 @@ Standard `metav1.Condition` array. Condition types:
 | `grafanaDashboardInstance` | `string` | Name of the instance detail dashboard ConfigMap. |
 | `horizontalPodAutoscaler` | `string` | Name of the managed HorizontalPodAutoscaler. |
 | `backupCronJob`      | `string` | Name of the managed periodic backup CronJob. |
+| `tailscaleStateSecret` | `string` | Name of the Secret used to persist Tailscale node identity and TLS certificate state. |
 
 ### status.backup and restore
 

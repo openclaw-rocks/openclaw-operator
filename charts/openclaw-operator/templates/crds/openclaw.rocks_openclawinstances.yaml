@@ -9587,6 +9587,11 @@ spec:
                   statefulSet:
                     description: StatefulSet is the name of the managed StatefulSet
                     type: string
+                  tailscaleStateSecret:
+                    description: |-
+                      TailscaleStateSecret is the name of the Secret used to persist Tailscale
+                      node identity and TLS certificate state across pod restarts
+                    type: string
                 type: object
               observedGeneration:
                 description: ObservedGeneration is the most recent generation observed
