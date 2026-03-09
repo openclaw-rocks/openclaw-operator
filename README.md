@@ -726,6 +726,7 @@ The operator follows a **secure-by-default** philosophy. Every instance ships wi
 - **Minimal RBAC**: each instance gets its own ServiceAccount with read-only access to its own ConfigMap; operator can create/update Secrets only for operator-managed gateway tokens
 - **No automatic token mounting**: `automountServiceAccountToken: false` on both ServiceAccounts and pod specs (enabled only when `selfConfigure` is active)
 - **Secret validation**: the operator checks that all referenced Secrets exist and sets a `SecretsReady` condition
+- **Security context propagation**: when `podSecurityContext.runAsNonRoot` is set to `false`, the operator propagates this to init containers and applicable sidecars (tailscale, web terminal) so there is no contradiction between pod-level and container-level settings. Self-consistent sidecars (gateway-proxy, chromium, ollama) retain their own security contexts. The `containerSecurityContext.runAsNonRoot` and `containerSecurityContext.runAsUser` fields allow granular control over the main container independently of the pod level.
 
 ### Validating webhook
 

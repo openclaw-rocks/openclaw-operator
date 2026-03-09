@@ -145,12 +145,23 @@ func buildPodSecurityContext(instance *openclawv1alpha1.OpenClawInstance) *corev
 	return psc
 }
 
+// podRunAsNonRoot returns the effective RunAsNonRoot value from the pod security context.
+// Returns true if not explicitly configured (secure default).
+func podRunAsNonRoot(instance *openclawv1alpha1.OpenClawInstance) bool {
+	if spec := instance.Spec.Security.PodSecurityContext; spec != nil && spec.RunAsNonRoot != nil {
+		return *spec.RunAsNonRoot
+	}
+	return true
+}
+
 // buildContainerSecurityContext creates the container-level security context
 func buildContainerSecurityContext(instance *openclawv1alpha1.OpenClawInstance) *corev1.SecurityContext {
+	nonRoot := podRunAsNonRoot(instance)
+
 	sc := &corev1.SecurityContext{
 		AllowPrivilegeEscalation: Ptr(false),
 		ReadOnlyRootFilesystem:   Ptr(true), // PVC subpaths at ~/.openclaw/, ~/.local/, ~/.cache/ + /tmp emptyDir provide writable paths
-		RunAsNonRoot:             Ptr(true),
+		RunAsNonRoot:             Ptr(nonRoot),
 		Capabilities: &corev1.Capabilities{
 			Drop: []corev1.Capability{"ALL"},
 		},
@@ -170,6 +181,12 @@ func buildContainerSecurityContext(instance *openclawv1alpha1.OpenClawInstance) 
 		}
 		if spec.Capabilities != nil {
 			sc.Capabilities = spec.Capabilities
+		}
+		if spec.RunAsNonRoot != nil {
+			sc.RunAsNonRoot = spec.RunAsNonRoot
+		}
+		if spec.RunAsUser != nil {
+			sc.RunAsUser = spec.RunAsUser
 		}
 	}
 
@@ -501,7 +518,7 @@ func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance, skillPacks
 			SecurityContext: &corev1.SecurityContext{
 				AllowPrivilegeEscalation: Ptr(false),
 				ReadOnlyRootFilesystem:   Ptr(readOnlyRoot),
-				RunAsNonRoot:             Ptr(true),
+				RunAsNonRoot:             Ptr(podRunAsNonRoot(instance)),
 				Capabilities: &corev1.Capabilities{
 					Drop: []corev1.Capability{"ALL"},
 				},
@@ -747,7 +764,7 @@ func buildSkillsInitContainer(instance *openclawv1alpha1.OpenClawInstance) *core
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: Ptr(false),
 			ReadOnlyRootFilesystem:   Ptr(false), // npx needs to write to node_modules
-			RunAsNonRoot:             Ptr(true),
+			RunAsNonRoot:             Ptr(podRunAsNonRoot(instance)),
 			Capabilities: &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
 			},
@@ -805,7 +822,7 @@ pnpm --version`
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: Ptr(false),
 			ReadOnlyRootFilesystem:   Ptr(false), // corepack writes to node internals
-			RunAsNonRoot:             Ptr(true),
+			RunAsNonRoot:             Ptr(podRunAsNonRoot(instance)),
 			Capabilities: &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
 			},
@@ -943,7 +960,7 @@ uv --version`
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: Ptr(false),
 			ReadOnlyRootFilesystem:   Ptr(false), // uv needs writable paths
-			RunAsNonRoot:             Ptr(true),
+			RunAsNonRoot:             Ptr(podRunAsNonRoot(instance)),
 			Capabilities: &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
 			},
@@ -1040,7 +1057,7 @@ func buildTailscaleContainer(instance *openclawv1alpha1.OpenClawInstance) corev1
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: Ptr(false),
 			ReadOnlyRootFilesystem:   Ptr(true),
-			RunAsNonRoot:             Ptr(true),
+			RunAsNonRoot:             Ptr(podRunAsNonRoot(instance)),
 			Capabilities: &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
 			},
@@ -1108,7 +1125,7 @@ func buildTailscaleBinInitContainer(instance *openclawv1alpha1.OpenClawInstance)
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: Ptr(false),
 			ReadOnlyRootFilesystem:   Ptr(true),
-			RunAsNonRoot:             Ptr(true),
+			RunAsNonRoot:             Ptr(podRunAsNonRoot(instance)),
 			Capabilities: &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
 			},
@@ -1439,7 +1456,7 @@ func buildWebTerminalContainer(instance *openclawv1alpha1.OpenClawInstance) core
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: Ptr(false),
 			ReadOnlyRootFilesystem:   Ptr(false), // ttyd needs writable rootfs
-			RunAsNonRoot:             Ptr(true),
+			RunAsNonRoot:             Ptr(podRunAsNonRoot(instance)),
 			RunAsUser:                Ptr(int64(1000)), // same as main container
 			Capabilities: &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
