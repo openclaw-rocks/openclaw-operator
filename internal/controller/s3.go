@@ -256,6 +256,9 @@ func isJobFinished(job *batchv1.Job) (bool, batchv1.JobConditionType) {
 
 // pvcName returns the PVC name for the instance (delegates to resources package)
 func pvcNameForInstance(instance *openclawv1alpha1.OpenClawInstance) string {
+	if instance.Spec.Storage.Persistence.ExistingClaim != "" {
+		return instance.Spec.Storage.Persistence.ExistingClaim
+	}
 	return resources.PVCName(instance)
 }
 

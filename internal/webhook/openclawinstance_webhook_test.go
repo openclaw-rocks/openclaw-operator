@@ -799,6 +799,163 @@ func TestValidateCreate_ValidWorkspace(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Resource quantity validation tests
+// ---------------------------------------------------------------------------
+
+func TestValidateResourceQuantities(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*openclawv1alpha1.OpenClawInstance)
+		wantErr bool
+		errSub  string
+	}{
+		{
+			name:    "Valid default instance",
+			mutate:  func(i *openclawv1alpha1.OpenClawInstance) {},
+			wantErr: false,
+		},
+		{
+			name: "Valid custom quantities",
+			mutate: func(i *openclawv1alpha1.OpenClawInstance) {
+				i.Spec.Storage.Persistence.Size = "10Gi"
+				i.Spec.Resources.Requests.CPU = "500m"
+				i.Spec.Resources.Requests.Memory = "1Gi"
+				i.Spec.Resources.Limits.CPU = "1"
+				i.Spec.Resources.Limits.Memory = "2Gi"
+				i.Spec.Chromium.Resources.Requests.CPU = "100m"
+				i.Spec.Tailscale.Resources.Limits.Memory = "128Mi"
+				i.Spec.Ollama.Resources.Requests.CPU = "2"
+				i.Spec.Ollama.Storage.SizeLimit = "50Gi"
+				i.Spec.WebTerminal.Resources.Requests.CPU = "100m"
+				i.Spec.WebTerminal.Resources.Limits.Memory = "256Mi"
+				i.Spec.Chromium.Persistence.Size = "5Gi"
+			},
+			wantErr: false,
+		},
+		{
+			name: "Invalid Chromium persistence size",
+			mutate: func(i *openclawv1alpha1.OpenClawInstance) {
+				i.Spec.Chromium.Persistence.Size = "invalid"
+			},
+			wantErr: true,
+			errSub:  "spec.chromium.persistence.size",
+		},
+		{
+			name: "Invalid Ollama storage size limit",
+			mutate: func(i *openclawv1alpha1.OpenClawInstance) {
+				i.Spec.Ollama.Storage.SizeLimit = "invalid"
+			},
+			wantErr: true,
+			errSub:  "spec.ollama.storage.sizeLimit",
+		},
+		{
+			name: "Invalid Web terminal CPU request",
+			mutate: func(i *openclawv1alpha1.OpenClawInstance) {
+				i.Spec.WebTerminal.Resources.Requests.CPU = "abc"
+			},
+			wantErr: true,
+			errSub:  "spec.webTerminal.resources.requests.cpu",
+		},
+		{
+			name: "Invalid storage size",
+			mutate: func(i *openclawv1alpha1.OpenClawInstance) {
+				i.Spec.Storage.Persistence.Size = "invalid"
+			},
+			wantErr: true,
+			errSub:  "spec.storage.persistence.size",
+		},
+		{
+			name: "Invalid main resources CPU request",
+			mutate: func(i *openclawv1alpha1.OpenClawInstance) {
+				i.Spec.Resources.Requests.CPU = "abc"
+			},
+			wantErr: true,
+			errSub:  "spec.resources.requests.cpu",
+		},
+		{
+			name: "Invalid main resources Memory request",
+			mutate: func(i *openclawv1alpha1.OpenClawInstance) {
+				i.Spec.Resources.Requests.Memory = "100 invalid"
+			},
+			wantErr: true,
+			errSub:  "spec.resources.requests.memory",
+		},
+		{
+			name: "Invalid main resources CPU limit",
+			mutate: func(i *openclawv1alpha1.OpenClawInstance) {
+				i.Spec.Resources.Limits.CPU = "0.5.0"
+			},
+			wantErr: true,
+			errSub:  "spec.resources.limits.cpu",
+		},
+		{
+			name: "Invalid main resources Memory limit",
+			mutate: func(i *openclawv1alpha1.OpenClawInstance) {
+				i.Spec.Resources.Limits.Memory = "1024mB"
+			},
+			wantErr: true,
+			errSub:  "spec.resources.limits.memory",
+		},
+		{
+			name: "Invalid Chromium CPU request",
+			mutate: func(i *openclawv1alpha1.OpenClawInstance) {
+				i.Spec.Chromium.Resources.Requests.CPU = "1000x"
+			},
+			wantErr: true,
+			errSub:  "spec.chromium.resources.requests.cpu",
+		},
+		{
+			name: "Invalid Chromium Memory limit",
+			mutate: func(i *openclawv1alpha1.OpenClawInstance) {
+				i.Spec.Chromium.Resources.Limits.Memory = "512 gigabytes"
+			},
+			wantErr: true,
+			errSub:  "spec.chromium.resources.limits.memory",
+		},
+		{
+			name: "Invalid Tailscale CPU limit",
+			mutate: func(i *openclawv1alpha1.OpenClawInstance) {
+				i.Spec.Tailscale.Resources.Limits.CPU = "1.5i"
+			},
+			wantErr: true,
+			errSub:  "spec.tailscale.resources.limits.cpu",
+		},
+		{
+			name: "Invalid Ollama Memory request",
+			mutate: func(i *openclawv1alpha1.OpenClawInstance) {
+				i.Spec.Ollama.Resources.Requests.Memory = "8Giii"
+			},
+			wantErr: true,
+			errSub:  "spec.ollama.resources.requests.memory",
+		},
+		{
+			name: "Empty values are allowed",
+			mutate: func(i *openclawv1alpha1.OpenClawInstance) {
+				i.Spec.Storage.Persistence.Size = ""
+				i.Spec.Resources.Requests.CPU = ""
+				i.Spec.Resources.Limits.Memory = ""
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			instance := newTestInstance()
+			tt.mutate(instance)
+			err := validateResourceQuantities(instance)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateResourceQuantities() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr && tt.errSub != "" && !strings.Contains(err.Error(), tt.errSub) {
+				t.Errorf("validateResourceQuantities() error = %v, want error containing %q", err, tt.errSub)
+			}
+		})
+	}
+}
+
 func TestValidateCreate_WorkspaceNil(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -197,6 +198,11 @@ func (v *OpenClawInstanceValidator) validate(instance *openclawv1alpha1.OpenClaw
 		}
 	}
 
+	// 11b. Validate storage size and resource quantities
+	if err := validateResourceQuantities(instance); err != nil {
+		return nil, err
+	}
+
 	// 12. Validate auto-update spec
 	if instance.Spec.AutoUpdate.CheckInterval != "" {
 		d, err := time.ParseDuration(instance.Spec.AutoUpdate.CheckInterval)
@@ -283,6 +289,112 @@ func validateWorkspaceSpec(ws *openclawv1alpha1.WorkspaceSpec) error {
 			return fmt.Errorf("workspace initialDirectories entry %q: %w", dir, err)
 		}
 	}
+	return nil
+}
+
+// validateResourceQuantities checks that all storage and compute resource
+// strings are valid Kubernetes quantities (e.g. "10Gi", "500m").
+func validateResourceQuantities(instance *openclawv1alpha1.OpenClawInstance) error {
+	check := func(path, val string) error {
+		if val == "" {
+			return nil
+		}
+		if _, err := resource.ParseQuantity(val); err != nil {
+			return fmt.Errorf("%s %q is not a valid Kubernetes quantity: %w", path, val, err)
+		}
+		return nil
+	}
+
+	// Storage size
+	if err := check("spec.storage.persistence.size", instance.Spec.Storage.Persistence.Size); err != nil {
+		return err
+	}
+
+	// Main container resources
+	r := instance.Spec.Resources
+	if err := check("spec.resources.requests.cpu", r.Requests.CPU); err != nil {
+		return err
+	}
+	if err := check("spec.resources.requests.memory", r.Requests.Memory); err != nil {
+		return err
+	}
+	if err := check("spec.resources.limits.cpu", r.Limits.CPU); err != nil {
+		return err
+	}
+	if err := check("spec.resources.limits.memory", r.Limits.Memory); err != nil {
+		return err
+	}
+
+	// Chromium resources
+	cr := instance.Spec.Chromium.Resources
+	if err := check("spec.chromium.resources.requests.cpu", cr.Requests.CPU); err != nil {
+		return err
+	}
+	if err := check("spec.chromium.resources.requests.memory", cr.Requests.Memory); err != nil {
+		return err
+	}
+	if err := check("spec.chromium.resources.limits.cpu", cr.Limits.CPU); err != nil {
+		return err
+	}
+	if err := check("spec.chromium.resources.limits.memory", cr.Limits.Memory); err != nil {
+		return err
+	}
+
+	// Chromium persistence
+	if err := check("spec.chromium.persistence.size", instance.Spec.Chromium.Persistence.Size); err != nil {
+		return err
+	}
+
+	// Tailscale resources
+	tr := instance.Spec.Tailscale.Resources
+	if err := check("spec.tailscale.resources.requests.cpu", tr.Requests.CPU); err != nil {
+		return err
+	}
+	if err := check("spec.tailscale.resources.requests.memory", tr.Requests.Memory); err != nil {
+		return err
+	}
+	if err := check("spec.tailscale.resources.limits.cpu", tr.Limits.CPU); err != nil {
+		return err
+	}
+	if err := check("spec.tailscale.resources.limits.memory", tr.Limits.Memory); err != nil {
+		return err
+	}
+
+	// Ollama resources
+	or := instance.Spec.Ollama.Resources
+	if err := check("spec.ollama.resources.requests.cpu", or.Requests.CPU); err != nil {
+		return err
+	}
+	if err := check("spec.ollama.resources.requests.memory", or.Requests.Memory); err != nil {
+		return err
+	}
+	if err := check("spec.ollama.resources.limits.cpu", or.Limits.CPU); err != nil {
+		return err
+	}
+	if err := check("spec.ollama.resources.limits.memory", or.Limits.Memory); err != nil {
+		return err
+	}
+
+	// Ollama storage
+	if err := check("spec.ollama.storage.sizeLimit", instance.Spec.Ollama.Storage.SizeLimit); err != nil {
+		return err
+	}
+
+	// Web terminal resources
+	wr := instance.Spec.WebTerminal.Resources
+	if err := check("spec.webTerminal.resources.requests.cpu", wr.Requests.CPU); err != nil {
+		return err
+	}
+	if err := check("spec.webTerminal.resources.requests.memory", wr.Requests.Memory); err != nil {
+		return err
+	}
+	if err := check("spec.webTerminal.resources.limits.cpu", wr.Limits.CPU); err != nil {
+		return err
+	}
+	if err := check("spec.webTerminal.resources.limits.memory", wr.Limits.Memory); err != nil {
+		return err
+	}
+
 	return nil
 }
 

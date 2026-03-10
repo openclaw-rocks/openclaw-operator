@@ -27,6 +27,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -162,6 +163,92 @@ var _ = Describe("OpenClawInstance Controller", func() {
 
 			By("Cleaning up")
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+	})
+
+	Context("When using an existing PVC", func() {
+		It("Should fail if the existing PVC does not exist", func() {
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "existing-pvc-test",
+					Namespace: "default",
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Storage: openclawv1alpha1.StorageSpec{
+						Persistence: openclawv1alpha1.PersistenceSpec{
+							ExistingClaim: "non-existent-pvc",
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			instanceLookupKey := types.NamespacedName{Name: "existing-pvc-test", Namespace: "default"}
+
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, instanceLookupKey, instance)
+				if err != nil {
+					return false
+				}
+				for _, cond := range instance.Status.Conditions {
+					if cond.Type == openclawv1alpha1.ConditionTypeStorageReady &&
+						cond.Status == metav1.ConditionFalse &&
+						cond.Reason == "ExistingClaimNotFound" {
+						return true
+					}
+				}
+				return false
+			}, timeout, interval).Should(BeTrue())
+
+			By("Cleaning up")
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+
+		It("Should succeed if the existing PVC exists", func() {
+			pvc := &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "my-existing-pvc",
+					Namespace: "default",
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceStorage: resource.MustParse("1Gi"),
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, pvc)).Should(Succeed())
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "existing-pvc-success",
+					Namespace: "default",
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Storage: openclawv1alpha1.StorageSpec{
+						Persistence: openclawv1alpha1.PersistenceSpec{
+							ExistingClaim: "my-existing-pvc",
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			instanceLookupKey := types.NamespacedName{Name: "existing-pvc-success", Namespace: "default"}
+
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, instanceLookupKey, instance)
+				if err != nil {
+					return false
+				}
+				return instance.Status.ManagedResources.PVC == "my-existing-pvc"
+			}, timeout, interval).Should(BeTrue())
+
+			By("Cleaning up")
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+			Expect(k8sClient.Delete(ctx, pvc)).Should(Succeed())
 		})
 	})
 

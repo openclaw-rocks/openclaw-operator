@@ -18,7 +18,6 @@ package resources
 
 import (
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
@@ -29,10 +28,7 @@ func BuildPVC(instance *openclawv1alpha1.OpenClawInstance) *corev1.PersistentVol
 	labels := Labels(instance)
 
 	// Get storage size with default
-	size := instance.Spec.Storage.Persistence.Size
-	if size == "" {
-		size = "10Gi"
-	}
+	size := ParseQuantity(instance.Spec.Storage.Persistence.Size, "10Gi")
 
 	// Get access modes with default
 	accessModes := instance.Spec.Storage.Persistence.AccessModes
@@ -53,7 +49,7 @@ func BuildPVC(instance *openclawv1alpha1.OpenClawInstance) *corev1.PersistentVol
 			AccessModes: accessModes,
 			Resources: corev1.VolumeResourceRequirements{
 				Requests: corev1.ResourceList{
-					corev1.ResourceStorage: resource.MustParse(size),
+					corev1.ResourceStorage: size,
 				},
 			},
 		},
@@ -71,10 +67,7 @@ func BuildPVC(instance *openclawv1alpha1.OpenClawInstance) *corev1.PersistentVol
 func BuildChromiumPVC(instance *openclawv1alpha1.OpenClawInstance) *corev1.PersistentVolumeClaim {
 	labels := Labels(instance)
 
-	size := instance.Spec.Chromium.Persistence.Size
-	if size == "" {
-		size = "1Gi"
-	}
+	size := ParseQuantity(instance.Spec.Chromium.Persistence.Size, "1Gi")
 
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
@@ -86,7 +79,7 @@ func BuildChromiumPVC(instance *openclawv1alpha1.OpenClawInstance) *corev1.Persi
 			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 			Resources: corev1.VolumeResourceRequirements{
 				Requests: corev1.ResourceList{
-					corev1.ResourceStorage: resource.MustParse(size),
+					corev1.ResourceStorage: size,
 				},
 			},
 		},

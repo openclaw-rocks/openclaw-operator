@@ -25,9 +25,40 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	"github.com/openclawrocks/k8s-operator/internal/resources"
 )
 
 var _ = Describe("S3 Helpers", func() {
+	Context("pvcNameForInstance", func() {
+		It("Should return the existing claim name when specified", func() {
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-instance",
+					Namespace: "default",
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Storage: openclawv1alpha1.StorageSpec{
+						Persistence: openclawv1alpha1.PersistenceSpec{
+							ExistingClaim: "my-existing-pvc",
+						},
+					},
+				},
+			}
+			Expect(pvcNameForInstance(instance)).To(Equal("my-existing-pvc"))
+		})
+
+		It("Should return default PVC name when no existing claim is specified", func() {
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-instance",
+					Namespace: "default",
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{},
+			}
+			Expect(pvcNameForInstance(instance)).To(Equal(resources.PVCName(instance)))
+		})
+	})
+
 	Context("getTenantID", func() {
 		It("Should return the tenant label value when present", func() {
 			instance := &openclawv1alpha1.OpenClawInstance{

@@ -766,6 +766,20 @@ func (r *OpenClawInstanceReconciler) reconcilePVC(ctx context.Context, instance 
 
 	// Check if using existing claim
 	if instance.Spec.Storage.Persistence.ExistingClaim != "" {
+		existing := &corev1.PersistentVolumeClaim{}
+		if err := r.Get(ctx, types.NamespacedName{Name: instance.Spec.Storage.Persistence.ExistingClaim, Namespace: instance.Namespace}, existing); err != nil {
+			if apierrors.IsNotFound(err) {
+				meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+					Type:               openclawv1alpha1.ConditionTypeStorageReady,
+					Status:             metav1.ConditionFalse,
+					Reason:             "ExistingClaimNotFound",
+					Message:            fmt.Sprintf("Existing PVC %q not found", instance.Spec.Storage.Persistence.ExistingClaim),
+					ObservedGeneration: instance.Generation,
+				})
+				return fmt.Errorf("existing PVC %q not found", instance.Spec.Storage.Persistence.ExistingClaim)
+			}
+			return err
+		}
 		instance.Status.ManagedResources.PVC = instance.Spec.Storage.Persistence.ExistingClaim
 		return nil
 	}

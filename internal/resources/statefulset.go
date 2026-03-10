@@ -1126,29 +1126,10 @@ func buildTailscaleResourceRequirements(instance *openclawv1alpha1.OpenClawInsta
 		Limits:   corev1.ResourceList{},
 	}
 
-	cpuReq := instance.Spec.Tailscale.Resources.Requests.CPU
-	if cpuReq == "" {
-		cpuReq = "50m"
-	}
-	req.Requests[corev1.ResourceCPU] = resource.MustParse(cpuReq)
-
-	memReq := instance.Spec.Tailscale.Resources.Requests.Memory
-	if memReq == "" {
-		memReq = "64Mi"
-	}
-	req.Requests[corev1.ResourceMemory] = resource.MustParse(memReq)
-
-	cpuLim := instance.Spec.Tailscale.Resources.Limits.CPU
-	if cpuLim == "" {
-		cpuLim = "200m"
-	}
-	req.Limits[corev1.ResourceCPU] = resource.MustParse(cpuLim)
-
-	memLim := instance.Spec.Tailscale.Resources.Limits.Memory
-	if memLim == "" {
-		memLim = "256Mi"
-	}
-	req.Limits[corev1.ResourceMemory] = resource.MustParse(memLim)
+	req.Requests[corev1.ResourceCPU] = ParseQuantity(instance.Spec.Tailscale.Resources.Requests.CPU, "50m")
+	req.Requests[corev1.ResourceMemory] = ParseQuantity(instance.Spec.Tailscale.Resources.Requests.Memory, "64Mi")
+	req.Limits[corev1.ResourceCPU] = ParseQuantity(instance.Spec.Tailscale.Resources.Limits.CPU, "200m")
+	req.Limits[corev1.ResourceMemory] = ParseQuantity(instance.Spec.Tailscale.Resources.Limits.Memory, "256Mi")
 
 	return req
 }
@@ -1607,30 +1588,12 @@ func buildWebTerminalResourceRequirements(instance *openclawv1alpha1.OpenClawIns
 	}
 
 	// Requests
-	cpuReq := instance.Spec.WebTerminal.Resources.Requests.CPU
-	if cpuReq == "" {
-		cpuReq = "50m"
-	}
-	req.Requests[corev1.ResourceCPU] = resource.MustParse(cpuReq)
-
-	memReq := instance.Spec.WebTerminal.Resources.Requests.Memory
-	if memReq == "" {
-		memReq = "64Mi"
-	}
-	req.Requests[corev1.ResourceMemory] = resource.MustParse(memReq)
+	req.Requests[corev1.ResourceCPU] = ParseQuantity(instance.Spec.WebTerminal.Resources.Requests.CPU, "50m")
+	req.Requests[corev1.ResourceMemory] = ParseQuantity(instance.Spec.WebTerminal.Resources.Requests.Memory, "64Mi")
 
 	// Limits
-	cpuLim := instance.Spec.WebTerminal.Resources.Limits.CPU
-	if cpuLim == "" {
-		cpuLim = "200m"
-	}
-	req.Limits[corev1.ResourceCPU] = resource.MustParse(cpuLim)
-
-	memLim := instance.Spec.WebTerminal.Resources.Limits.Memory
-	if memLim == "" {
-		memLim = "128Mi"
-	}
-	req.Limits[corev1.ResourceMemory] = resource.MustParse(memLim)
+	req.Limits[corev1.ResourceCPU] = ParseQuantity(instance.Spec.WebTerminal.Resources.Limits.CPU, "200m")
+	req.Limits[corev1.ResourceMemory] = ParseQuantity(instance.Spec.WebTerminal.Resources.Limits.Memory, "128Mi")
 
 	return req
 }
@@ -1643,34 +1606,16 @@ func buildOllamaResourceRequirements(instance *openclawv1alpha1.OpenClawInstance
 	}
 
 	// Requests
-	cpuReq := instance.Spec.Ollama.Resources.Requests.CPU
-	if cpuReq == "" {
-		cpuReq = "500m"
-	}
-	req.Requests[corev1.ResourceCPU] = resource.MustParse(cpuReq)
-
-	memReq := instance.Spec.Ollama.Resources.Requests.Memory
-	if memReq == "" {
-		memReq = "1Gi"
-	}
-	req.Requests[corev1.ResourceMemory] = resource.MustParse(memReq)
+	req.Requests[corev1.ResourceCPU] = ParseQuantity(instance.Spec.Ollama.Resources.Requests.CPU, "500m")
+	req.Requests[corev1.ResourceMemory] = ParseQuantity(instance.Spec.Ollama.Resources.Requests.Memory, "1Gi")
 
 	// Limits
-	cpuLim := instance.Spec.Ollama.Resources.Limits.CPU
-	if cpuLim == "" {
-		cpuLim = "2000m"
-	}
-	req.Limits[corev1.ResourceCPU] = resource.MustParse(cpuLim)
-
-	memLim := instance.Spec.Ollama.Resources.Limits.Memory
-	if memLim == "" {
-		memLim = "4Gi"
-	}
-	req.Limits[corev1.ResourceMemory] = resource.MustParse(memLim)
+	req.Limits[corev1.ResourceCPU] = ParseQuantity(instance.Spec.Ollama.Resources.Limits.CPU, "2000m")
+	req.Limits[corev1.ResourceMemory] = ParseQuantity(instance.Spec.Ollama.Resources.Limits.Memory, "4Gi")
 
 	// GPU support
 	if instance.Spec.Ollama.GPU != nil && *instance.Spec.Ollama.GPU > 0 {
-		gpuQty := resource.MustParse(fmt.Sprintf("%d", *instance.Spec.Ollama.GPU))
+		gpuQty := ParseQuantity(fmt.Sprintf("%d", *instance.Spec.Ollama.GPU), "0")
 		req.Requests[corev1.ResourceName("nvidia.com/gpu")] = gpuQty
 		req.Limits[corev1.ResourceName("nvidia.com/gpu")] = gpuQty
 	}
@@ -1930,10 +1875,7 @@ func buildVolumes(instance *openclawv1alpha1.OpenClawInstance, skillPacks *Resol
 			})
 		} else {
 			sizeLimit := instance.Spec.Ollama.Storage.SizeLimit
-			if sizeLimit == "" {
-				sizeLimit = "20Gi"
-			}
-			qty := resource.MustParse(sizeLimit)
+			qty := ParseQuantity(sizeLimit, "20Gi")
 			volumes = append(volumes, corev1.Volume{
 				Name: "ollama-models",
 				VolumeSource: corev1.VolumeSource{
@@ -1999,30 +1941,12 @@ func buildResourceRequirements(instance *openclawv1alpha1.OpenClawInstance) core
 	}
 
 	// Requests
-	cpuReq := instance.Spec.Resources.Requests.CPU
-	if cpuReq == "" {
-		cpuReq = "500m"
-	}
-	req.Requests[corev1.ResourceCPU] = resource.MustParse(cpuReq)
-
-	memReq := instance.Spec.Resources.Requests.Memory
-	if memReq == "" {
-		memReq = "1Gi"
-	}
-	req.Requests[corev1.ResourceMemory] = resource.MustParse(memReq)
+	req.Requests[corev1.ResourceCPU] = ParseQuantity(instance.Spec.Resources.Requests.CPU, "500m")
+	req.Requests[corev1.ResourceMemory] = ParseQuantity(instance.Spec.Resources.Requests.Memory, "1Gi")
 
 	// Limits
-	cpuLim := instance.Spec.Resources.Limits.CPU
-	if cpuLim == "" {
-		cpuLim = "2000m"
-	}
-	req.Limits[corev1.ResourceCPU] = resource.MustParse(cpuLim)
-
-	memLim := instance.Spec.Resources.Limits.Memory
-	if memLim == "" {
-		memLim = "4Gi"
-	}
-	req.Limits[corev1.ResourceMemory] = resource.MustParse(memLim)
+	req.Limits[corev1.ResourceCPU] = ParseQuantity(instance.Spec.Resources.Limits.CPU, "2000m")
+	req.Limits[corev1.ResourceMemory] = ParseQuantity(instance.Spec.Resources.Limits.Memory, "4Gi")
 
 	return req
 }
@@ -2035,30 +1959,12 @@ func buildChromiumResourceRequirements(instance *openclawv1alpha1.OpenClawInstan
 	}
 
 	// Requests
-	cpuReq := instance.Spec.Chromium.Resources.Requests.CPU
-	if cpuReq == "" {
-		cpuReq = "250m"
-	}
-	req.Requests[corev1.ResourceCPU] = resource.MustParse(cpuReq)
-
-	memReq := instance.Spec.Chromium.Resources.Requests.Memory
-	if memReq == "" {
-		memReq = "512Mi"
-	}
-	req.Requests[corev1.ResourceMemory] = resource.MustParse(memReq)
+	req.Requests[corev1.ResourceCPU] = ParseQuantity(instance.Spec.Chromium.Resources.Requests.CPU, "250m")
+	req.Requests[corev1.ResourceMemory] = ParseQuantity(instance.Spec.Chromium.Resources.Requests.Memory, "512Mi")
 
 	// Limits
-	cpuLim := instance.Spec.Chromium.Resources.Limits.CPU
-	if cpuLim == "" {
-		cpuLim = "1000m"
-	}
-	req.Limits[corev1.ResourceCPU] = resource.MustParse(cpuLim)
-
-	memLim := instance.Spec.Chromium.Resources.Limits.Memory
-	if memLim == "" {
-		memLim = "2Gi"
-	}
-	req.Limits[corev1.ResourceMemory] = resource.MustParse(memLim)
+	req.Limits[corev1.ResourceCPU] = ParseQuantity(instance.Spec.Chromium.Resources.Limits.CPU, "1000m")
+	req.Limits[corev1.ResourceMemory] = ParseQuantity(instance.Spec.Chromium.Resources.Limits.Memory, "2Gi")
 
 	return req
 }
