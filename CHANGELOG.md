@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.1](https://github.com/openclaw-rocks/k8s-operator/compare/v0.11.0...v0.11.1) (2026-03-10)
+
+
+### Bug Fixes
+
+* redirect nginx http temp dirs to /tmp for read-only rootfs ([#295](https://github.com/openclaw-rocks/k8s-operator/issues/295)) ([ef98bc9](https://github.com/openclaw-rocks/k8s-operator/commit/ef98bc93ec3b3d43a83148d32a4b83476a674ef8))
+
 ## [0.11.0](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.30...v0.11.0) (2026-03-10)
 
 
