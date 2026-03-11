@@ -295,6 +295,26 @@ func (r *OpenClawInstanceReconciler) driveUpdateStateMachine(ctx context.Context
 		return r.abortUpdate(ctx, instance, fmt.Sprintf("failed to patch image tag: %v", err))
 	}
 
+	// Step 4b: Scale StatefulSet back up if it was scaled down for backup.
+	// The backup flow scales to 0 replicas, and the main reconcile loop won't
+	// reach reconcileResources() while pendingVersion is set (early return),
+	// so we must explicitly restore replicas here (#299).
+	if needsBackup && persistenceEnabled {
+		sts := &appsv1.StatefulSet{}
+		stsKey := client.ObjectKey{Name: resources.StatefulSetName(instance), Namespace: instance.Namespace}
+		if getErr := r.Get(ctx, stsKey, sts); getErr == nil {
+			if sts.Spec.Replicas != nil && *sts.Spec.Replicas == 0 {
+				one := int32(1)
+				stsOriginal := sts.DeepCopy()
+				sts.Spec.Replicas = &one
+				if patchErr := r.Patch(ctx, sts, client.MergeFrom(stsOriginal)); patchErr != nil {
+					return r.abortUpdate(ctx, instance, fmt.Sprintf("failed to scale StatefulSet back up: %v", patchErr))
+				}
+				logger.Info("Scaled StatefulSet back up after pre-update backup")
+			}
+		}
+	}
+
 	// Step 5: Enter health check phase (keep PendingVersion set)
 	rollbackEnabled := instance.Spec.AutoUpdate.RollbackOnFailure == nil || *instance.Spec.AutoUpdate.RollbackOnFailure
 	if rollbackEnabled {
