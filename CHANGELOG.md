@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0](https://github.com/openclaw-rocks/k8s-operator/compare/v0.12.0...v0.13.0) (2026-03-11)
+
+
+### Features
+
+* **init-skills:** propagate spec.env and spec.envFrom to skills init container ([d3a08f3](https://github.com/openclaw-rocks/k8s-operator/commit/d3a08f3a5ea5412c3f9eab9e3b009908e7632d2f))
+* **init-skills:** propagate spec.env and spec.envFrom to skills init container ([44aff0c](https://github.com/openclaw-rocks/k8s-operator/commit/44aff0cc1be6a29d2195f5f03636ee89066c6e15)), closes [#307](https://github.com/openclaw-rocks/k8s-operator/issues/307)
+
+
+### Bug Fixes
+
+* **chromium:** use rewrite + bare proxy_pass in named location ([53f23d9](https://github.com/openclaw-rocks/k8s-operator/commit/53f23d9df68eb17f9c2380c935128e6e40b49ba5))
+* **chromium:** use rewrite + bare proxy_pass in named location ([#270](https://github.com/openclaw-rocks/k8s-operator/issues/270)) ([f4f0a58](https://github.com/openclaw-rocks/k8s-operator/commit/f4f0a582f3fe1a465e758cd59abebbe895d148ff))
+* combine consecutive appends to satisfy gocritic lint ([da357de](https://github.com/openclaw-rocks/k8s-operator/commit/da357de16fbdc06686d0f216fe5dd56d1a38b1ef))
+* **skills:** persist ClawHub-installed skills on PVC ([b17bad4](https://github.com/openclaw-rocks/k8s-operator/commit/b17bad47006a9c6b4eab76b49fe2c94f154dab83))
+* **skills:** persist ClawHub-installed skills on PVC ([#313](https://github.com/openclaw-rocks/k8s-operator/issues/313)) ([7a7dbfd](https://github.com/openclaw-rocks/k8s-operator/commit/7a7dbfdf83c5a26d9d34af94e6807eee05c8f6e0))
+* **web-terminal:** pass -W flag when ReadOnly is false ([a7f806b](https://github.com/openclaw-rocks/k8s-operator/commit/a7f806b11cdf6b96a6b8249a01631ed61c48a986))
+* **web-terminal:** pass -W flag when ReadOnly is false ([ff87cfd](https://github.com/openclaw-rocks/k8s-operator/commit/ff87cfd85108982e8c678602866670e20607631a))
+
 ## [0.12.0](https://github.com/openclaw-rocks/k8s-operator/compare/v0.11.2...v0.12.0) (2026-03-10)
 
 
