@@ -1026,6 +1026,37 @@ func (r *OpenClawInstanceReconciler) reconcileStatefulSet(ctx context.Context, i
 			Namespace: instance.Namespace,
 		},
 	}
+
+	// VolumeClaimTemplates are immutable on existing StatefulSets. Detect
+	// transitions (e.g. enabling/disabling HPA with persistence) and
+	// delete+recreate the StatefulSet when VCTs need to change.
+	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(sts), sts); err == nil {
+		var gwSecretName string
+		if gatewayToken != "" {
+			if instance.Spec.Gateway.ExistingSecret != "" {
+				gwSecretName = instance.Spec.Gateway.ExistingSecret
+			} else {
+				gwSecretName = resources.GatewayTokenSecretName(instance)
+			}
+		}
+		desired := resources.BuildStatefulSet(instance, gwSecretName, skillPacks)
+		if !resources.VolumeClaimTemplatesEqual(sts.Spec.VolumeClaimTemplates, desired.Spec.VolumeClaimTemplates) {
+			log.FromContext(ctx).Info("VolumeClaimTemplates changed, recreating StatefulSet")
+			if err := r.Client.Delete(ctx, sts); err != nil {
+				return fmt.Errorf("deleting StatefulSet for VCT change: %w", err)
+			}
+			// Requeue so the next reconcile creates the StatefulSet with the new VCTs
+			return fmt.Errorf("StatefulSet deleted for VolumeClaimTemplate change, requeueing")
+		}
+	}
+
+	// Reset sts to a clean object for CreateOrUpdate (the Get above may have populated it)
+	sts = &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      resources.StatefulSetName(instance),
+			Namespace: instance.Namespace,
+		},
+	}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sts, func() error {
 		// Pass the gateway token secret name so the env var can be injected
 		var gwSecretName string
