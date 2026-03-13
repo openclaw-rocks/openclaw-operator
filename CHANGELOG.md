@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0](https://github.com/openclaw-rocks/k8s-operator/compare/v0.16.2...v0.17.0) (2026-03-13)
+
+
+### Features
+
+* use VolumeClaimTemplates for per-replica PVCs when HPA is enabled ([2bd17dc](https://github.com/openclaw-rocks/k8s-operator/commit/2bd17dc8e2fabd492307b9b9790ee73972d1adec))
+* use VolumeClaimTemplates for per-replica PVCs when HPA is enabled ([2969f64](https://github.com/openclaw-rocks/k8s-operator/commit/2969f6448bfe5585b7d0e7f8dbddeebfbc97be45))
+
+
+### Bug Fixes
+
+* compare VCT specs in VolumeClaimTemplatesEqual to detect size/storageClass changes ([8547a6e](https://github.com/openclaw-rocks/k8s-operator/commit/8547a6ea601d0eb5e26843628f0837088a7083bf))
+* emit warning event for orphaned standalone PVC when HPA is enabled ([5094c0a](https://github.com/openclaw-rocks/k8s-operator/commit/5094c0a95ea926318b3fbe4e5142632bd1235421))
+* handle immutable VolumeClaimTemplates by recreating StatefulSet on VCT changes ([4fe0fbe](https://github.com/openclaw-rocks/k8s-operator/commit/4fe0fbee80f632b76b419a6cccb16ed05ae516fe))
+* normalize VolumeMode on VCTs to prevent reconcile spec drift ([639c3ec](https://github.com/openclaw-rocks/k8s-operator/commit/639c3ec6fd09c86c78173ea5ad478e4eb6b1723b))
+* reduce noisy API calls and events in HPA reconcile path ([4c79955](https://github.com/openclaw-rocks/k8s-operator/commit/4c79955b7acadfa84617ee5341d3005eae49e6f2))
+* use apiequality.Semantic.DeepEqual for VCT spec comparison ([cb46bc2](https://github.com/openclaw-rocks/k8s-operator/commit/cb46bc2c67d31ec350493d7aeb20b8de48f6b2e3))
+* use PascalCase+verb convention for StorageReady condition reason ([baeb26f](https://github.com/openclaw-rocks/k8s-operator/commit/baeb26fc832449c4d892513891935568d76cfd33))
+* warn when existingClaim is ignored due to HPA-managed VolumeClaimTemplates ([df28db4](https://github.com/openclaw-rocks/k8s-operator/commit/df28db47a58d44323fc2edf5a451f132836589e2))
+
+
+### Refactoring
+
+* compute desired StatefulSet once in reconcileStatefulSet ([8c6c779](https://github.com/openclaw-rocks/k8s-operator/commit/8c6c779c61e18332a1d438de2fe91026951f52c9))
+* extract IsPersistenceEnabled helper to deduplicate persistence checks ([46e940b](https://github.com/openclaw-rocks/k8s-operator/commit/46e940beae21037593e717d3d7e3943112dda3ff))
+* hoist gwSecretName computation to avoid duplication in reconcileStatefulSet ([fba54ae](https://github.com/openclaw-rocks/k8s-operator/commit/fba54aedf501df95e2a7511e0ed2872d6b3100d0))
+
 ## [0.16.2](https://github.com/openclaw-rocks/k8s-operator/compare/v0.16.1...v0.16.2) (2026-03-13)
 
 
