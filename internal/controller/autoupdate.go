@@ -256,9 +256,8 @@ func (r *OpenClawInstanceReconciler) driveUpdateStateMachine(ctx context.Context
 
 	// Step 2: Backup if needed
 	needsBackup := instance.Spec.AutoUpdate.BackupBeforeUpdate == nil || *instance.Spec.AutoUpdate.BackupBeforeUpdate
-	persistenceEnabled := instance.Spec.Storage.Persistence.Enabled == nil || *instance.Spec.Storage.Persistence.Enabled
 
-	if needsBackup && persistenceEnabled {
+	if needsBackup && resources.IsPersistenceEnabled(instance) {
 		switch instance.Status.AutoUpdate.UpdatePhase {
 		case "", updatePhaseBackingUp:
 			result, done, err := r.drivePreUpdateBackup(ctx, instance)
@@ -299,7 +298,7 @@ func (r *OpenClawInstanceReconciler) driveUpdateStateMachine(ctx context.Context
 	// The backup flow scales to 0 replicas, and the main reconcile loop won't
 	// reach reconcileResources() while pendingVersion is set (early return),
 	// so we must explicitly restore replicas here (#299).
-	if needsBackup && persistenceEnabled {
+	if needsBackup && resources.IsPersistenceEnabled(instance) {
 		sts := &appsv1.StatefulSet{}
 		stsKey := client.ObjectKey{Name: resources.StatefulSetName(instance), Namespace: instance.Namespace}
 		if getErr := r.Get(ctx, stsKey, sts); getErr == nil {
@@ -450,10 +449,8 @@ func (r *OpenClawInstanceReconciler) driveRollback(ctx context.Context, instance
 	}
 
 	backupPath := instance.Status.AutoUpdate.PreUpdateBackupPath
-	persistenceEnabled := instance.Spec.Storage.Persistence.Enabled == nil || *instance.Spec.Storage.Persistence.Enabled
-
 	// Step 8b: Restore from backup if available and persistence is enabled
-	if backupPath != "" && persistenceEnabled {
+	if backupPath != "" && resources.IsPersistenceEnabled(instance) {
 		result, done, err := r.driveRollbackRestore(ctx, instance, backupPath)
 		if err != nil {
 			logger.Error(err, "Rollback restore failed, reverting image tag only")

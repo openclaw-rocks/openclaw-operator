@@ -32,6 +32,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -2071,6 +2072,72 @@ var _ = Describe("OpenClawInstance Controller", func() {
 					Namespace: hpaTestNs,
 				}, sts)
 			}, 60*time.Second, 2*time.Second).Should(Succeed())
+
+			// Cleanup
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+	})
+
+	Context("When creating an instance with auto-scaling and persistence enabled", func() {
+		const vctTestName = "e2e-vct-test"
+		const vctTestNs = "default"
+
+		It("Should use VolumeClaimTemplates for per-replica PVCs", func() {
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      vctTestName,
+					Namespace: vctTestNs,
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Availability: openclawv1alpha1.AvailabilitySpec{
+						AutoScaling: &openclawv1alpha1.AutoScalingSpec{
+							Enabled:              resources.Ptr(true),
+							MinReplicas:          resources.Ptr(int32(1)),
+							MaxReplicas:          resources.Ptr(int32(3)),
+							TargetCPUUtilization: resources.Ptr(int32(70)),
+						},
+					},
+					Storage: openclawv1alpha1.StorageSpec{
+						Persistence: openclawv1alpha1.PersistenceSpec{
+							Size: "5Gi",
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			// Verify StatefulSet uses VolumeClaimTemplates
+			sts := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.StatefulSetName(instance),
+					Namespace: vctTestNs,
+				}, sts)
+			}, 60*time.Second, 2*time.Second).Should(Succeed())
+
+			Expect(sts.Spec.VolumeClaimTemplates).To(HaveLen(1))
+			vct := sts.Spec.VolumeClaimTemplates[0]
+			Expect(vct.Name).To(Equal("data"))
+			Expect(vct.Spec.AccessModes).To(ContainElement(corev1.ReadWriteOnce))
+			Expect(vct.Spec.Resources.Requests[corev1.ResourceStorage]).To(Equal(resource.MustParse("5Gi")))
+
+			// No static "data" volume in pod spec (VCT auto-provides it)
+			var dataVol *corev1.Volume
+			for i := range sts.Spec.Template.Spec.Volumes {
+				if sts.Spec.Template.Spec.Volumes[i].Name == "data" {
+					dataVol = &sts.Spec.Template.Spec.Volumes[i]
+					break
+				}
+			}
+			Expect(dataVol).To(BeNil(), "static data volume should not be present when VCTs are used")
+
+			// No standalone PVC should be created
+			pvc := &corev1.PersistentVolumeClaim{}
+			err := k8sClient.Get(ctx, types.NamespacedName{
+				Name:      resources.PVCName(instance),
+				Namespace: vctTestNs,
+			}, pvc)
+			Expect(apierrors.IsNotFound(err)).To(BeTrue(), "standalone PVC should not exist when VCTs are used")
 
 			// Cleanup
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())

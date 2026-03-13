@@ -75,8 +75,7 @@ func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Conte
 	}
 
 	// Check if persistence is enabled — no PVC means nothing to back up
-	persistenceEnabled := instance.Spec.Storage.Persistence.Enabled == nil || *instance.Spec.Storage.Persistence.Enabled
-	if !persistenceEnabled {
+	if !resources.IsPersistenceEnabled(instance) {
 		logger.Info("Persistence disabled, skipping backup")
 		instance.Status.Phase = openclawv1alpha1.PhaseTerminating
 		if err := r.Status().Update(ctx, instance); err != nil {
@@ -291,9 +290,8 @@ func (r *OpenClawInstanceReconciler) removeFinalizer(ctx context.Context, instan
 	// Orphan the PVC unless the user explicitly set orphan=false.
 	// Only applies to operator-managed PVCs (not existingClaim).
 	orphan := instance.Spec.Storage.Persistence.Orphan == nil || *instance.Spec.Storage.Persistence.Orphan
-	persistenceEnabled := instance.Spec.Storage.Persistence.Enabled == nil || *instance.Spec.Storage.Persistence.Enabled
 	usingExistingClaim := instance.Spec.Storage.Persistence.ExistingClaim != ""
-	if orphan && persistenceEnabled && !usingExistingClaim {
+	if orphan && resources.IsPersistenceEnabled(instance) && !usingExistingClaim {
 		if err := r.orphanPVC(ctx, instance); err != nil {
 			logger.Error(err, "Failed to orphan PVC - proceeding with finalizer removal")
 		}

@@ -10968,3 +10968,201 @@ func TestBuildChromiumCDPService_TargetsProxyPort(t *testing.T) {
 		t.Errorf("target port should be %d (proxy), got %d", ChromiumProxyPort, port.TargetPort.IntValue())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Per-replica PVC (VolumeClaimTemplate) tests
+// ---------------------------------------------------------------------------
+
+func TestBuildStatefulSet_VCT_PersistenceAndHPA(t *testing.T) {
+	instance := newTestInstance("vct-hpa")
+	instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+		Enabled: Ptr(true),
+	}
+	instance.Spec.Storage.Persistence.Size = "20Gi"
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	// VolumeClaimTemplates should be set
+	if len(sts.Spec.VolumeClaimTemplates) != 1 {
+		t.Fatalf("VolumeClaimTemplates length = %d, want 1", len(sts.Spec.VolumeClaimTemplates))
+	}
+
+	vct := sts.Spec.VolumeClaimTemplates[0]
+	if vct.Name != "data" {
+		t.Errorf("VCT name = %q, want %q", vct.Name, "data")
+	}
+
+	// Access modes default to RWO
+	if len(vct.Spec.AccessModes) != 1 || vct.Spec.AccessModes[0] != corev1.ReadWriteOnce {
+		t.Errorf("VCT access modes = %v, want [ReadWriteOnce]", vct.Spec.AccessModes)
+	}
+
+	// Size should match
+	size := vct.Spec.Resources.Requests[corev1.ResourceStorage]
+	if size.String() != "20Gi" {
+		t.Errorf("VCT storage size = %q, want %q", size.String(), "20Gi")
+	}
+
+	// No static "data" volume in pod spec
+	dataVol := findVolume(sts.Spec.Template.Spec.Volumes, "data")
+	if dataVol != nil {
+		t.Error("static data volume should not be present when VCTs are used")
+	}
+}
+
+func TestBuildStatefulSet_VCT_CustomAccessModes(t *testing.T) {
+	instance := newTestInstance("vct-rwx")
+	instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+		Enabled: Ptr(true),
+	}
+	instance.Spec.Storage.Persistence.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany}
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	if len(sts.Spec.VolumeClaimTemplates) != 1 {
+		t.Fatalf("VolumeClaimTemplates length = %d, want 1", len(sts.Spec.VolumeClaimTemplates))
+	}
+	if sts.Spec.VolumeClaimTemplates[0].Spec.AccessModes[0] != corev1.ReadWriteMany {
+		t.Errorf("VCT access mode = %v, want ReadWriteMany", sts.Spec.VolumeClaimTemplates[0].Spec.AccessModes)
+	}
+}
+
+func TestBuildStatefulSet_VCT_StorageClass(t *testing.T) {
+	instance := newTestInstance("vct-sc")
+	instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+		Enabled: Ptr(true),
+	}
+	sc := "fast-ssd"
+	instance.Spec.Storage.Persistence.StorageClass = &sc
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	if len(sts.Spec.VolumeClaimTemplates) != 1 {
+		t.Fatalf("VolumeClaimTemplates length = %d, want 1", len(sts.Spec.VolumeClaimTemplates))
+	}
+	vct := sts.Spec.VolumeClaimTemplates[0]
+	if vct.Spec.StorageClassName == nil || *vct.Spec.StorageClassName != "fast-ssd" {
+		t.Errorf("VCT storage class = %v, want %q", vct.Spec.StorageClassName, "fast-ssd")
+	}
+}
+
+func TestBuildStatefulSet_VCT_NoStorageClass(t *testing.T) {
+	instance := newTestInstance("vct-no-sc")
+	instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+		Enabled: Ptr(true),
+	}
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	if len(sts.Spec.VolumeClaimTemplates) != 1 {
+		t.Fatalf("VolumeClaimTemplates length = %d, want 1", len(sts.Spec.VolumeClaimTemplates))
+	}
+	if sts.Spec.VolumeClaimTemplates[0].Spec.StorageClassName != nil {
+		t.Errorf("VCT storage class should be nil, got %q", *sts.Spec.VolumeClaimTemplates[0].Spec.StorageClassName)
+	}
+}
+
+func TestBuildStatefulSet_NoVCT_HPADisabled(t *testing.T) {
+	instance := newTestInstance("no-vct")
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	// No VCTs when HPA is disabled
+	if len(sts.Spec.VolumeClaimTemplates) != 0 {
+		t.Errorf("VolumeClaimTemplates should be empty when HPA is disabled, got %d", len(sts.Spec.VolumeClaimTemplates))
+	}
+
+	// Static PVC volume should be present
+	dataVol := findVolume(sts.Spec.Template.Spec.Volumes, "data")
+	if dataVol == nil {
+		t.Fatal("data volume not found")
+	}
+	if dataVol.PersistentVolumeClaim == nil {
+		t.Error("data volume should use static PVC when HPA is disabled")
+	}
+}
+
+func TestBuildStatefulSet_NoVCT_PersistenceDisabledWithHPA(t *testing.T) {
+	instance := newTestInstance("no-vct-no-pvc")
+	instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+		Enabled: Ptr(true),
+	}
+	instance.Spec.Storage.Persistence.Enabled = Ptr(false)
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	// No VCTs when persistence is disabled
+	if len(sts.Spec.VolumeClaimTemplates) != 0 {
+		t.Errorf("VolumeClaimTemplates should be empty when persistence is disabled, got %d", len(sts.Spec.VolumeClaimTemplates))
+	}
+
+	// Data volume should be emptyDir
+	dataVol := findVolume(sts.Spec.Template.Spec.Volumes, "data")
+	if dataVol == nil {
+		t.Fatal("data volume not found")
+	}
+	if dataVol.EmptyDir == nil {
+		t.Error("data volume should be emptyDir when persistence is disabled")
+	}
+}
+
+func TestBuildStatefulSet_VCT_DefaultSize(t *testing.T) {
+	instance := newTestInstance("vct-default-size")
+	instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+		Enabled: Ptr(true),
+	}
+	// Don't set size - should default to 10Gi
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	if len(sts.Spec.VolumeClaimTemplates) != 1 {
+		t.Fatalf("VolumeClaimTemplates length = %d, want 1", len(sts.Spec.VolumeClaimTemplates))
+	}
+	size := sts.Spec.VolumeClaimTemplates[0].Spec.Resources.Requests[corev1.ResourceStorage]
+	if size.String() != "10Gi" {
+		t.Errorf("VCT default storage size = %q, want %q", size.String(), "10Gi")
+	}
+}
+
+func TestBuildStatefulSet_VCT_HasLabels(t *testing.T) {
+	instance := newTestInstance("vct-labels")
+	instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+		Enabled: Ptr(true),
+	}
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	if len(sts.Spec.VolumeClaimTemplates) != 1 {
+		t.Fatalf("VolumeClaimTemplates length = %d, want 1", len(sts.Spec.VolumeClaimTemplates))
+	}
+	labels := sts.Spec.VolumeClaimTemplates[0].Labels
+	if labels["app.kubernetes.io/name"] != "openclaw" {
+		t.Errorf("VCT missing expected label app.kubernetes.io/name=openclaw, got %v", labels)
+	}
+}
+
+func TestBuildStatefulSet_Idempotent_WithHPAAndPersistence(t *testing.T) {
+	instance := newTestInstance("idem-hpa")
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{Raw: []byte(`{"key":"val"}`)},
+	}
+	instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+		Enabled:              Ptr(true),
+		MinReplicas:          Ptr(int32(1)),
+		MaxReplicas:          Ptr(int32(5)),
+		TargetCPUUtilization: Ptr(int32(80)),
+	}
+	instance.Spec.Storage.Persistence.Size = "20Gi"
+	sc := "fast-ssd"
+	instance.Spec.Storage.Persistence.StorageClass = &sc
+
+	sts1 := BuildStatefulSet(instance, "", nil)
+	sts2 := BuildStatefulSet(instance, "", nil)
+
+	b1, _ := json.Marshal(sts1.Spec)
+	b2, _ := json.Marshal(sts2.Spec)
+
+	if !bytes.Equal(b1, b2) {
+		t.Error("BuildStatefulSet with HPA and persistence is not idempotent - two calls with the same input produce different specs")
+	}
+}

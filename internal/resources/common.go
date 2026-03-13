@@ -220,6 +220,12 @@ func PVCName(instance *openclawv1alpha1.OpenClawInstance) string {
 	return instance.Name + "-data"
 }
 
+// IsPersistenceEnabled returns true if persistent storage is enabled for the instance.
+// Defaults to true when not explicitly set.
+func IsPersistenceEnabled(instance *openclawv1alpha1.OpenClawInstance) bool {
+	return instance.Spec.Storage.Persistence.Enabled == nil || *instance.Spec.Storage.Persistence.Enabled
+}
+
 // ChromiumPVCName returns the name of the Chromium browser profile PVC
 func ChromiumPVCName(instance *openclawv1alpha1.OpenClawInstance) string {
 	return instance.Name + "-chromium-data"

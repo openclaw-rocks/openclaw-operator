@@ -554,7 +554,7 @@ func (r *OpenClawInstanceReconciler) reconcileBackupCronJob(ctx context.Context,
 	}
 
 	// Check persistence is enabled
-	if instance.Spec.Storage.Persistence.Enabled != nil && !*instance.Spec.Storage.Persistence.Enabled {
+	if !resources.IsPersistenceEnabled(instance) {
 		logger.Info("Scheduled backup requested but persistence is disabled, skipping CronJob creation")
 		meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
 			Type:               openclawv1alpha1.ConditionTypeScheduledBackupReady,

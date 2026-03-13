@@ -26,6 +26,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -94,6 +95,34 @@ func BuildStatefulSet(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenS
 		sts.Spec.Template.Spec.ImagePullSecrets,
 		instance.Spec.Image.PullSecrets...,
 	)
+
+	// When persistence is enabled with HPA (multi-replica), use VolumeClaimTemplates
+	// so each replica gets its own PVC instead of sharing a single static PVC.
+	if IsPersistenceEnabled(instance) && IsHPAEnabled(instance) {
+		size := ParseQuantity(instance.Spec.Storage.Persistence.Size, "10Gi")
+		accessModes := instance.Spec.Storage.Persistence.AccessModes
+		if len(accessModes) == 0 {
+			accessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
+		}
+		vct := corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:   "data",
+				Labels: labels,
+			},
+			Spec: corev1.PersistentVolumeClaimSpec{
+				AccessModes: accessModes,
+				Resources: corev1.VolumeResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceStorage: size,
+					},
+				},
+			},
+		}
+		if instance.Spec.Storage.Persistence.StorageClass != nil {
+			vct.Spec.StorageClassName = instance.Spec.Storage.Persistence.StorageClass
+		}
+		sts.Spec.VolumeClaimTemplates = []corev1.PersistentVolumeClaim{vct}
+	}
 
 	return sts
 }
@@ -1752,8 +1781,11 @@ func buildVolumes(instance *openclawv1alpha1.OpenClawInstance, skillPacks *Resol
 	volumes := []corev1.Volume{}
 
 	// Data volume (PVC or emptyDir)
-	persistenceEnabled := instance.Spec.Storage.Persistence.Enabled == nil || *instance.Spec.Storage.Persistence.Enabled
-	if persistenceEnabled {
+	switch {
+	case IsPersistenceEnabled(instance) && IsHPAEnabled(instance):
+		// VolumeClaimTemplates handle per-replica PVCs - the StatefulSet
+		// controller auto-creates a volume named "data" for each pod.
+	case IsPersistenceEnabled(instance):
 		pvcName := PVCName(instance)
 		if instance.Spec.Storage.Persistence.ExistingClaim != "" {
 			pvcName = instance.Spec.Storage.Persistence.ExistingClaim
@@ -1766,7 +1798,7 @@ func buildVolumes(instance *openclawv1alpha1.OpenClawInstance, skillPacks *Resol
 				},
 			},
 		})
-	} else {
+	default:
 		volumes = append(volumes, corev1.Volume{
 			Name: "data",
 			VolumeSource: corev1.VolumeSource{
@@ -2267,6 +2299,14 @@ func NormalizeStatefulSet(sts *appsv1.StatefulSet) {
 	for i := range spec.Containers {
 		normalizeContainer(&spec.Containers[i])
 	}
+
+	// K8s defaults VolumeMode to Filesystem on VolumeClaimTemplates
+	filesystemMode := corev1.PersistentVolumeFilesystem
+	for i := range sts.Spec.VolumeClaimTemplates {
+		if sts.Spec.VolumeClaimTemplates[i].Spec.VolumeMode == nil {
+			sts.Spec.VolumeClaimTemplates[i].Spec.VolumeMode = &filesystemMode
+		}
+	}
 }
 
 // normalizeContainer applies K8s admission defaults to a single container.
@@ -2333,4 +2373,24 @@ func statefulSetReplicas(instance *openclawv1alpha1.OpenClawInstance) *int32 {
 		return nil
 	}
 	return Ptr(int32(1))
+}
+
+// VolumeClaimTemplatesEqual compares two VolumeClaimTemplate slices by name
+// and spec. Both name and spec are immutable on existing StatefulSets, so any
+// change requires a delete+recreate. The caller must normalize the desired VCTs
+// (e.g. via NormalizeStatefulSet) before comparing so that API server defaults
+// like VolumeMode don't cause false negatives.
+func VolumeClaimTemplatesEqual(a, b []corev1.PersistentVolumeClaim) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Name != b[i].Name {
+			return false
+		}
+		if !apiequality.Semantic.DeepEqual(a[i].Spec, b[i].Spec) {
+			return false
+		}
+	}
+	return true
 }

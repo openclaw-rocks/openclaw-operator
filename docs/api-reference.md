@@ -730,6 +730,8 @@ High availability and scheduling configuration.
 | `autoScaling.targetCPUUtilization` | `*int32`           | `80`    | Target average CPU utilization (percentage).             |
 | `autoScaling.targetMemoryUtilization` | `*int32`        | --      | Target average memory utilization (percentage).          |
 
+When `autoScaling.enabled` is `true` with persistence enabled, the operator uses StatefulSet `VolumeClaimTemplates` instead of a standalone PVC. Each replica gets its own PVC (`data-<instance>-<ordinal>`) using `size`, `storageClass`, and `accessModes` from `spec.storage.persistence`. The `existingClaim` field is ignored in this mode. PVC retention policy is `Retain` for both scale-down and deletion.
+
 ### spec.backup
 
 Configures periodic scheduled backups to S3-compatible storage. Requires the `s3-backup-credentials` Secret in the operator namespace and persistence to be enabled.
