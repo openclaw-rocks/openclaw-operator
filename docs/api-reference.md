@@ -653,10 +653,10 @@ Health probe configuration for the main OpenClaw container. All probes use HTTP 
 | Field                 | Type     | Default | Description                                           |
 |-----------------------|----------|---------|-------------------------------------------------------|
 | `enabled`             | `*bool`  | `true`  | Enable the startup probe.                             |
-| `initialDelaySeconds` | `*int32` | `0`     | Seconds to wait before the first check.               |
+| `initialDelaySeconds` | `*int32` | `5`     | Seconds to wait before the first check.               |
 | `periodSeconds`       | `*int32` | `5`     | Seconds between checks.                              |
 | `timeoutSeconds`      | `*int32` | `3`     | Seconds before the check times out.                  |
-| `failureThreshold`    | `*int32` | `30`    | Consecutive failures before killing the container. Allows up to 150s startup. |
+| `failureThreshold`    | `*int32` | `60`    | Consecutive failures before killing the container. Allows up to 300s startup. |
 
 ### spec.observability
 

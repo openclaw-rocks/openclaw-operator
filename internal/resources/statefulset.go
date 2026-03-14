@@ -2175,11 +2175,11 @@ func buildStartupProbe(instance *openclawv1alpha1.OpenClawInstance) *corev1.Prob
 
 	probe := &corev1.Probe{
 		ProbeHandler:        buildHTTPProbeHandler("/healthz"),
-		InitialDelaySeconds: 0,
+		InitialDelaySeconds: 5,
 		PeriodSeconds:       5,
 		TimeoutSeconds:      3,
 		SuccessThreshold:    1,
-		FailureThreshold:    30, // 30 * 5s = 150s startup time
+		FailureThreshold:    60, // 60 * 5s = 300s startup time
 	}
 
 	if spec != nil {

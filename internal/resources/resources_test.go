@@ -403,8 +403,11 @@ func TestBuildStatefulSet_Defaults(t *testing.T) {
 	}
 
 	// Startup probe defaults
-	if main.StartupProbe.FailureThreshold != 30 {
-		t.Errorf("startup probe failureThreshold = %d, want 30", main.StartupProbe.FailureThreshold)
+	if main.StartupProbe.InitialDelaySeconds != 5 {
+		t.Errorf("startup probe initialDelaySeconds = %d, want 5", main.StartupProbe.InitialDelaySeconds)
+	}
+	if main.StartupProbe.FailureThreshold != 60 {
+		t.Errorf("startup probe failureThreshold = %d, want 60", main.StartupProbe.FailureThreshold)
 	}
 
 	// Data volume mount
