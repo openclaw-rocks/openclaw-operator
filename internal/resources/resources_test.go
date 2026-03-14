@@ -459,7 +459,7 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 	for _, env := range mainContainer.Env {
 		if env.Name == "OPENCLAW_CHROMIUM_CDP" {
 			foundChromiumCDP = true
-			expected := fmt.Sprintf("http://%s-cdp.%s.svc:%d", instance.Name, instance.Namespace, ChromiumPort)
+			expected := fmt.Sprintf("http://%s-cdp.%s.svc:%d", instance.Name, instance.Namespace, ChromiumProxyPort)
 			if env.Value != expected {
 				t.Errorf("OPENCLAW_CHROMIUM_CDP = %q, want %q", env.Value, expected)
 			}
@@ -11057,8 +11057,8 @@ func TestBuildChromiumCDPService_TargetsProxyPort(t *testing.T) {
 	}
 
 	port := svc.Spec.Ports[0]
-	if port.Port != int32(ChromiumPort) {
-		t.Errorf("service port should be %d (external CDP port), got %d", ChromiumPort, port.Port)
+	if port.Port != int32(ChromiumProxyPort) {
+		t.Errorf("service port should be %d (proxy port, headless Service has no port translation), got %d", ChromiumProxyPort, port.Port)
 	}
 	if port.TargetPort.IntValue() != int(ChromiumProxyPort) {
 		t.Errorf("target port should be %d (proxy), got %d", ChromiumProxyPort, port.TargetPort.IntValue())

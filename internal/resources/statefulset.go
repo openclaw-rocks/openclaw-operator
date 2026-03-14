@@ -414,14 +414,22 @@ func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecre
 	}
 
 	if instance.Spec.Chromium.Enabled {
-		// Use the headless CDP Service DNS name to reach the Chromium sidecar.
+		// Use the headless CDP Service DNS name to reach the Chromium sidecar
+		// via the chromium-proxy nginx sidecar. The proxy intercepts WebSocket
+		// connections and routes them to browserless's /chromium endpoint with
+		// anti-bot launch args (+ user ExtraArgs) via the `launch` query param.
+		//
+		// IMPORTANT: Must use ChromiumProxyPort (9223), not ChromiumPort (9222).
+		// The CDP Service is headless (ClusterIP: None), so kube-proxy does NOT
+		// translate Port to TargetPort. DNS resolves to the pod IP directly and
+		// the client connects on the port in the URL. Using 9222 would bypass
+		// the proxy entirely, hitting browserless directly and skipping all
+		// launch arg injection.
+		//
 		// A non-loopback address triggers OpenClaw's remote/attach mode so
 		// the browser control service connects to the existing sidecar
 		// instead of trying to launch a local browser process.
-		// Using DNS instead of pod IP avoids IPv6 URL formatting issues
-		// (IPv6 addresses need brackets in URLs but Kubernetes env var
-		// interpolation cannot add them conditionally) and is stable
-		// across pod restarts (unlike status.podIP).
+		// Using DNS instead of pod IP avoids IPv6 URL formatting issues.
 		// The headless CDP Service has publishNotReadyAddresses=true so the
 		// endpoint resolves before the pod is fully Ready, avoiding a race
 		// where OpenClaw checks CDP during startup before the main Service
@@ -430,7 +438,7 @@ func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecre
 		env = append(env,
 			corev1.EnvVar{
 				Name:  "OPENCLAW_CHROMIUM_CDP",
-				Value: fmt.Sprintf("http://%s:%d", cdpSvcDNS, ChromiumPort),
+				Value: fmt.Sprintf("http://%s:%d", cdpSvcDNS, ChromiumProxyPort),
 			},
 		)
 	}

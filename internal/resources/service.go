@@ -130,6 +130,12 @@ func buildServicePorts(instance *openclawv1alpha1.OpenClawInstance) []corev1.Ser
 //
 // Traffic is routed to the chromium CDP proxy (ChromiumProxyPort) which
 // injects anti-bot Chrome launch args before forwarding to browserless.
+//
+// IMPORTANT: This is a headless Service (ClusterIP: None), so kube-proxy
+// does NOT translate Port to TargetPort. DNS resolves directly to the pod
+// IP and the client connects on the Port value. Both Port and TargetPort
+// must be ChromiumProxyPort so traffic reaches the proxy, not browserless
+// directly. Using ChromiumPort (9222) here would bypass the proxy entirely.
 func BuildChromiumCDPService(instance *openclawv1alpha1.OpenClawInstance) *corev1.Service {
 	labels := Labels(instance)
 	selectorLabels := SelectorLabels(instance)
@@ -148,7 +154,7 @@ func BuildChromiumCDPService(instance *openclawv1alpha1.OpenClawInstance) *corev
 			Ports: []corev1.ServicePort{
 				{
 					Name:       "cdp",
-					Port:       int32(ChromiumPort),
+					Port:       int32(ChromiumProxyPort),
 					TargetPort: intstr.FromInt32(int32(ChromiumProxyPort)),
 					Protocol:   corev1.ProtocolTCP,
 				},

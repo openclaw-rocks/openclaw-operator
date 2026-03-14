@@ -1379,7 +1379,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			mainContainer := statefulSet.Spec.Template.Spec.Containers[0]
 			var foundChromiumCDP bool
 			expectedCDP := fmt.Sprintf("http://%s.%s.svc:%d",
-				resources.ChromiumCDPServiceName(instance), instance.Namespace, resources.ChromiumPort)
+				resources.ChromiumCDPServiceName(instance), instance.Namespace, resources.ChromiumProxyPort)
 			for _, env := range mainContainer.Env {
 				if env.Name == "OPENCLAW_CHROMIUM_CDP" {
 					foundChromiumCDP = true
@@ -1389,7 +1389,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			}
 			Expect(foundChromiumCDP).To(BeTrue(), "OPENCLAW_CHROMIUM_CDP env var should be set")
 
-			// Verify ConfigMap has browser profiles with cdpUrl on port 9222
+			// Verify ConfigMap has browser profiles with cdpUrl via env var
 			configMap := &corev1.ConfigMap{}
 			Eventually(func() error {
 				return k8sClient.Get(ctx, types.NamespacedName{

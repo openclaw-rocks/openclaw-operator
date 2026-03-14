@@ -275,7 +275,7 @@ When enabled, the sidecar:
 - Mounts an emptyDir at `/tmp` for scratch space.
 - When `persistence.enabled` is true, mounts a PVC at `/chromium-data` and passes `--user-data-dir=/chromium-data` to Chrome, persisting cookies, localStorage, IndexedDB, cached credentials, and session tokens across pod restarts.
 
-When Chromium is enabled, the operator also auto-configures browser profiles in the OpenClaw config. Both `"default"` and `"chrome"` profiles are set to point at the sidecar's CDP endpoint (`http://localhost:3000`). This ensures browser tool calls work regardless of which profile name the LLM passes.
+When Chromium is enabled, the operator also auto-configures browser profiles in the OpenClaw config. Both `"default"` and `"chrome"` profiles are set to point at the sidecar's CDP endpoint via the headless CDP Service DNS name. Traffic goes through the chromium-proxy nginx sidecar which injects anti-bot Chrome launch args (and any user `extraArgs`) into every WebSocket connection. This ensures browser tool calls work regardless of which profile name the LLM passes.
 
 ### spec.tailscale
 
