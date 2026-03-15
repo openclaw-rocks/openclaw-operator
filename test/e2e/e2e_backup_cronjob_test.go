@@ -369,6 +369,94 @@ var _ = Describe("Periodic Backup CronJob", func() {
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})
 
+		It("Should include --s3-region flag and S3_REGION env var when S3_REGION is set in credentials Secret", func() {
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			// Recreate the s3-backup-credentials Secret with S3_REGION
+			operatorNS := os.Getenv("OPERATOR_NAMESPACE")
+			if operatorNS == "" {
+				operatorNS = "openclaw-operator-system"
+			}
+			existingSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "s3-backup-credentials",
+					Namespace: operatorNS,
+				},
+			}
+			_ = k8sClient.Delete(ctx, existingSecret)
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, types.NamespacedName{
+					Name:      "s3-backup-credentials",
+					Namespace: operatorNS,
+				}, existingSecret)
+				return apierrors.IsNotFound(err)
+			}, timeout, interval).Should(BeTrue())
+
+			regionSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "s3-backup-credentials",
+					Namespace: operatorNS,
+				},
+				StringData: map[string]string{
+					"S3_BUCKET":            "test-bucket",
+					"S3_ACCESS_KEY_ID":     "test-key",
+					"S3_SECRET_ACCESS_KEY": "test-secret",
+					"S3_ENDPOINT":          "https://s3.us-west-2.amazonaws.com",
+					"S3_REGION":            "us-west-2",
+				},
+			}
+			Expect(k8sClient.Create(ctx, regionSecret)).Should(Succeed())
+
+			instanceName := "backup-cron-region"
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					Backup: openclawv1alpha1.BackupSpec{
+						Schedule: "0 7 * * *",
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			// Verify CronJob is created with --s3-region in the rclone command
+			cronJob := &batchv1.CronJob{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName + "-backup-periodic",
+					Namespace: namespace,
+				}, cronJob)
+			}, timeout, interval).Should(Succeed())
+
+			container := cronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0]
+			Expect(container.Command[2]).To(ContainSubstring("--s3-region"))
+
+			// Verify S3_REGION env var is present
+			var regionEnv *corev1.EnvVar
+			for i, e := range container.Env {
+				if e.Name == "S3_REGION" {
+					regionEnv = &container.Env[i]
+					break
+				}
+			}
+			Expect(regionEnv).NotTo(BeNil())
+			Expect(regionEnv.Value).To(Equal("us-west-2"))
+
+			// Clean up
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+
 		It("Should propagate nodeSelector and tolerations to CronJob pod template", func() {
 			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
 				Skip("Skipping resource validation in minimal mode")

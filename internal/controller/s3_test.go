@@ -612,5 +612,67 @@ var _ = Describe("S3 Helpers", func() {
 			podSpec := cronJob.Spec.JobTemplate.Spec.Template.Spec
 			Expect(podSpec.ServiceAccountName).To(BeEmpty())
 		})
+
+		It("Should include --s3-region flag in rclone command and S3_REGION env var when Region is set", func() {
+			creds.Region = "us-west-2"
+			cronJob := buildBackupCronJob(instance, creds, "myinst-s3-credentials")
+			container := cronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0]
+
+			// Verify --s3-region flag is present in the shell command
+			Expect(container.Command[2]).To(ContainSubstring(`--s3-region="${S3_REGION}"`))
+
+			// Verify S3_REGION env var is present as plain Value (not sensitive)
+			var regionEnv *corev1.EnvVar
+			for i, e := range container.Env {
+				if e.Name == "S3_REGION" {
+					regionEnv = &container.Env[i]
+					break
+				}
+			}
+			Expect(regionEnv).NotTo(BeNil())
+			Expect(regionEnv.Value).To(Equal("us-west-2"))
+			Expect(regionEnv.ValueFrom).To(BeNil())
+		})
+
+		It("Should not include --s3-region flag or S3_REGION env var when Region is empty", func() {
+			cronJob := buildBackupCronJob(instance, creds, "myinst-s3-credentials")
+			container := cronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0]
+
+			// Verify --s3-region flag is NOT present in the shell command
+			Expect(container.Command[2]).NotTo(ContainSubstring("--s3-region"))
+
+			// Verify S3_REGION env var is NOT present
+			var envNames []string
+			for _, e := range container.Env {
+				envNames = append(envNames, e.Name)
+			}
+			Expect(envNames).NotTo(ContainElement("S3_REGION"))
+		})
+
+		It("Should include --s3-region with env-auth mode when Region is set", func() {
+			envAuthCreds := &s3Credentials{
+				Bucket:   "test-bucket",
+				Endpoint: "https://s3.us-west-2.amazonaws.com",
+				Provider: "AWS",
+				Region:   "us-west-2",
+				EnvAuth:  true,
+			}
+			cronJob := buildBackupCronJob(instance, envAuthCreds, "")
+			container := cronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0]
+
+			// Verify --s3-region flag is present in the shell command
+			Expect(container.Command[2]).To(ContainSubstring(`--s3-region="${S3_REGION}"`))
+
+			// Verify S3_REGION env var is present
+			var regionEnv *corev1.EnvVar
+			for i, e := range container.Env {
+				if e.Name == "S3_REGION" {
+					regionEnv = &container.Env[i]
+					break
+				}
+			}
+			Expect(regionEnv).NotTo(BeNil())
+			Expect(regionEnv.Value).To(Equal("us-west-2"))
+		})
 	})
 })

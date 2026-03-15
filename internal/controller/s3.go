@@ -400,6 +400,9 @@ func rcloneCronJobEnv(creds *s3Credentials, credentialSecretName string) []corev
 			},
 		)
 	}
+	if creds.Region != "" {
+		env = append(env, corev1.EnvVar{Name: "S3_REGION", Value: creds.Region})
+	}
 	return env
 }
 
@@ -458,6 +461,9 @@ func buildBackupCronJob(
 	basePath := fmt.Sprintf("backups/%s/%s/periodic", tenantID, instance.Name)
 	remote := fmt.Sprintf(":s3:%s/%s", creds.Bucket, basePath)
 	s3Flags := fmt.Sprintf(`--s3-provider=%s --s3-endpoint="${S3_ENDPOINT}" %s`, creds.Provider, authFlags)
+	if creds.Region != "" {
+		s3Flags += ` --s3-region="${S3_REGION}"`
+	}
 
 	// CUTOFF uses epoch arithmetic (busybox-compatible, since the rclone image is Alpine-based)
 	rcloneCmd := fmt.Sprintf(
