@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.1](https://github.com/openclaw-rocks/k8s-operator/compare/v0.19.0...v0.19.1) (2026-03-15)
+
+
+### Bug Fixes
+
+* add missing --s3-region flag to periodic backup CronJob ([a5cf0ca](https://github.com/openclaw-rocks/k8s-operator/commit/a5cf0ca6ad9612ec34b60f3a4400bca1ad98557a))
+* add missing --s3-region flag to periodic backup CronJob ([ff73fd7](https://github.com/openclaw-rocks/k8s-operator/commit/ff73fd7122d7bb52a1646bda570abb9ffdc53889)), closes [#351](https://github.com/openclaw-rocks/k8s-operator/issues/351)
+
 ## [0.19.0](https://github.com/openclaw-rocks/k8s-operator/compare/v0.18.1...v0.19.0) (2026-03-15)
 
 
