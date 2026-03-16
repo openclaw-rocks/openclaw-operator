@@ -237,6 +237,7 @@ By default, each pod includes an nginx reverse proxy sidecar that forwards traff
 - `gateway.bind` is set to `0.0.0.0` instead of loopback
 - The `gateway-proxy` container and its tmp volume are omitted from the pod
 - To replace the built-in proxy with your own (e.g., Envoy, a signing proxy), disable it and add your proxy via `spec.sidecars`
+- **Warning:** Do not set `gateway.bind: loopback` in your config JSON when the proxy is disabled - the gateway will only listen on `127.0.0.1` with nothing forwarding external traffic, making the pod unreachable. The operator emits a `GatewayBindConflict` warning event if this misconfiguration is detected.
 
 ### Gateway authentication
 

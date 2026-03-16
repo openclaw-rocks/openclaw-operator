@@ -10279,6 +10279,51 @@ func TestBuildNetworkPolicy_GatewayProxyDisabled_UsesDirectPorts(t *testing.T) {
 	}
 }
 
+func TestHasGatewayBindConflict(t *testing.T) {
+	t.Run("no conflict when proxy enabled", func(t *testing.T) {
+		instance := newTestInstance("gw-conflict-enabled")
+		instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+			RawExtension: runtime.RawExtension{Raw: []byte(`{"gateway":{"bind":"loopback"}}`)},
+		}
+		if HasGatewayBindConflict(instance) {
+			t.Error("should not report conflict when proxy is enabled")
+		}
+	})
+
+	t.Run("conflict when proxy disabled and bind is loopback", func(t *testing.T) {
+		instance := newTestInstance("gw-conflict-loopback")
+		instance.Spec.Gateway.Enabled = Ptr(false)
+		instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+			RawExtension: runtime.RawExtension{Raw: []byte(`{"gateway":{"bind":"loopback"}}`)},
+		}
+		if !HasGatewayBindConflict(instance) {
+			t.Error("should report conflict when proxy is disabled and bind is loopback")
+		}
+	})
+
+	t.Run("no conflict when proxy disabled and bind is not set", func(t *testing.T) {
+		instance := newTestInstance("gw-conflict-default")
+		instance.Spec.Gateway.Enabled = Ptr(false)
+		instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+			RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
+		}
+		if HasGatewayBindConflict(instance) {
+			t.Error("should not report conflict when bind is not set")
+		}
+	})
+
+	t.Run("no conflict when proxy disabled and bind is 0.0.0.0", func(t *testing.T) {
+		instance := newTestInstance("gw-conflict-allif")
+		instance.Spec.Gateway.Enabled = Ptr(false)
+		instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+			RawExtension: runtime.RawExtension{Raw: []byte(`{"gateway":{"bind":"0.0.0.0"}}`)},
+		}
+		if HasGatewayBindConflict(instance) {
+			t.Error("should not report conflict when bind is 0.0.0.0")
+		}
+	})
+}
+
 func TestHtpasswdEntry_Format(t *testing.T) {
 	entry := HtpasswdEntry("admin", "secret")
 	if !strings.HasPrefix(entry, "admin:{SHA}") {

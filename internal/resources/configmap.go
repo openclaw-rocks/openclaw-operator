@@ -443,6 +443,38 @@ func enrichConfigWithGatewayBind(configJSON []byte, instance *openclawv1alpha1.O
 	return json.Marshal(config)
 }
 
+// HasGatewayBindConflict returns true when the gateway proxy is disabled but
+// the user has manually set gateway.bind to loopback in their config JSON.
+// This combination makes the pod unreachable because nothing is listening on
+// the external interface.
+func HasGatewayBindConflict(instance *openclawv1alpha1.OpenClawInstance) bool {
+	if IsGatewayProxyEnabled(instance) {
+		return false
+	}
+
+	configBytes := []byte("{}")
+	if instance.Spec.Config.Raw != nil && len(instance.Spec.Config.Raw.Raw) > 0 {
+		configBytes = instance.Spec.Config.Raw.Raw
+	}
+
+	var config map[string]interface{}
+	if err := json.Unmarshal(configBytes, &config); err != nil {
+		return false
+	}
+
+	gw, _ := config["gateway"].(map[string]interface{})
+	if gw == nil {
+		return false
+	}
+
+	bind, ok := gw["bind"]
+	if !ok {
+		return false
+	}
+	bindStr, ok := bind.(string)
+	return ok && bindStr == GatewayBindLoopback
+}
+
 // enrichConfigWithTrustedProxies ensures 127.0.0.0/8 is present in
 // gateway.trustedProxies. The nginx proxy sidecar forwards all traffic from
 // 127.0.0.1, so the gateway must trust that CIDR to honor proxy headers

@@ -351,6 +351,11 @@ func (r *OpenClawInstanceReconciler) reconcileResources(ctx context.Context, ins
 	}
 	logger.V(1).Info("ConfigMap reconciled")
 
+	if resources.HasGatewayBindConflict(instance) {
+		r.Recorder.Event(instance, corev1.EventTypeWarning, "GatewayBindConflict",
+			"gateway.enabled is false but config sets gateway.bind to loopback - the pod will be unreachable because no proxy is running on the external interface")
+	}
+
 	// 3b. Reconcile Workspace ConfigMap (seed files for workspace)
 	if err := r.reconcileWorkspaceConfigMap(ctx, instance, skillPacks); err != nil {
 		return fmt.Errorf("failed to reconcile Workspace ConfigMap: %w", err)
