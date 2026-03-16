@@ -1227,7 +1227,7 @@ type RuntimeDepsSpec struct {
 	Python bool `json:"python,omitempty"`
 }
 
-// GatewaySpec configures the gateway authentication token
+// GatewaySpec configures the gateway reverse proxy and authentication token
 type GatewaySpec struct {
 	// Enabled controls whether the built-in gateway reverse proxy sidecar is
 	// injected into the pod. When false, no proxy container is added and health
