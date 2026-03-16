@@ -524,10 +524,13 @@ func buildBackupCronJob(
 							ServiceAccountName:            instance.Spec.Backup.ServiceAccountName,
 							NodeSelector:                  instance.Spec.Availability.NodeSelector,
 							Tolerations:                   instance.Spec.Availability.Tolerations,
+							// Run as root to read the PVC data regardless of ownership.
+							// The PVC is mounted read-only so there is no write risk.
+							// Using UID 1000 with fsGroup fails because fsGroup cannot
+							// change ownership on a read-only mount.
 							SecurityContext: &corev1.PodSecurityContext{
-								RunAsUser:  int64Ptr(1000),
-								RunAsGroup: int64Ptr(1000),
-								FSGroup:    int64Ptr(1000),
+								RunAsUser:  int64Ptr(0),
+								RunAsGroup: int64Ptr(0),
 							},
 							// Pod affinity: require scheduling on the same node as the
 							// StatefulSet pod so the RWO PVC can be mounted read-only.
