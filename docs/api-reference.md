@@ -810,6 +810,8 @@ When `existingSecret` is not set, the operator automatically generates a random 
 
 The operator always injects `gateway.controlUi.dangerouslyDisableDeviceAuth: true` into the config JSON. Device pairing (introduced in OpenClaw v2026.3.2) is fundamentally incompatible with Kubernetes because users cannot approve pairing from inside a container, connections always come through the nginx proxy sidecar (non-local), and mDNS is unavailable. If you explicitly set `gateway.controlUi.dangerouslyDisableDeviceAuth` in your config, your value takes precedence. **Do not set `gateway.mode: local`** - this desktop-only mode enforces device identity checks that cannot work behind a reverse proxy.
 
+The operator also injects `gateway.handshakeTimeoutMs: 10000` (10 seconds). OpenClaw v2026.3.12 reduced the WebSocket handshake timeout from ~10s to 3s, which is too short for Kubernetes where plugin loading adds startup overhead. See [upstream issue #46892](https://github.com/openclaw/openclaw/issues/46892). If you set `gateway.handshakeTimeoutMs` in your config, your value takes precedence.
+
 When accessing the Control UI through an Ingress, authenticate by appending the gateway token to the URL fragment: `https://openclaw.example.com/#token=<your-token>`.
 
 The operator auto-injects `gateway.controlUi.allowedOrigins` into the config JSON with:

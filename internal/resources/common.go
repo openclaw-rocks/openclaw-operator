@@ -135,6 +135,13 @@ const (
 	// CWE-319 plaintext ws:// errors on non-loopback addresses.
 	GatewayBindLoopback = "loopback"
 
+	// DefaultHandshakeTimeoutMs is the WebSocket handshake timeout injected
+	// into gateway.handshakeTimeoutMs. OpenClaw v2026.3.12 reduced the
+	// hardcoded default from ~10s to 3s as a security measure, but 3s is too
+	// short for Kubernetes where plugin loading adds startup overhead.
+	// See: https://github.com/openclaw/openclaw/issues/46892
+	DefaultHandshakeTimeoutMs = 10000
+
 	// DefaultMetricsPort is the default port for the Prometheus metrics endpoint
 	DefaultMetricsPort int32 = 9090
 )

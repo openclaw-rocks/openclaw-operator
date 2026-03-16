@@ -240,6 +240,7 @@ The operator automatically generates a gateway token Secret for each instance an
 - **Do not set `gateway.mode: local`** in your config - this mode is for desktop installs and enforces device identity checks that cannot work behind a reverse proxy in Kubernetes
 - When connecting to the Control UI through an Ingress, pass the gateway token in the URL fragment: `https://openclaw.example.com/#token=<your-token>`
 - Since v2026.2.24, OpenClaw restricts `gateway.allowedOrigins` to same-origin by default - if accessing via a non-default hostname (e.g. Ingress), set `gateway.allowedOrigins: ["*"]` in your config
+- The operator injects `gateway.handshakeTimeoutMs: 10000` to work around [upstream #46892](https://github.com/openclaw/openclaw/issues/46892) - OpenClaw v2026.3.12 reduced the WebSocket handshake timeout to 3s, which is too short for Kubernetes where plugin loading adds startup overhead
 
 ### Control UI allowed origins
 

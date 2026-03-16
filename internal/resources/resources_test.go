@@ -2519,6 +2519,87 @@ func TestEnrichConfigWithGatewayBind_InvalidJSON(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// enrichConfigWithHandshakeTimeout tests
+// ---------------------------------------------------------------------------
+
+func TestEnrichConfigWithHandshakeTimeout(t *testing.T) {
+	input := []byte(`{}`)
+	out, err := enrichConfigWithHandshakeTimeout(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	gw, ok := cfg["gateway"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected gateway key")
+	}
+	// JSON numbers unmarshal as float64
+	if gw["handshakeTimeoutMs"] != float64(DefaultHandshakeTimeoutMs) {
+		t.Errorf("gateway.handshakeTimeoutMs = %v, want %d", gw["handshakeTimeoutMs"], DefaultHandshakeTimeoutMs)
+	}
+}
+
+func TestEnrichConfigWithHandshakeTimeout_PreservesUserValue(t *testing.T) {
+	input := []byte(`{"gateway":{"handshakeTimeoutMs":5000}}`)
+	out, err := enrichConfigWithHandshakeTimeout(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	gw := cfg["gateway"].(map[string]interface{})
+	if gw["handshakeTimeoutMs"] != float64(5000) {
+		t.Errorf("gateway.handshakeTimeoutMs = %v, want 5000 (user override)", gw["handshakeTimeoutMs"])
+	}
+}
+
+func TestEnrichConfigWithHandshakeTimeout_PreservesOtherFields(t *testing.T) {
+	input := []byte(`{"gateway":{"auth":{"mode":"token","token":"secret"}}}`)
+	out, err := enrichConfigWithHandshakeTimeout(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	gw := cfg["gateway"].(map[string]interface{})
+	if gw["handshakeTimeoutMs"] != float64(DefaultHandshakeTimeoutMs) {
+		t.Errorf("gateway.handshakeTimeoutMs = %v, want %d", gw["handshakeTimeoutMs"], DefaultHandshakeTimeoutMs)
+	}
+	auth, ok := gw["auth"].(map[string]interface{})
+	if !ok {
+		t.Fatal("gateway.auth should be preserved")
+	}
+	if auth["token"] != "secret" {
+		t.Errorf("gateway.auth.token = %v, want %q", auth["token"], "secret")
+	}
+}
+
+func TestEnrichConfigWithHandshakeTimeout_InvalidJSON(t *testing.T) {
+	input := []byte(`not valid json`)
+	out, err := enrichConfigWithHandshakeTimeout(input)
+	if err != nil {
+		t.Fatal("should not error on invalid JSON")
+	}
+
+	if !bytes.Equal(out, input) {
+		t.Errorf("invalid JSON should be returned unchanged")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // enrichConfigWithDeviceAuth tests
 // ---------------------------------------------------------------------------
 
