@@ -656,7 +656,7 @@ http {
         }
     }
 }
-`, ChromiumProxyPort, encoded, ChromiumPort, ChromiumPort)
+`, ChromiumPort, encoded, BrowserlessInternalPort, BrowserlessInternalPort)
 }
 
 // deduplicateArgs merges default and extra Chrome launch args, removing

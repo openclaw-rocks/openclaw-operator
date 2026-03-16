@@ -1313,7 +1313,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})
 
-		It("Should create chromium sidecar on port 9222 to avoid port 3000 conflict", func() {
+		It("Should create chromium sidecar on port 9224 with proxy on port 9222", func() {
 			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
 				Skip("Skipping resource validation in minimal mode")
 			}
@@ -1361,15 +1361,15 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			Expect(chromiumContainer).NotTo(BeNil(), "chromium sidecar init container should exist")
 			Expect(chromiumContainer.Image).To(Equal("ghcr.io/browserless/chromium:latest"))
 			Expect(chromiumContainer.Ports).To(HaveLen(1))
-			Expect(chromiumContainer.Ports[0].ContainerPort).To(Equal(int32(resources.ChromiumPort)))
+			Expect(chromiumContainer.Ports[0].ContainerPort).To(Equal(int32(resources.BrowserlessInternalPort)))
 
 			// Verify chromium container has PORT env var to override default (3000)
 			var foundPortEnv bool
 			for _, env := range chromiumContainer.Env {
 				if env.Name == "PORT" {
 					foundPortEnv = true
-					Expect(env.Value).To(Equal(fmt.Sprintf("%d", resources.ChromiumPort)),
-						"PORT env should override browserless default to avoid conflict with OpenClaw browser control service")
+					Expect(env.Value).To(Equal(fmt.Sprintf("%d", resources.BrowserlessInternalPort)),
+						"PORT env should set browserless to internal port so proxy owns port 9222")
 					break
 				}
 			}
@@ -1379,7 +1379,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			mainContainer := statefulSet.Spec.Template.Spec.Containers[0]
 			var foundChromiumCDP bool
 			expectedCDP := fmt.Sprintf("http://%s.%s.svc:%d",
-				resources.ChromiumCDPServiceName(instance), instance.Namespace, resources.ChromiumProxyPort)
+				resources.ChromiumCDPServiceName(instance), instance.Namespace, resources.ChromiumPort)
 			for _, env := range mainContainer.Env {
 				if env.Name == "OPENCLAW_CHROMIUM_CDP" {
 					foundChromiumCDP = true

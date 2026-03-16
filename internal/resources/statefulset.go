@@ -415,16 +415,10 @@ func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecre
 
 	if instance.Spec.Chromium.Enabled {
 		// Use the headless CDP Service DNS name to reach the Chromium sidecar
-		// via the chromium-proxy nginx sidecar. The proxy intercepts WebSocket
-		// connections and routes them to browserless's /chromium endpoint with
-		// anti-bot launch args (+ user ExtraArgs) via the `launch` query param.
-		//
-		// IMPORTANT: Must use ChromiumProxyPort (9223), not ChromiumPort (9222).
-		// The CDP Service is headless (ClusterIP: None), so kube-proxy does NOT
-		// translate Port to TargetPort. DNS resolves to the pod IP directly and
-		// the client connects on the port in the URL. Using 9222 would bypass
-		// the proxy entirely, hitting browserless directly and skipping all
-		// launch arg injection.
+		// via the chromium-proxy nginx sidecar. The proxy owns ChromiumPort
+		// (9222) directly, so connections always hit the proxy first --
+		// regardless of whether the Service is headless (where kube-proxy
+		// doesn't translate Port/TargetPort and DNS resolves to pod IPs).
 		//
 		// A non-loopback address triggers OpenClaw's remote/attach mode so
 		// the browser control service connects to the existing sidecar
@@ -438,7 +432,7 @@ func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecre
 		env = append(env,
 			corev1.EnvVar{
 				Name:  "OPENCLAW_CHROMIUM_CDP",
-				Value: fmt.Sprintf("http://%s:%d", cdpSvcDNS, ChromiumProxyPort),
+				Value: fmt.Sprintf("http://%s:%d", cdpSvcDNS, ChromiumPort),
 			},
 		)
 	}
@@ -1338,8 +1332,8 @@ func buildChromiumProxyContainer(instance *openclawv1alpha1.OpenClawInstance) co
 		ImagePullPolicy: corev1.PullIfNotPresent,
 		Ports: []corev1.ContainerPort{
 			{
-				Name:          "cdp-proxy",
-				ContainerPort: ChromiumProxyPort,
+				Name:          "cdp",
+				ContainerPort: ChromiumPort,
 				Protocol:      corev1.ProtocolTCP,
 			},
 		},
@@ -1383,7 +1377,7 @@ func buildChromiumProxyContainer(instance *openclawv1alpha1.OpenClawInstance) co
 			ProbeHandler: corev1.ProbeHandler{
 				HTTPGet: &corev1.HTTPGetAction{
 					Path: "/json/version",
-					Port: intstr.FromInt32(ChromiumProxyPort),
+					Port: intstr.FromInt32(ChromiumPort),
 				},
 			},
 			PeriodSeconds:    1,
@@ -1434,7 +1428,7 @@ func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.
 	// HOST=:: enables dual-stack listening so the sidecar is reachable on
 	// both IPv4 (127.0.0.1) and IPv6 (::1) loopback addresses.
 	chromiumEnv := []corev1.EnvVar{
-		{Name: "PORT", Value: fmt.Sprintf("%d", ChromiumPort)},
+		{Name: "PORT", Value: fmt.Sprintf("%d", BrowserlessInternalPort)},
 		{Name: "HOST", Value: "::"},
 	}
 
@@ -1496,8 +1490,8 @@ func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.
 		},
 		Ports: []corev1.ContainerPort{
 			{
-				Name:          "cdp",
-				ContainerPort: ChromiumPort,
+				Name:          "browserless",
+				ContainerPort: BrowserlessInternalPort,
 				Protocol:      corev1.ProtocolTCP,
 			},
 		},
@@ -1512,7 +1506,7 @@ func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.
 			ProbeHandler: corev1.ProbeHandler{
 				HTTPGet: &corev1.HTTPGetAction{
 					Path: "/json/version",
-					Port: intstr.FromInt32(ChromiumPort),
+					Port: intstr.FromInt32(BrowserlessInternalPort),
 				},
 			},
 			InitialDelaySeconds: 1,

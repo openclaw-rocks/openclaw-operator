@@ -462,7 +462,7 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 	for _, env := range mainContainer.Env {
 		if env.Name == "OPENCLAW_CHROMIUM_CDP" {
 			foundChromiumCDP = true
-			expected := fmt.Sprintf("http://%s-cdp.%s.svc:%d", instance.Name, instance.Namespace, ChromiumProxyPort)
+			expected := fmt.Sprintf("http://%s-cdp.%s.svc:%d", instance.Name, instance.Namespace, ChromiumPort)
 			if env.Value != expected {
 				t.Errorf("OPENCLAW_CHROMIUM_CDP = %q, want %q", env.Value, expected)
 			}
@@ -478,8 +478,8 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 	for _, env := range chromium.Env {
 		if env.Name == "PORT" {
 			foundPortEnv = true
-			if env.Value != fmt.Sprintf("%d", ChromiumPort) {
-				t.Errorf("chromium PORT env = %q, want %q", env.Value, fmt.Sprintf("%d", ChromiumPort))
+			if env.Value != fmt.Sprintf("%d", BrowserlessInternalPort) {
+				t.Errorf("chromium PORT env = %q, want %q", env.Value, fmt.Sprintf("%d", BrowserlessInternalPort))
 			}
 		}
 		if env.Name == "HOST" {
@@ -505,11 +505,11 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 	if len(chromium.Ports) != 1 {
 		t.Fatalf("chromium container should have 1 port, got %d", len(chromium.Ports))
 	}
-	if chromium.Ports[0].ContainerPort != ChromiumPort {
-		t.Errorf("chromium port = %d, want %d", chromium.Ports[0].ContainerPort, ChromiumPort)
+	if chromium.Ports[0].ContainerPort != BrowserlessInternalPort {
+		t.Errorf("chromium port = %d, want %d", chromium.Ports[0].ContainerPort, BrowserlessInternalPort)
 	}
-	if chromium.Ports[0].Name != "cdp" {
-		t.Errorf("chromium port name = %q, want %q", chromium.Ports[0].Name, "cdp")
+	if chromium.Ports[0].Name != "browserless" {
+		t.Errorf("chromium port name = %q, want %q", chromium.Ports[0].Name, "browserless")
 	}
 
 	// Chromium security context
@@ -9697,29 +9697,29 @@ func TestBuildNetworkPolicy_ChromiumIngressAndEgress(t *testing.T) {
 
 	ports := np.Spec.Ingress[0].Ports
 	if len(ports) != 5 {
-		t.Fatalf("expected 5 ingress ports with chromium (gateway, canvas, chromium, chromium-proxy, metrics), got %d", len(ports))
+		t.Fatalf("expected 5 ingress ports with chromium (gateway, canvas, chromium, browserless, metrics), got %d", len(ports))
 	}
 
 	foundChromiumIngress := false
-	foundChromiumProxyIngress := false
+	foundBrowserlessIngress := false
 	for _, p := range ports {
 		if p.Port != nil && p.Port.IntValue() == ChromiumPort {
 			foundChromiumIngress = true
 		}
-		if p.Port != nil && p.Port.IntValue() == ChromiumProxyPort {
-			foundChromiumProxyIngress = true
+		if p.Port != nil && p.Port.IntValue() == BrowserlessInternalPort {
+			foundBrowserlessIngress = true
 		}
 	}
 	if !foundChromiumIngress {
 		t.Error("chromium port not found in NetworkPolicy ingress ports")
 	}
-	if !foundChromiumProxyIngress {
-		t.Error("chromium proxy port not found in NetworkPolicy ingress ports")
+	if !foundBrowserlessIngress {
+		t.Error("browserless internal port not found in NetworkPolicy ingress ports")
 	}
 
-	// Egress: should have a rule for chromium CDP self-traffic (ports 9222 + 9223)
+	// Egress: should have a rule for chromium CDP self-traffic (ports 9222 + 9224)
 	foundChromiumEgress := false
-	foundChromiumProxyEgress := false
+	foundBrowserlessEgress := false
 	for _, rule := range np.Spec.Egress {
 		for _, p := range rule.Ports {
 			if p.Port != nil && p.Port.IntValue() == ChromiumPort {
@@ -9731,16 +9731,16 @@ func TestBuildNetworkPolicy_ChromiumIngressAndEgress(t *testing.T) {
 					t.Error("chromium egress rule should use podSelector for self-traffic")
 				}
 			}
-			if p.Port != nil && p.Port.IntValue() == ChromiumProxyPort {
-				foundChromiumProxyEgress = true
+			if p.Port != nil && p.Port.IntValue() == BrowserlessInternalPort {
+				foundBrowserlessEgress = true
 			}
 		}
 	}
 	if !foundChromiumEgress {
 		t.Error("chromium egress rule (port 9222) not found in NetworkPolicy")
 	}
-	if !foundChromiumProxyEgress {
-		t.Error("chromium proxy egress rule (port 9223) not found in NetworkPolicy")
+	if !foundBrowserlessEgress {
+		t.Error("browserless internal egress rule (port 9224) not found in NetworkPolicy")
 	}
 }
 
@@ -10912,16 +10912,16 @@ func TestBuildStatefulSet_ChromiumProxySidecar(t *testing.T) {
 	}
 
 	// Should listen on the proxy port
-	if len(proxy.Ports) != 1 || proxy.Ports[0].ContainerPort != ChromiumProxyPort {
-		t.Errorf("expected port %d, got %v", ChromiumProxyPort, proxy.Ports)
+	if len(proxy.Ports) != 1 || proxy.Ports[0].ContainerPort != ChromiumPort {
+		t.Errorf("expected port %d, got %v", ChromiumPort, proxy.Ports)
 	}
 
 	// Should have startup probe on the proxy port
 	if proxy.StartupProbe == nil {
 		t.Fatal("chromium-proxy should have a startup probe")
 	}
-	if proxy.StartupProbe.HTTPGet.Port.IntValue() != int(ChromiumProxyPort) {
-		t.Errorf("startup probe should check port %d, got %d", ChromiumProxyPort, proxy.StartupProbe.HTTPGet.Port.IntValue())
+	if proxy.StartupProbe.HTTPGet.Port.IntValue() != int(ChromiumPort) {
+		t.Errorf("startup probe should check port %d, got %d", ChromiumPort, proxy.StartupProbe.HTTPGet.Port.IntValue())
 	}
 
 	// Should come AFTER the chromium (browserless) sidecar
@@ -10975,13 +10975,13 @@ func TestBuildConfigMap_ChromiumProxyNginxConfig(t *testing.T) {
 	}
 
 	// Should contain the proxy port
-	if !strings.Contains(proxyConfig, fmt.Sprintf("listen 0.0.0.0:%d", ChromiumProxyPort)) {
-		t.Error("proxy config should listen on ChromiumProxyPort")
+	if !strings.Contains(proxyConfig, fmt.Sprintf("listen 0.0.0.0:%d", ChromiumPort)) {
+		t.Error("proxy config should listen on ChromiumPort (9222)")
 	}
 
-	// Should proxy to the chromium port
-	if !strings.Contains(proxyConfig, fmt.Sprintf("proxy_pass http://127.0.0.1:%d", ChromiumPort)) {
-		t.Error("proxy config should forward to ChromiumPort")
+	// Should proxy to the internal browserless port
+	if !strings.Contains(proxyConfig, fmt.Sprintf("proxy_pass http://127.0.0.1:%d", BrowserlessInternalPort)) {
+		t.Error("proxy config should forward to BrowserlessInternalPort (9224)")
 	}
 
 	// Should contain the default anti-bot flags (URL-encoded)
@@ -11060,11 +11060,11 @@ func TestBuildChromiumCDPService_TargetsProxyPort(t *testing.T) {
 	}
 
 	port := svc.Spec.Ports[0]
-	if port.Port != int32(ChromiumProxyPort) {
-		t.Errorf("service port should be %d (proxy port, headless Service has no port translation), got %d", ChromiumProxyPort, port.Port)
+	if port.Port != int32(ChromiumPort) {
+		t.Errorf("service port should be %d (proxy owns this port directly), got %d", ChromiumPort, port.Port)
 	}
-	if port.TargetPort.IntValue() != int(ChromiumProxyPort) {
-		t.Errorf("target port should be %d (proxy), got %d", ChromiumProxyPort, port.TargetPort.IntValue())
+	if port.TargetPort.IntValue() != int(ChromiumPort) {
+		t.Errorf("target port should be %d (proxy), got %d", ChromiumPort, port.TargetPort.IntValue())
 	}
 }
 

@@ -512,7 +512,7 @@ When `ports` is not set, the Service exposes these default ports:
 |-------------|--------|-------------|---------------------------------|
 | `gateway`   | 18789  | 18790       | OpenClaw WebSocket gateway (via nginx proxy sidecar). |
 | `canvas`    | 18793  | 18794       | OpenClaw Canvas HTTP server (via nginx proxy sidecar). |
-| `chromium`  | 9222   | 9222        | Chrome DevTools Protocol (only if Chromium sidecar is enabled). |
+| `chromium`  | 9222   | 9222        | Chrome DevTools Protocol via nginx CDP proxy (only if Chromium sidecar is enabled). Browserless listens internally on port 9224. |
 
 The gateway and canvas ports route through an nginx reverse proxy sidecar because the gateway process binds to loopback (`127.0.0.1`). The proxy listens on dedicated ports (`0.0.0.0`) and forwards traffic to loopback. This avoids CWE-319 plaintext WebSocket security errors on non-loopback addresses.
 

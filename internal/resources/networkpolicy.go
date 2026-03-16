@@ -106,7 +106,7 @@ func networkPolicyIngressPorts(instance *openclawv1alpha1.OpenClawInstance) []ne
 		},
 			networkingv1.NetworkPolicyPort{
 				Protocol: Ptr(corev1.ProtocolTCP),
-				Port:     Ptr(intstr.FromInt32(int32(ChromiumProxyPort))),
+				Port:     Ptr(intstr.FromInt32(int32(BrowserlessInternalPort))),
 			})
 	}
 
@@ -239,12 +239,12 @@ func buildEgressRules(instance *openclawv1alpha1.OpenClawInstance) []networkingv
 		})
 	}
 
-	// Allow egress to the Chromium CDP proxy and sidecar. The main container
-	// reaches the CDP proxy via a headless Service that resolves to the pod's
-	// own IP. Both the proxy port (9223) and direct port (9222) are allowed
-	// because some CNIs check pre-DNAT ports and others check post-DNAT.
-	// Cilium short-circuits self-traffic and doesn't require this rule, but
-	// it's correct to include for portability (e.g. Calico).
+	// Allow egress to the Chromium CDP proxy and browserless sidecar. The main
+	// container reaches the CDP proxy via a headless Service that resolves to
+	// the pod's own IP. Both the proxy port (9222) and the internal browserless
+	// port (9224) are allowed because some CNIs check pre-DNAT ports and
+	// others check post-DNAT. Cilium short-circuits self-traffic and doesn't
+	// require this rule, but it's correct to include for portability (e.g. Calico).
 	if instance.Spec.Chromium.Enabled {
 		rules = append(rules, networkingv1.NetworkPolicyEgressRule{
 			To: []networkingv1.NetworkPolicyPeer{
@@ -261,7 +261,7 @@ func buildEgressRules(instance *openclawv1alpha1.OpenClawInstance) []networkingv
 				},
 				{
 					Protocol: Ptr(corev1.ProtocolTCP),
-					Port:     Ptr(intstr.FromInt32(int32(ChromiumProxyPort))),
+					Port:     Ptr(intstr.FromInt32(int32(BrowserlessInternalPort))),
 				},
 			},
 		})

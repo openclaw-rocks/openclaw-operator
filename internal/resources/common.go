@@ -49,16 +49,19 @@ const (
 	// NginxConfigKey is the ConfigMap data key for the nginx stream config
 	NginxConfigKey = "nginx.conf"
 
-	// ChromiumPort is the port the chromium sidecar listens on.
-	// The browserless image defaults to 3000, but we override it to 9222
-	// via the PORT env var to avoid conflicting with the OpenClaw gateway's
-	// built-in browser control service on port 3000.
+	// ChromiumPort is the external CDP port that all clients connect to.
+	// The nginx CDP proxy listens on this port, injecting Chrome launch
+	// args (anti-bot flags) into WebSocket connections before forwarding
+	// to browserless on BrowserlessInternalPort. By owning port 9222
+	// directly, the proxy cannot be bypassed -- even on headless Services
+	// where kube-proxy is not involved and DNS resolves to pod IPs.
 	ChromiumPort = 9222
 
-	// ChromiumProxyPort is the port the nginx CDP proxy listens on.
-	// It sits between OpenClaw and the browserless sidecar, injecting
-	// Chrome launch args (anti-bot flags) into WebSocket connections.
-	ChromiumProxyPort = 9223
+	// BrowserlessInternalPort is the internal port where the browserless
+	// container actually listens. Traffic should always flow through the
+	// CDP proxy on ChromiumPort first. This port is not exposed via
+	// Services and is only reachable within the pod on localhost.
+	BrowserlessInternalPort = 9224
 
 	// ChromiumProxyNginxConfigKey is the ConfigMap data key for the
 	// chromium CDP proxy nginx config
