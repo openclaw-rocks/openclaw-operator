@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0](https://github.com/openclaw-rocks/k8s-operator/compare/v0.19.1...v0.20.0) (2026-03-16)
+
+
+### Features
+
+* support spec.availability.runtimeClassName ([62b9ff4](https://github.com/openclaw-rocks/k8s-operator/commit/62b9ff4ed088d4506eda832a182c7f05d8c3320a))
+* support spec.availability.runtimeClassName for alternative container runtimes ([79637e9](https://github.com/openclaw-rocks/k8s-operator/commit/79637e9517b7e0be63c44495144ba1e4199a8f00)), closes [#358](https://github.com/openclaw-rocks/k8s-operator/issues/358)
+
+
+### Bug Fixes
+
+* **chromium:** swap ports so CDP proxy owns 9222, eliminating headless bypass ([6658b33](https://github.com/openclaw-rocks/k8s-operator/commit/6658b33260522f42c4d8ab266d24535164991373))
+* **chromium:** swap ports so CDP proxy owns 9222, eliminating headless bypass ([6f42b77](https://github.com/openclaw-rocks/k8s-operator/commit/6f42b7792b13c0b2e42d93d976cf223143da9688)), closes [#270](https://github.com/openclaw-rocks/k8s-operator/issues/270)
+
 ## [0.19.1](https://github.com/openclaw-rocks/k8s-operator/compare/v0.19.0...v0.19.1) (2026-03-15)
 
 
