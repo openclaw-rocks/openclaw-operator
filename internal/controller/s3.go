@@ -524,6 +524,12 @@ func buildBackupCronJob(
 							ServiceAccountName:            instance.Spec.Backup.ServiceAccountName,
 							NodeSelector:                  instance.Spec.Availability.NodeSelector,
 							Tolerations:                   instance.Spec.Availability.Tolerations,
+							// Match the StatefulSet pod security context. The PVC must
+							// NOT be mounted read-only so that Kubernetes can apply
+							// fsGroup ownership (chown to GID 1000) on mount. Without
+							// this, the PVC root stays root:root and rclone (UID 1000)
+							// gets "permission denied". rclone sync from /data/ is
+							// inherently read-only (source path, not destination).
 							SecurityContext: &corev1.PodSecurityContext{
 								RunAsUser:  int64Ptr(1000),
 								RunAsGroup: int64Ptr(1000),
@@ -557,7 +563,6 @@ func buildBackupCronJob(
 										{
 											Name:      "data",
 											MountPath: "/data",
-											ReadOnly:  true,
 										},
 									},
 									TerminationMessagePath:   "/dev/termination-log",
@@ -570,7 +575,6 @@ func buildBackupCronJob(
 									VolumeSource: corev1.VolumeSource{
 										PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 											ClaimName: pvcName,
-											ReadOnly:  true,
 										},
 									},
 								},

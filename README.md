@@ -722,7 +722,7 @@ spec:
     serviceAccountName: ""   # Optional: IRSA/Pod Identity SA for backup Jobs
 ```
 
-The operator creates a Kubernetes CronJob that runs rclone to sync PVC data to S3. The CronJob mounts the PVC read-only (hot backup - no downtime) and uses pod affinity to co-locate on the same node as the StatefulSet pod (required for RWO PVCs). Backups use an incremental sync strategy: data is synced to a fixed `latest` path (only changed files uploaded), a daily snapshot is taken, and snapshots older than `retentionDays` are automatically pruned.
+The operator creates a Kubernetes CronJob that runs rclone to sync PVC data to S3. The CronJob uses pod affinity to co-locate on the same node as the StatefulSet pod (required for RWO PVCs). Backups use an incremental sync strategy: data is synced to a fixed `latest` path (only changed files uploaded), a daily snapshot is taken, and snapshots older than `retentionDays` are automatically pruned.
 
 **Restoring from backup:**
 

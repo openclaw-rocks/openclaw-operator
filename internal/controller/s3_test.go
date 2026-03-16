@@ -437,15 +437,15 @@ var _ = Describe("S3 Helpers", func() {
 			Expect(*cronJob.Spec.FailedJobsHistoryLimit).To(Equal(int32(2)))
 		})
 
-		It("Should mount PVC read-only", func() {
+		It("Should mount PVC read-write so fsGroup can apply ownership", func() {
 			cronJob := buildBackupCronJob(instance, creds, "myinst-s3-credentials")
 			container := cronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0]
 			Expect(container.VolumeMounts).To(HaveLen(1))
-			Expect(container.VolumeMounts[0].ReadOnly).To(BeTrue())
+			Expect(container.VolumeMounts[0].ReadOnly).To(BeFalse())
 			Expect(container.VolumeMounts[0].MountPath).To(Equal("/data"))
 
 			vol := cronJob.Spec.JobTemplate.Spec.Template.Spec.Volumes[0]
-			Expect(vol.PersistentVolumeClaim.ReadOnly).To(BeTrue())
+			Expect(vol.PersistentVolumeClaim.ReadOnly).To(BeFalse())
 		})
 
 		It("Should set pod affinity for co-location with StatefulSet pod", func() {

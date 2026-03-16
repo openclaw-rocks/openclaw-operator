@@ -746,7 +746,7 @@ Configures periodic scheduled backups to S3-compatible storage. Requires the `s3
 | `serviceAccountName` | `string` | --      | ServiceAccount to use for backup and restore Jobs. Set this to an IRSA-annotated or Pod Identity-enabled ServiceAccount so Jobs authenticate via the AWS credential chain instead of static credentials. Applies to all backup Jobs (pre-delete, pre-update, periodic, and restore). |
 | `retentionDays`      | `*int32` | `7`     | Number of days to keep daily snapshots in S3. Snapshots older than this are pruned after each successful backup. Minimum: `1`, Maximum: `365`. |
 
-The CronJob mounts the PVC read-only (hot backup - no downtime) and uses pod affinity to schedule on the same node as the StatefulSet pod (required for RWO PVCs).
+The CronJob mounts the PVC (hot backup - no downtime) and uses pod affinity to schedule on the same node as the StatefulSet pod (required for RWO PVCs).
 
 Periodic backups use an incremental sync strategy to minimize S3 transactions and storage costs:
 
@@ -1111,7 +1111,7 @@ spec:
 
 The operator creates a Kubernetes CronJob (`<instance>-backup-periodic`) that:
 
-- Mounts the PVC **read-only** (hot backup - no downtime or StatefulSet scale-down)
+- Mounts the PVC with **fsGroup** matching the StatefulSet (hot backup - no downtime or StatefulSet scale-down)
 - Uses **pod affinity** to co-locate on the same node as the StatefulSet pod (required for RWO PVCs)
 - Stores each run under a unique timestamped path: `backups/<tenantId>/<instanceName>/periodic/<YYYYMMDDTHHMMSSz>`
 - Uses `ConcurrencyPolicy: Forbid` to prevent overlapping backup runs
