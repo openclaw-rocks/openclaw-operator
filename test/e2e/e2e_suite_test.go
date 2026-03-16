@@ -1785,12 +1785,18 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			}, 5*time.Minute, 5*time.Second).Should(BeTrue(),
 				"openclaw container should be Running")
 
-			// Verify config was written by the postStart hook
-			out, err := kubectlExec(namespace, podName,
-				"cat", "/home/openclaw/.openclaw/openclaw.json")
-			Expect(err).NotTo(HaveOccurred(), "should read config file: %s", out)
-			Expect(out).To(ContainSubstring(`"loopback"`),
-				"config should contain gateway.bind=loopback from operator enrichment")
+			// Verify config was written by the postStart hook.
+			// Use Eventually because kubectl exec may briefly fail even after
+			// the container status shows Running.
+			var out string
+			var err error
+			Eventually(func(g Gomega) {
+				out, err = kubectlExec(namespace, podName,
+					"cat", "/home/openclaw/.openclaw/openclaw.json")
+				g.Expect(err).NotTo(HaveOccurred(), "should read config file: %s", out)
+				g.Expect(out).To(ContainSubstring(`"loopback"`),
+					"config should contain gateway.bind=loopback from operator enrichment")
+			}, 1*time.Minute, 2*time.Second).Should(Succeed())
 
 			// Corrupt the config file on the PVC
 			_, err = kubectlExec(namespace, podName,
@@ -1865,15 +1871,19 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			}, 2*time.Minute, 2*time.Second).Should(BeTrue(),
 				"openclaw container should be Running after restart")
 
-			// Verify the postStart hook restored the config
-			out, err = kubectlExec(namespace, podName,
-				"cat", "/home/openclaw/.openclaw/openclaw.json")
-			Expect(err).NotTo(HaveOccurred(),
-				"should read config after restart: %s", out)
-			Expect(out).To(ContainSubstring(`"loopback"`),
-				"gateway.bind=loopback should be restored by postStart hook")
-			Expect(out).NotTo(ContainSubstring("corrupted"),
-				"corrupted content should be overwritten by postStart hook")
+			// Verify the postStart hook restored the config.
+			// Use Eventually because kubectl exec may briefly fail after a
+			// container restart even though the status already shows Running.
+			Eventually(func(g Gomega) {
+				out, err = kubectlExec(namespace, podName,
+					"cat", "/home/openclaw/.openclaw/openclaw.json")
+				g.Expect(err).NotTo(HaveOccurred(),
+					"should read config after restart: %s", out)
+				g.Expect(out).To(ContainSubstring(`"loopback"`),
+					"gateway.bind=loopback should be restored by postStart hook")
+				g.Expect(out).NotTo(ContainSubstring("corrupted"),
+					"corrupted content should be overwritten by postStart hook")
+			}, 1*time.Minute, 2*time.Second).Should(Succeed())
 
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})
