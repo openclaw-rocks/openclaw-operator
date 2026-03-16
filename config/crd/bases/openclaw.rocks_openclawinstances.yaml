@@ -3610,7 +3610,8 @@ spec:
                 maxItems: 10
                 type: array
               gateway:
-                description: Gateway configures the gateway authentication token
+                description: Gateway configures the gateway reverse proxy and authentication
+                  token
                 properties:
                   controlUiOrigins:
                     description: |-
