@@ -809,6 +809,8 @@ The operator follows a **secure-by-default** philosophy. Every instance ships wi
 | `openclaw_autoupdate_applied_total` | Counter | Successful auto-updates applied |
 | `openclaw_autoupdate_rollbacks_total` | Counter | Auto-update rollbacks triggered |
 
+When `metrics.enabled: true` (the default), the operator automatically injects `diagnostics.metrics` config into the OpenClaw application so it serves a Prometheus `/metrics` endpoint on the configured port (default 9090). No manual OpenClaw configuration is needed.
+
 ### ServiceMonitor
 
 ```yaml

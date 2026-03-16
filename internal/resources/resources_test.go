@@ -2269,6 +2269,172 @@ func TestBuildConfigMapFromBytes_JSON5Passthrough(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// enrichConfigWithMetrics tests
+// ---------------------------------------------------------------------------
+
+func TestEnrichConfigWithMetrics(t *testing.T) {
+	input := []byte(`{}`)
+	instance := newTestInstance("metrics-test")
+	out, err := enrichConfigWithMetrics(input, instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	diag, ok := cfg["diagnostics"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected diagnostics key")
+	}
+	metrics, ok := diag["metrics"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected diagnostics.metrics key")
+	}
+	if metrics["enabled"] != true {
+		t.Errorf("diagnostics.metrics.enabled = %v, want true", metrics["enabled"])
+	}
+	if metrics["port"] != float64(DefaultMetricsPort) {
+		t.Errorf("diagnostics.metrics.port = %v, want %v", metrics["port"], DefaultMetricsPort)
+	}
+}
+
+func TestEnrichConfigWithMetrics_CustomPort(t *testing.T) {
+	input := []byte(`{}`)
+	instance := newTestInstance("metrics-custom-port")
+	customPort := int32(9191)
+	instance.Spec.Observability.Metrics.Port = &customPort
+	out, err := enrichConfigWithMetrics(input, instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	diag := cfg["diagnostics"].(map[string]interface{})
+	metrics := diag["metrics"].(map[string]interface{})
+	if metrics["port"] != float64(9191) {
+		t.Errorf("diagnostics.metrics.port = %v, want 9191", metrics["port"])
+	}
+}
+
+func TestEnrichConfigWithMetrics_PreservesUserOverride(t *testing.T) {
+	input := []byte(`{"diagnostics":{"metrics":{"enabled":true,"port":8080,"path":"/custom"}}}`)
+	instance := newTestInstance("metrics-user-override")
+	out, err := enrichConfigWithMetrics(input, instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	diag := cfg["diagnostics"].(map[string]interface{})
+	metrics := diag["metrics"].(map[string]interface{})
+	// User's custom path should be preserved (not overwritten)
+	if metrics["path"] != "/custom" {
+		t.Errorf("user-set diagnostics.metrics.path = %v, want /custom", metrics["path"])
+	}
+	if metrics["port"] != float64(8080) {
+		t.Errorf("user-set diagnostics.metrics.port = %v, want 8080", metrics["port"])
+	}
+}
+
+func TestEnrichConfigWithMetrics_PreservesOtherDiagnosticsFields(t *testing.T) {
+	input := []byte(`{"diagnostics":{"otel":{"endpoint":"http://collector:4317"}}}`)
+	instance := newTestInstance("metrics-other-fields")
+	out, err := enrichConfigWithMetrics(input, instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	diag := cfg["diagnostics"].(map[string]interface{})
+	// OTEL config should be preserved
+	otel, ok := diag["otel"].(map[string]interface{})
+	if !ok {
+		t.Fatal("diagnostics.otel should be preserved")
+	}
+	if otel["endpoint"] != "http://collector:4317" {
+		t.Errorf("diagnostics.otel.endpoint = %v, want http://collector:4317", otel["endpoint"])
+	}
+	// Metrics should also be injected
+	metrics, ok := diag["metrics"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected diagnostics.metrics key")
+	}
+	if metrics["enabled"] != true {
+		t.Errorf("diagnostics.metrics.enabled = %v, want true", metrics["enabled"])
+	}
+}
+
+func TestEnrichConfigWithMetrics_InvalidJSON(t *testing.T) {
+	input := []byte(`not-json`)
+	instance := newTestInstance("metrics-invalid")
+	out, err := enrichConfigWithMetrics(input, instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(out, input) {
+		t.Error("invalid JSON should be returned unchanged")
+	}
+}
+
+func TestBuildConfigMap_MetricsInjected(t *testing.T) {
+	instance := newTestInstance("cm-metrics")
+	cm := BuildConfigMap(instance, "", nil)
+
+	content := cm.Data["openclaw.json"]
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config: %v", err)
+	}
+
+	diag, ok := parsed["diagnostics"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected diagnostics key in default config (metrics enabled by default)")
+	}
+	metrics, ok := diag["metrics"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected diagnostics.metrics key")
+	}
+	if metrics["enabled"] != true {
+		t.Errorf("diagnostics.metrics.enabled = %v, want true", metrics["enabled"])
+	}
+	if metrics["port"] != float64(DefaultMetricsPort) {
+		t.Errorf("diagnostics.metrics.port = %v, want %v", metrics["port"], float64(DefaultMetricsPort))
+	}
+}
+
+func TestBuildConfigMap_MetricsDisabled_NoDiagnosticsInjected(t *testing.T) {
+	instance := newTestInstance("cm-metrics-disabled")
+	disabled := false
+	instance.Spec.Observability.Metrics.Enabled = &disabled
+	cm := BuildConfigMap(instance, "", nil)
+
+	content := cm.Data["openclaw.json"]
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config: %v", err)
+	}
+
+	if _, ok := parsed["diagnostics"]; ok {
+		t.Error("diagnostics should not be injected when metrics.enabled=false")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // enrichConfigWithGatewayBind tests
 // ---------------------------------------------------------------------------
 

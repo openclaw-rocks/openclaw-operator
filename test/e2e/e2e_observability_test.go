@@ -17,6 +17,7 @@ limitations under the License.
 package e2e
 
 import (
+	"encoding/json"
 	"os"
 	"time"
 
@@ -330,6 +331,29 @@ var _ = Describe("Observability - Deep Insights", func() {
 				}
 			}
 			Expect(foundMetricsContainerPort).To(BeTrue(), "main container should have a metrics port")
+
+			// Verify ConfigMap has diagnostics.metrics config injected
+			cm := &corev1.ConfigMap{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.ConfigMapName(instance),
+					Namespace: namespace,
+				}, cm)
+			}, timeout, interval).Should(Succeed())
+
+			configContent, ok := cm.Data["openclaw.json"]
+			Expect(ok).To(BeTrue(), "ConfigMap should have openclaw.json key")
+
+			var parsed map[string]interface{}
+			Expect(json.Unmarshal([]byte(configContent), &parsed)).To(Succeed())
+
+			diag, ok := parsed["diagnostics"].(map[string]interface{})
+			Expect(ok).To(BeTrue(), "config should have diagnostics key")
+			metrics, ok := diag["metrics"].(map[string]interface{})
+			Expect(ok).To(BeTrue(), "diagnostics should have metrics key")
+			Expect(metrics["enabled"]).To(Equal(true), "diagnostics.metrics.enabled should be true")
+			Expect(metrics["port"]).To(Equal(float64(resources.DefaultMetricsPort)),
+				"diagnostics.metrics.port should match the default metrics port")
 
 			// Verify ServiceMonitor targets metrics port
 			sm := &unstructured.Unstructured{}
