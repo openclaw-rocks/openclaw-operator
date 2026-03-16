@@ -203,8 +203,8 @@ func buildRcloneJob(
 	ttl := int32(86400) // 24h
 
 	// rclone remote config via env vars
-	// :s3: is used because S3-compatible API works with rclone's S3 backend
-	rcloneRemotePath := fmt.Sprintf(":s3:%s/%s", creds.Bucket, remotePath)
+	// s3:// is used because S3-compatible API works with rclone's S3 backend
+	rcloneRemotePath := fmt.Sprintf("s3://%s/%s", creds.Bucket, remotePath)
 
 	var authArgs []string
 	if creds.EnvAuth {
@@ -459,7 +459,7 @@ func buildBackupCronJob(
 	}
 
 	basePath := fmt.Sprintf("backups/%s/%s/periodic", tenantID, instance.Name)
-	remote := fmt.Sprintf(":s3:%s/%s", creds.Bucket, basePath)
+	remote := fmt.Sprintf("s3://%s/%s", creds.Bucket, basePath)
 	s3Flags := fmt.Sprintf(`--s3-provider=%s --s3-endpoint="${S3_ENDPOINT}" %s`, creds.Provider, authFlags)
 	if creds.Region != "" {
 		s3Flags += ` --s3-region="${S3_REGION}"`
