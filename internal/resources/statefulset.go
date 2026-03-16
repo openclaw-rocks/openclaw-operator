@@ -1372,8 +1372,10 @@ func buildChromiumProxyContainer(instance *openclawv1alpha1.OpenClawInstance) co
 				Type: corev1.SeccompProfileTypeRuntimeDefault,
 			},
 		},
-		// Startup probe verifies the proxy can reach browserless via /json/version.
-		// This gates the next init container / regular containers from starting.
+		// Startup probe verifies the proxy is up via /json/version (static response).
+		// Browserless health is already guaranteed by its own startup probe on
+		// BrowserlessInternalPort (native sidecar ordering). This gates the next
+		// init container / regular containers from starting.
 		StartupProbe: &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
 				HTTPGet: &corev1.HTTPGetAction{

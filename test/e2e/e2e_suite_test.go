@@ -1486,6 +1486,15 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			}
 			Expect(foundChromiumPort).To(BeTrue(), "Service should have chromium port")
 
+			// Verify chromium proxy nginx config has /json/version rewrite
+			proxyConfig, hasProxyConfig := configMap.Data[resources.ChromiumProxyNginxConfigKey]
+			Expect(hasProxyConfig).To(BeTrue(), "ConfigMap should contain chromium proxy nginx config")
+			Expect(proxyConfig).To(ContainSubstring("location = /json/version"),
+				"proxy config should have static /json/version to prevent Playwright bypass")
+			Expect(proxyConfig).To(ContainSubstring(
+				fmt.Sprintf(`"webSocketDebuggerUrl":"ws://127.0.0.1:%d"`, resources.ChromiumPort)),
+				"static /json/version should point webSocketDebuggerUrl to proxy port")
+
 			// Clean up
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})

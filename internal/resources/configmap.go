@@ -600,7 +600,12 @@ stream {
 // launch args entirely. By routing all WebSocket upgrades to /chromium,
 // every browser session gets fresh Chrome with the correct flags.
 //
-// HTTP requests (health checks, /json/version) pass through unchanged.
+// The /json/version endpoint returns a static response with
+// webSocketDebuggerUrl pointing back to the proxy (ws://127.0.0.1:9222).
+// This prevents Playwright's connectOverCDP() from discovering Chrome's
+// random direct debugging port and bypassing the proxy -- which would
+// cause browserless to kill Chrome (0 clients) and break the session.
+// Other HTTP requests (health checks, /json/list) pass through unchanged.
 func chromiumProxyNginxConfig(instance *openclawv1alpha1.OpenClawInstance) string {
 	args := deduplicateArgs(DefaultChromiumLaunchArgs, instance.Spec.Chromium.ExtraArgs)
 
@@ -624,14 +629,22 @@ http {
     scgi_temp_path /tmp/scgi;
 
     server {
-        listen 0.0.0.0:%d;
+        listen 0.0.0.0:%[1]d;
+
+        # Return a static /json/version so Playwright's connectOverCDP()
+        # reconnects through this proxy instead of discovering Chrome's
+        # random direct debugging port and bypassing browserless.
+        location = /json/version {
+            default_type application/json;
+            return 200 '{"webSocketDebuggerUrl":"ws://127.0.0.1:%[1]d"}';
+        }
 
         # WebSocket connections route to /chromium with launch args.
         # browserless v2 only applies launch args on the /chromium endpoint
         # (launches new Chrome), not /devtools/browser/ (existing Chrome).
         location @chromium_ws {
-            rewrite ^ /chromium?launch=%s break;
-            proxy_pass http://127.0.0.1:%d;
+            rewrite ^ /chromium?launch=%[2]s break;
+            proxy_pass http://127.0.0.1:%[3]d;
             proxy_http_version 1.1;
             proxy_set_header Upgrade $http_upgrade;
             proxy_set_header Connection "upgrade";
@@ -649,14 +662,14 @@ http {
             }
 
             # HTTP requests pass through to browserless unchanged.
-            proxy_pass http://127.0.0.1:%d;
+            proxy_pass http://127.0.0.1:%[3]d;
             proxy_http_version 1.1;
             proxy_set_header Host $host;
             proxy_buffering off;
         }
     }
 }
-`, ChromiumPort, encoded, BrowserlessInternalPort, BrowserlessInternalPort)
+`, ChromiumPort, encoded, BrowserlessInternalPort)
 }
 
 // deduplicateArgs merges default and extra Chrome launch args, removing

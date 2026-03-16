@@ -11042,6 +11042,44 @@ func TestBuildConfigMap_ChromiumProxyNginxConfig(t *testing.T) {
 	if !strings.Contains(proxyConfig, "error_page 418") {
 		t.Error("proxy config should use error_page 418 for WebSocket routing")
 	}
+
+	// Should have static /json/version response to prevent Playwright bypass
+	if !strings.Contains(proxyConfig, "location = /json/version") {
+		t.Error("proxy config should have exact-match /json/version location")
+	}
+	expectedWsURL := fmt.Sprintf(`"webSocketDebuggerUrl":"ws://127.0.0.1:%d"`, ChromiumPort)
+	if !strings.Contains(proxyConfig, expectedWsURL) {
+		t.Errorf("proxy config should return static webSocketDebuggerUrl pointing to proxy port, want %s", expectedWsURL)
+	}
+}
+
+func TestBuildConfigMap_ChromiumProxyJsonVersionRewrite(t *testing.T) {
+	instance := newTestInstance("cdp-json-version")
+	instance.Spec.Chromium.Enabled = true
+
+	cm := BuildConfigMap(instance, "", nil)
+	proxyConfig := cm.Data[ChromiumProxyNginxConfigKey]
+
+	// The static /json/version must point to the proxy port (ChromiumPort)
+	// so Playwright's connectOverCDP() reconnects through the proxy instead
+	// of discovering Chrome's random direct debugging port.
+	expectedWsURL := fmt.Sprintf(`ws://127.0.0.1:%d`, ChromiumPort)
+	if !strings.Contains(proxyConfig, expectedWsURL) {
+		t.Errorf("static /json/version should contain %s", expectedWsURL)
+	}
+
+	// Must use exact-match location to take priority over the prefix location /
+	if !strings.Contains(proxyConfig, "location = /json/version") {
+		t.Error("/json/version should use exact-match location (= prefix)")
+	}
+
+	// Must return 200 with application/json content type
+	if !strings.Contains(proxyConfig, "return 200") {
+		t.Error("/json/version should return 200")
+	}
+	if !strings.Contains(proxyConfig, "default_type application/json") {
+		t.Error("/json/version should set content type to application/json")
+	}
 }
 
 func TestBuildConfigMap_ChromiumProxyDeduplicatesArgs(t *testing.T) {
