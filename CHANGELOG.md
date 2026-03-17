@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.0](https://github.com/openclaw-rocks/k8s-operator/compare/v0.20.1...v0.21.0) (2026-03-17)
+
+
+### Features
+
+* add optional gateway proxy sidecar (spec.gateway.enabled) ([#339](https://github.com/openclaw-rocks/k8s-operator/issues/339)) ([24ea26c](https://github.com/openclaw-rocks/k8s-operator/commit/24ea26cdb09a04e125c325e13a6b688555252ad2))
+
+
+### Bug Fixes
+
+* replace invalid metrics config injection with OTel Collector sidecar ([#374](https://github.com/openclaw-rocks/k8s-operator/issues/374)) ([706c77f](https://github.com/openclaw-rocks/k8s-operator/commit/706c77f98a3c06d9023838e279d13efa6dacf87b))
+
 ## [0.20.1](https://github.com/openclaw-rocks/k8s-operator/compare/v0.20.0...v0.20.1) (2026-03-16)
 
 
