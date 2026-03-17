@@ -303,10 +303,10 @@ func TestBuildStatefulSet_Defaults(t *testing.T) {
 		t.Error("pod security context: seccomp profile should be RuntimeDefault")
 	}
 
-	// Containers (main + gateway-proxy)
+	// Containers (main + gateway-proxy + otel-collector; metrics enabled by default)
 	containers := sts.Spec.Template.Spec.Containers
-	if len(containers) != 2 {
-		t.Fatalf("expected 2 containers (main + gateway-proxy), got %d", len(containers))
+	if len(containers) != 3 {
+		t.Fatalf("expected 3 containers (main + gateway-proxy + otel-collector), got %d", len(containers))
 	}
 
 	main := containers[0]
@@ -343,13 +343,12 @@ func TestBuildStatefulSet_Defaults(t *testing.T) {
 		t.Error("HOME env var should be set to /home/openclaw")
 	}
 
-	// Ports (gateway, canvas, metrics - metrics enabled by default)
-	if len(main.Ports) != 3 {
-		t.Fatalf("expected 3 ports, got %d", len(main.Ports))
+	// Ports (gateway, canvas - metrics port is on the OTel collector sidecar)
+	if len(main.Ports) != 2 {
+		t.Fatalf("expected 2 ports, got %d", len(main.Ports))
 	}
 	assertContainerPort(t, main.Ports, "gateway", GatewayPort)
 	assertContainerPort(t, main.Ports, "canvas", CanvasPort)
-	assertContainerPort(t, main.Ports, "metrics", DefaultMetricsPort)
 
 	// Default resources
 	cpuReq := main.Resources.Requests[corev1.ResourceCPU]
@@ -435,8 +434,8 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 	containers := sts.Spec.Template.Spec.Containers
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
-	if len(containers) != 2 {
-		t.Fatalf("expected 2 containers (main + gateway-proxy), got %d", len(containers))
+	if len(containers) != 3 {
+		t.Fatalf("expected 3 containers (main + gateway-proxy + otel-collector), got %d", len(containers))
 	}
 
 	// Find chromium in init containers (native sidecar)
@@ -2269,9 +2268,9 @@ func TestBuildConfigMapFromBytes_JSON5Passthrough(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Verify no diagnostics.metrics config injection (OpenClaw does not support
-// this key -- see #373). The operator only manages K8s-side resources
-// (container port, Service port, ServiceMonitor).
+// OTel metrics config injection tests (#356, #373)
+// The operator injects diagnostics.otel (NOT diagnostics.metrics) and adds
+// an OTel Collector sidecar that exposes a Prometheus scrape endpoint.
 // ---------------------------------------------------------------------------
 
 func TestBuildConfigMap_NoDiagnosticsMetricsInjected(t *testing.T) {
@@ -2288,6 +2287,170 @@ func TestBuildConfigMap_NoDiagnosticsMetricsInjected(t *testing.T) {
 	if ok {
 		if _, hasMetrics := diag["metrics"]; hasMetrics {
 			t.Error("diagnostics.metrics must not be injected - OpenClaw rejects this key")
+		}
+	}
+}
+
+func TestEnrichConfigWithOTelMetrics(t *testing.T) {
+	input := []byte(`{}`)
+	out, err := enrichConfigWithOTelMetrics(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	diag, ok := cfg["diagnostics"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected diagnostics key")
+	}
+	otel, ok := diag["otel"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected diagnostics.otel key")
+	}
+	if otel["metrics"] != true {
+		t.Errorf("diagnostics.otel.metrics = %v, want true", otel["metrics"])
+	}
+	expectedEndpoint := fmt.Sprintf("http://localhost:%d", OTelHTTPReceiverPort)
+	if otel["endpoint"] != expectedEndpoint {
+		t.Errorf("diagnostics.otel.endpoint = %v, want %s", otel["endpoint"], expectedEndpoint)
+	}
+}
+
+func TestEnrichConfigWithOTelMetrics_PreservesUserOverride(t *testing.T) {
+	input := []byte(`{"diagnostics":{"otel":{"metrics":true,"endpoint":"http://my-collector:4318"}}}`)
+	out, err := enrichConfigWithOTelMetrics(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	diag := cfg["diagnostics"].(map[string]interface{})
+	otel := diag["otel"].(map[string]interface{})
+	if otel["endpoint"] != "http://my-collector:4318" {
+		t.Errorf("user-set endpoint should be preserved, got %v", otel["endpoint"])
+	}
+}
+
+func TestEnrichConfigWithOTelMetrics_DisabledNoInjection(t *testing.T) {
+	instance := newTestInstance("cm-metrics-disabled")
+	disabled := false
+	instance.Spec.Observability.Metrics.Enabled = &disabled
+	cm := BuildConfigMap(instance, "", nil)
+
+	content := cm.Data["openclaw.json"]
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config: %v", err)
+	}
+
+	if diag, ok := parsed["diagnostics"].(map[string]interface{}); ok {
+		if _, hasOTel := diag["otel"]; hasOTel {
+			t.Error("diagnostics.otel should not be injected when metrics.enabled=false")
+		}
+	}
+}
+
+func TestBuildConfigMap_OTelCollectorConfig(t *testing.T) {
+	instance := newTestInstance("cm-otel-config")
+	cm := BuildConfigMap(instance, "", nil)
+
+	config, ok := cm.Data[OTelCollectorConfigKey]
+	if !ok {
+		t.Fatal("ConfigMap should have OTel Collector config key")
+	}
+	if !strings.Contains(config, "otlp:") {
+		t.Error("OTel config should contain OTLP receiver")
+	}
+	if !strings.Contains(config, "prometheus:") {
+		t.Error("OTel config should contain Prometheus exporter")
+	}
+	if !strings.Contains(config, fmt.Sprintf("0.0.0.0:%d", DefaultMetricsPort)) {
+		t.Errorf("OTel config should contain Prometheus exporter on port %d", DefaultMetricsPort)
+	}
+}
+
+func TestBuildConfigMap_MetricsDisabled_NoOTelConfig(t *testing.T) {
+	instance := newTestInstance("cm-no-otel-config")
+	disabled := false
+	instance.Spec.Observability.Metrics.Enabled = &disabled
+	cm := BuildConfigMap(instance, "", nil)
+
+	if _, ok := cm.Data[OTelCollectorConfigKey]; ok {
+		t.Error("OTel Collector config should not be present when metrics disabled")
+	}
+}
+
+func TestBuildStatefulSet_OTelCollectorContainer(t *testing.T) {
+	instance := newTestInstance("sts-otel-collector")
+	sts := BuildStatefulSet(instance, "", nil)
+
+	var found bool
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		if c.Name == "otel-collector" {
+			found = true
+			// Verify metrics port is on the collector
+			var hasMetricsPort bool
+			for _, p := range c.Ports {
+				if p.Name == "metrics" && p.ContainerPort == DefaultMetricsPort {
+					hasMetricsPort = true
+				}
+			}
+			if !hasMetricsPort {
+				t.Errorf("otel-collector should have metrics port %d", DefaultMetricsPort)
+			}
+			// Verify config volume mount
+			var hasConfigMount bool
+			for _, vm := range c.VolumeMounts {
+				if vm.SubPath == OTelCollectorConfigKey {
+					hasConfigMount = true
+				}
+			}
+			if !hasConfigMount {
+				t.Error("otel-collector should mount OTel Collector config")
+			}
+			// Verify security context
+			if *c.SecurityContext.ReadOnlyRootFilesystem != true {
+				t.Error("otel-collector should have read-only rootfs")
+			}
+			if *c.SecurityContext.RunAsNonRoot != true {
+				t.Error("otel-collector should run as non-root")
+			}
+		}
+	}
+	if !found {
+		t.Error("StatefulSet should have otel-collector container when metrics enabled")
+	}
+}
+
+func TestBuildStatefulSet_MetricsDisabled_NoOTelCollector(t *testing.T) {
+	instance := newTestInstance("sts-no-otel-collector")
+	disabled := false
+	instance.Spec.Observability.Metrics.Enabled = &disabled
+	sts := BuildStatefulSet(instance, "", nil)
+
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		if c.Name == "otel-collector" {
+			t.Error("otel-collector should not be present when metrics disabled")
+		}
+	}
+}
+
+func TestBuildStatefulSet_MainContainerNoMetricsPort(t *testing.T) {
+	instance := newTestInstance("sts-main-no-metrics")
+	sts := BuildStatefulSet(instance, "", nil)
+
+	main := sts.Spec.Template.Spec.Containers[0]
+	for _, p := range main.Ports {
+		if p.Name == "metrics" {
+			t.Error("main container should not have metrics port (it belongs on otel-collector)")
 		}
 	}
 }
@@ -7831,8 +7994,8 @@ func TestBuildStatefulSet_OllamaEnabled(t *testing.T) {
 	sts := BuildStatefulSet(instance, "", nil)
 	containers := sts.Spec.Template.Spec.Containers
 
-	if len(containers) != 3 {
-		t.Fatalf("expected 3 containers (main + gateway-proxy + ollama), got %d", len(containers))
+	if len(containers) != 4 {
+		t.Fatalf("expected 4 containers (main + gateway-proxy + ollama + otel-collector), got %d", len(containers))
 	}
 
 	var ollama *corev1.Container
@@ -8168,8 +8331,8 @@ func TestBuildStatefulSet_OllamaAndChromiumEnabled(t *testing.T) {
 	containers := sts.Spec.Template.Spec.Containers
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
-	if len(containers) != 3 {
-		t.Fatalf("expected 3 containers (main + gateway-proxy + ollama), got %d", len(containers))
+	if len(containers) != 4 {
+		t.Fatalf("expected 4 containers (main + gateway-proxy + ollama + otel-collector), got %d", len(containers))
 	}
 
 	names := make(map[string]bool)
@@ -9269,19 +9432,25 @@ func TestBuildStatefulSet_MetricsPortEnabled(t *testing.T) {
 	// Metrics enabled by default (nil)
 
 	sts := BuildStatefulSet(instance, "", nil)
-	main := sts.Spec.Template.Spec.Containers[0]
 
-	found := false
+	// Metrics port should be on the otel-collector container, not main
+	main := sts.Spec.Template.Spec.Containers[0]
 	for _, p := range main.Ports {
 		if p.Name == "metrics" {
+			t.Error("main container should not have metrics port (belongs on otel-collector)")
+		}
+	}
+
+	// Find otel-collector and verify metrics port
+	found := false
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		if c.Name == "otel-collector" {
 			found = true
-			if p.ContainerPort != DefaultMetricsPort {
-				t.Errorf("metrics container port = %d, want %d", p.ContainerPort, DefaultMetricsPort)
-			}
+			assertContainerPort(t, c.Ports, "metrics", DefaultMetricsPort)
 		}
 	}
 	if !found {
-		t.Error("main container should include metrics port when metrics is enabled")
+		t.Error("otel-collector container should be present when metrics is enabled")
 	}
 }
 
@@ -9290,13 +9459,14 @@ func TestBuildStatefulSet_MetricsPortDisabled(t *testing.T) {
 	instance.Spec.Observability.Metrics.Enabled = Ptr(false)
 
 	sts := BuildStatefulSet(instance, "", nil)
-	main := sts.Spec.Template.Spec.Containers[0]
 
-	for _, p := range main.Ports {
-		if p.Name == "metrics" {
-			t.Error("main container should not include metrics port when metrics is disabled")
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		if c.Name == "otel-collector" {
+			t.Error("otel-collector should not be present when metrics is disabled")
 		}
 	}
+
+	main := sts.Spec.Template.Spec.Containers[0]
 	if len(main.Ports) != 2 {
 		t.Errorf("expected 2 ports (gateway, canvas) when metrics disabled, got %d", len(main.Ports))
 	}
@@ -9307,9 +9477,14 @@ func TestBuildStatefulSet_MetricsPortCustom(t *testing.T) {
 	instance.Spec.Observability.Metrics.Port = Ptr(int32(8080))
 
 	sts := BuildStatefulSet(instance, "", nil)
-	main := sts.Spec.Template.Spec.Containers[0]
 
-	assertContainerPort(t, main.Ports, "metrics", 8080)
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		if c.Name == "otel-collector" {
+			assertContainerPort(t, c.Ports, "metrics", 8080)
+			return
+		}
+	}
+	t.Error("otel-collector container should be present")
 }
 
 // ---------------------------------------------------------------------------
@@ -9323,8 +9498,8 @@ func TestBuildStatefulSet_WebTerminalEnabled(t *testing.T) {
 	sts := BuildStatefulSet(instance, "", nil)
 	containers := sts.Spec.Template.Spec.Containers
 
-	if len(containers) != 3 {
-		t.Fatalf("expected 3 containers (main + gateway-proxy + web-terminal), got %d", len(containers))
+	if len(containers) != 4 {
+		t.Fatalf("expected 4 containers (main + gateway-proxy + web-terminal + otel-collector), got %d", len(containers))
 	}
 
 	var wt *corev1.Container

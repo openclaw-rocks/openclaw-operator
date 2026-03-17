@@ -46,8 +46,8 @@ func BuildConfigMap(instance *openclawv1alpha1.OpenClawInstance, gatewayToken st
 // BuildConfigMapFromBytes creates a ConfigMap for the OpenClawInstance using
 // the provided base config bytes. This allows the controller to pass config
 // from any source (inline raw, external ConfigMap, or empty default).
-// The enrichment pipeline (gateway auth, device auth, tailscale, browser,
-// gateway bind, skill packs) always runs on the provided bytes.
+// The enrichment pipeline (OTel metrics, gateway auth, device auth, tailscale,
+// browser, gateway bind, skill packs) always runs on the provided bytes.
 func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseConfig []byte, gatewayToken string, skillPacks *ResolvedSkillPacks) *corev1.ConfigMap {
 	labels := Labels(instance)
 
@@ -56,7 +56,12 @@ func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseCo
 		configBytes = []byte("{}")
 	}
 
-	// Enrichment pipeline: gateway auth -> device auth -> tailscale -> browser -> gateway bind -> trusted proxies -> control UI origins -> skill packs
+	// Enrichment pipeline: OTel metrics -> gateway auth -> device auth -> tailscale -> browser -> gateway bind -> trusted proxies -> control UI origins -> skill packs
+	if IsMetricsEnabled(instance) {
+		if enriched, err := enrichConfigWithOTelMetrics(configBytes); err == nil {
+			configBytes = enriched
+		}
+	}
 	if gatewayToken != "" {
 		if enriched, err := enrichConfigWithGatewayAuth(configBytes, gatewayToken); err == nil {
 			configBytes = enriched
@@ -115,6 +120,11 @@ func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseCo
 		data[ChromiumProxyNginxConfigKey] = chromiumProxyNginxConfig(instance)
 	}
 
+	// Add OTel Collector config when metrics are enabled
+	if IsMetricsEnabled(instance) {
+		data[OTelCollectorConfigKey] = otelCollectorConfig(instance)
+	}
+
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ConfigMapName(instance),
@@ -155,6 +165,59 @@ func enrichConfigWithGatewayAuth(configJSON []byte, token string) ([]byte, error
 	config["gateway"] = gw
 
 	return json.Marshal(config)
+}
+
+// enrichConfigWithOTelMetrics injects diagnostics.otel config into the config
+// JSON so OpenClaw pushes metrics to the OTel Collector sidecar via OTLP.
+// The collector then exposes these metrics as a Prometheus scrape endpoint.
+// If the user has already set diagnostics.otel, the config is returned
+// unchanged (user override wins).
+func enrichConfigWithOTelMetrics(configJSON []byte) ([]byte, error) {
+	var config map[string]interface{}
+	if err := json.Unmarshal(configJSON, &config); err != nil {
+		return configJSON, nil // not a JSON object, return unchanged
+	}
+
+	diag, _ := config["diagnostics"].(map[string]interface{})
+	if diag == nil {
+		diag = make(map[string]interface{})
+	}
+
+	// If the user already set diagnostics.otel, don't override
+	if _, ok := diag["otel"]; ok {
+		return configJSON, nil
+	}
+
+	diag["otel"] = map[string]interface{}{
+		"metrics":  true,
+		"endpoint": fmt.Sprintf("http://localhost:%d", OTelHTTPReceiverPort),
+	}
+	config["diagnostics"] = diag
+
+	return json.Marshal(config)
+}
+
+// otelCollectorConfig generates the OTel Collector YAML configuration.
+// The collector receives OTLP metrics from OpenClaw on the HTTP receiver
+// and exposes them as a Prometheus scrape endpoint on the configured
+// metrics port.
+func otelCollectorConfig(instance *openclawv1alpha1.OpenClawInstance) string {
+	return fmt.Sprintf(`receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:%d
+
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:%d
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      exporters: [prometheus]
+`, OTelHTTPReceiverPort, MetricsPort(instance))
 }
 
 // enrichConfigWithDeviceAuth injects gateway.controlUi.dangerouslyDisableDeviceAuth=true

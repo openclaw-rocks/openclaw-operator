@@ -137,6 +137,22 @@ const (
 
 	// DefaultMetricsPort is the default port for the Prometheus metrics endpoint
 	DefaultMetricsPort int32 = 9090
+
+	// DefaultOTelCollectorImage is the default image for the OTel Collector sidecar.
+	// The core distribution is lightweight (~80MB) and includes the OTLP receiver
+	// and Prometheus exporter needed for the metrics pipeline.
+	DefaultOTelCollectorImage = "otel/opentelemetry-collector"
+
+	// DefaultOTelCollectorTag is the default tag for the OTel Collector image
+	DefaultOTelCollectorTag = "0.120.0"
+
+	// OTelHTTPReceiverPort is the port for the OTLP HTTP receiver.
+	// OpenClaw pushes metrics to this endpoint via diagnostics.otel.endpoint.
+	// This port is internal to the pod (localhost only).
+	OTelHTTPReceiverPort int32 = 4318
+
+	// OTelCollectorConfigKey is the ConfigMap data key for the OTel Collector config
+	OTelCollectorConfigKey = "otel-collector.yaml"
 )
 
 // DefaultChromiumLaunchArgs are anti-bot Chrome flags injected via the

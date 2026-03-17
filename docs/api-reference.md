@@ -666,8 +666,8 @@ Metrics and logging configuration.
 
 | Field                       | Type                | Default | Description                                   |
 |-----------------------------|---------------------|---------|-----------------------------------------------|
-| `enabled`                   | `*bool`             | `true`  | Enable Kubernetes-side metrics plumbing (container port, Service port, NetworkPolicy ingress rule). The operator does **not** inject application-level config -- OpenClaw does not currently expose a built-in Prometheus scrape endpoint. To collect metrics, configure OpenClaw's OTel diagnostics (`diagnostics.otel`) and use an OTel Collector with a Prometheus exporter. |
-| `port`                      | `*int32`            | `9090`  | Port used for the container port, Service port, and ServiceMonitor target. |
+| `enabled`                   | `*bool`             | `true`  | Enable the metrics pipeline. When enabled, the operator injects `diagnostics.otel` config into OpenClaw to push OTLP metrics, adds an OTel Collector sidecar that exposes a Prometheus scrape endpoint, and creates the Service port and NetworkPolicy ingress rule. |
+| `port`                      | `*int32`            | `9090`  | Prometheus metrics port exposed by the OTel Collector sidecar. Used for the Service port and ServiceMonitor target. |
 | `serviceMonitor.enabled`    | `*bool`             | `false` | Create a Prometheus `ServiceMonitor`.         |
 | `serviceMonitor.interval`   | `string`            | `30s`   | Prometheus scrape interval.                   |
 | `serviceMonitor.labels`     | `map[string]string` | --      | Labels to add to the ServiceMonitor (for Prometheus selector matching). |

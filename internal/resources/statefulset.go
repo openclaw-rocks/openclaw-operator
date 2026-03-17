@@ -253,6 +253,13 @@ func buildContainers(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSe
 		containers = append(containers, buildWebTerminalContainer(instance))
 	}
 
+	// Add OTel Collector sidecar when metrics are enabled.
+	// The collector receives OTLP metrics from OpenClaw and exposes a
+	// Prometheus scrape endpoint on the configured metrics port.
+	if IsMetricsEnabled(instance) {
+		containers = append(containers, buildOTelCollectorContainer(instance))
+	}
+
 	// Add custom sidecars
 	containers = append(containers, instance.Spec.Sidecars...)
 
@@ -260,9 +267,11 @@ func buildContainers(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSe
 }
 
 // buildMainContainerPorts returns the container ports for the main container.
-// Always includes gateway and canvas; conditionally adds metrics when enabled.
+// Always includes gateway and canvas. The metrics port is on the OTel
+// Collector sidecar, not the main container.
 func buildMainContainerPorts(instance *openclawv1alpha1.OpenClawInstance) []corev1.ContainerPort {
-	ports := []corev1.ContainerPort{
+	_ = instance // signature kept for consistency
+	return []corev1.ContainerPort{
 		{
 			Name:          "gateway",
 			ContainerPort: GatewayPort,
@@ -274,16 +283,6 @@ func buildMainContainerPorts(instance *openclawv1alpha1.OpenClawInstance) []core
 			Protocol:      corev1.ProtocolTCP,
 		},
 	}
-
-	if IsMetricsEnabled(instance) {
-		ports = append(ports, corev1.ContainerPort{
-			Name:          "metrics",
-			ContainerPort: MetricsPort(instance),
-			Protocol:      corev1.ProtocolTCP,
-		})
-	}
-
-	return ports
 }
 
 // buildMainContainer creates the main OpenClaw container
@@ -1702,6 +1701,59 @@ func buildWebTerminalResourceRequirements(instance *openclawv1alpha1.OpenClawIns
 	req.Limits[corev1.ResourceMemory] = ParseQuantity(instance.Spec.WebTerminal.Resources.Limits.Memory, "128Mi")
 
 	return req
+}
+
+// buildOTelCollectorContainer creates the OpenTelemetry Collector sidecar.
+// It receives OTLP metrics from OpenClaw and exposes a Prometheus scrape
+// endpoint on the configured metrics port.
+func buildOTelCollectorContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
+	image := DefaultOTelCollectorImage + ":" + DefaultOTelCollectorTag
+	image = ApplyRegistryOverride(image, instance.Spec.Registry)
+
+	return corev1.Container{
+		Name:            "otel-collector",
+		Image:           image,
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Args:            []string{"--config=/etc/otel-collector/config.yaml"},
+		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
+		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: Ptr(false),
+			ReadOnlyRootFilesystem:   Ptr(true),
+			RunAsNonRoot:             Ptr(true),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+			SeccompProfile: &corev1.SeccompProfile{
+				Type: corev1.SeccompProfileTypeRuntimeDefault,
+			},
+		},
+		Ports: []corev1.ContainerPort{
+			{
+				Name:          "metrics",
+				ContainerPort: MetricsPort(instance),
+				Protocol:      corev1.ProtocolTCP,
+			},
+		},
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    ParseQuantity("", "25m"),
+				corev1.ResourceMemory: ParseQuantity("", "32Mi"),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    ParseQuantity("", "100m"),
+				corev1.ResourceMemory: ParseQuantity("", "128Mi"),
+			},
+		},
+		VolumeMounts: []corev1.VolumeMount{
+			{
+				Name:      "config",
+				MountPath: "/etc/otel-collector/config.yaml",
+				SubPath:   OTelCollectorConfigKey,
+				ReadOnly:  true,
+			},
+		},
+	}
 }
 
 // buildOllamaResourceRequirements creates resource requirements for the Ollama container
