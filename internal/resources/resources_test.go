@@ -471,44 +471,42 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 		t.Error("main container should have OPENCLAW_CHROMIUM_CDP env var when chromium is enabled")
 	}
 
-	// Chromium PORT and HOST env vars
-	foundPortEnv := false
-	foundHostEnv := false
+	// Chrome runs directly - no PORT/HOST env vars (those were browserless-specific)
 	for _, env := range chromium.Env {
 		if env.Name == "PORT" {
-			foundPortEnv = true
-			if env.Value != fmt.Sprintf("%d", BrowserlessInternalPort) {
-				t.Errorf("chromium PORT env = %q, want %q", env.Value, fmt.Sprintf("%d", BrowserlessInternalPort))
-			}
+			t.Error("chromium container should not have PORT env var (no longer using browserless)")
 		}
 		if env.Name == "HOST" {
-			foundHostEnv = true
-			if env.Value != "::" {
-				t.Errorf("chromium HOST env = %q, want %q", env.Value, "::")
-			}
+			t.Error("chromium container should not have HOST env var (no longer using browserless)")
 		}
-	}
-	if !foundPortEnv {
-		t.Error("chromium container should have PORT env var to override default listening port")
-	}
-	if !foundHostEnv {
-		t.Error("chromium container should have HOST=:: env var for dual-stack listening")
 	}
 
 	// Chromium image defaults
-	if chromium.Image != "ghcr.io/browserless/chromium:latest" {
-		t.Errorf("chromium image = %q, want default", chromium.Image)
+	expectedImage := DefaultChromiumImage + ":" + DefaultChromiumTag
+	if chromium.Image != expectedImage {
+		t.Errorf("chromium image = %q, want %q", chromium.Image, expectedImage)
+	}
+
+	// Container args should include launch flags
+	if len(chromium.Args) == 0 {
+		t.Fatal("chromium container should have Args with Chrome launch flags")
+	}
+	argsStr := strings.Join(chromium.Args, " ")
+	for _, required := range []string{"--remote-debugging-port=9222", "--remote-debugging-address=0.0.0.0", "--no-sandbox"} {
+		if !strings.Contains(argsStr, required) {
+			t.Errorf("chromium Args missing %q", required)
+		}
 	}
 
 	// Chromium port
 	if len(chromium.Ports) != 1 {
 		t.Fatalf("chromium container should have 1 port, got %d", len(chromium.Ports))
 	}
-	if chromium.Ports[0].ContainerPort != BrowserlessInternalPort {
-		t.Errorf("chromium port = %d, want %d", chromium.Ports[0].ContainerPort, BrowserlessInternalPort)
+	if chromium.Ports[0].ContainerPort != ChromiumPort {
+		t.Errorf("chromium port = %d, want %d", chromium.Ports[0].ContainerPort, ChromiumPort)
 	}
-	if chromium.Ports[0].Name != "browserless" {
-		t.Errorf("chromium port name = %q, want %q", chromium.Ports[0].Name, "browserless")
+	if chromium.Ports[0].Name != "cdp" {
+		t.Errorf("chromium port name = %q, want %q", chromium.Ports[0].Name, "cdp")
 	}
 
 	// Chromium security context
@@ -519,8 +517,8 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 	if csc.ReadOnlyRootFilesystem == nil || *csc.ReadOnlyRootFilesystem {
 		t.Error("chromium: readOnlyRootFilesystem should be false (Chromium needs writable dirs)")
 	}
-	if csc.RunAsUser == nil || *csc.RunAsUser != 999 {
-		t.Errorf("chromium: runAsUser = %v, want 999 (browserless blessuser)", csc.RunAsUser)
+	if csc.RunAsUser == nil || *csc.RunAsUser != 1000 {
+		t.Errorf("chromium: runAsUser = %v, want 1000 (chrome user)", csc.RunAsUser)
 	}
 
 	// Chromium resource defaults
@@ -604,17 +602,16 @@ func TestBuildStatefulSet_ChromiumExtraArgs(t *testing.T) {
 		t.Fatal("chromium init container not found")
 	}
 
-	// ExtraArgs must NOT be set as container Args
-	if len(chromium.Args) != 0 {
-		t.Errorf("expected no container Args, got %v", chromium.Args)
-	}
-
-	// DEFAULT_LAUNCH_ARGS is deprecated; ExtraArgs are injected via the
-	// chromium-proxy's nginx config (launch query parameter on /chromium endpoint).
-	for _, env := range chromium.Env {
-		if env.Name == "DEFAULT_LAUNCH_ARGS" {
-			t.Error("DEFAULT_LAUNCH_ARGS env var should not be set on chromium container")
+	// ExtraArgs should be merged into container Args along with defaults
+	argsStr := strings.Join(chromium.Args, " ")
+	for _, extra := range instance.Spec.Chromium.ExtraArgs {
+		if !strings.Contains(argsStr, extra) {
+			t.Errorf("chromium Args missing user ExtraArg %q", extra)
 		}
+	}
+	// Default args should also be present
+	if !strings.Contains(argsStr, "--remote-debugging-port=9222") {
+		t.Error("chromium Args missing --remote-debugging-port=9222")
 	}
 }
 
@@ -639,18 +636,6 @@ func TestBuildStatefulSet_ChromiumExtraEnv(t *testing.T) {
 		t.Fatal("chromium init container not found")
 	}
 
-	// Operator-managed PORT env must still be present
-	foundPort := false
-	for _, env := range chromium.Env {
-		if env.Name == "PORT" {
-			foundPort = true
-			break
-		}
-	}
-	if !foundPort {
-		t.Error("chromium container should still have operator-managed PORT env var")
-	}
-
 	// Extra env vars should be appended
 	foundStealth := false
 	foundCustom := false
@@ -673,7 +658,7 @@ func TestBuildStatefulSet_ChromiumExtraEnv(t *testing.T) {
 func TestBuildStatefulSet_ChromiumNoExtraArgs(t *testing.T) {
 	instance := newTestInstance("chromium-no-args")
 	instance.Spec.Chromium.Enabled = true
-	// ExtraArgs not set - DEFAULT_LAUNCH_ARGS should not exist
+	// No ExtraArgs - should still have default launch args
 
 	sts := BuildStatefulSet(instance, "", nil)
 
@@ -688,13 +673,13 @@ func TestBuildStatefulSet_ChromiumNoExtraArgs(t *testing.T) {
 		t.Fatal("chromium init container not found")
 	}
 
-	if len(chromium.Args) != 0 {
-		t.Errorf("expected no container Args, got %v", chromium.Args)
+	// Should have default args even without ExtraArgs
+	if len(chromium.Args) == 0 {
+		t.Fatal("chromium container should have default Args")
 	}
-	for _, env := range chromium.Env {
-		if env.Name == "DEFAULT_LAUNCH_ARGS" {
-			t.Error("DEFAULT_LAUNCH_ARGS env var should not be set on chromium container")
-		}
+	argsStr := strings.Join(chromium.Args, " ")
+	if !strings.Contains(argsStr, "--remote-debugging-port=9222") {
+		t.Error("chromium Args missing --remote-debugging-port=9222")
 	}
 }
 
@@ -4315,7 +4300,7 @@ func TestBuildStatefulSet_ChromiumPersistenceEnabled(t *testing.T) {
 		t.Errorf("PVC claim name = %q, want %q", dataVol.PersistentVolumeClaim.ClaimName, "chromium-persist-chromium-data")
 	}
 
-	// DATA_DIR env var should be set to /chromium-data when persistence is enabled
+	// --user-data-dir should be in Args when persistence is enabled
 	var chromium *corev1.Container
 	for i := range sts.Spec.Template.Spec.InitContainers {
 		if sts.Spec.Template.Spec.InitContainers[i].Name == "chromium" {
@@ -4327,18 +4312,9 @@ func TestBuildStatefulSet_ChromiumPersistenceEnabled(t *testing.T) {
 		t.Fatal("chromium init container not found")
 	}
 
-	foundDataDir := false
-	for _, env := range chromium.Env {
-		if env.Name == "DATA_DIR" {
-			foundDataDir = true
-			if env.Value != "/chromium-data" {
-				t.Errorf("DATA_DIR = %q, want %q", env.Value, "/chromium-data")
-			}
-			break
-		}
-	}
-	if !foundDataDir {
-		t.Error("DATA_DIR env var should be set to /chromium-data when persistence is enabled")
+	argsStr := strings.Join(chromium.Args, " ")
+	if !strings.Contains(argsStr, "--user-data-dir=/chromium-data") {
+		t.Error("persistence should add --user-data-dir=/chromium-data to Args")
 	}
 
 	// Volume mount should exist
@@ -6255,18 +6231,14 @@ func TestBuildStatefulSet_CABundle_WithChromium(t *testing.T) {
 		t.Fatal("chromium init container not found")
 	}
 
-	// Check mount
+	// Check mount - Chrome picks up certs from /etc/ssl/certs/ directory
 	assertVolumeMount(t, chromium.VolumeMounts, "ca-bundle", "/etc/ssl/certs/custom-ca-bundle.crt")
 
-	// Check env
-	foundEnv := false
+	// NODE_EXTRA_CA_CERTS should NOT be set (Chrome is not a Node.js app)
 	for _, env := range chromium.Env {
 		if env.Name == "NODE_EXTRA_CA_CERTS" {
-			foundEnv = true
+			t.Error("NODE_EXTRA_CA_CERTS should not be set on chromium container (not Node.js)")
 		}
-	}
-	if !foundEnv {
-		t.Error("NODE_EXTRA_CA_CERTS env var not found on chromium container")
 	}
 }
 
@@ -9914,30 +9886,22 @@ func TestBuildNetworkPolicy_ChromiumIngressAndEgress(t *testing.T) {
 	}
 
 	ports := np.Spec.Ingress[0].Ports
-	if len(ports) != 5 {
-		t.Fatalf("expected 5 ingress ports with chromium (gateway, canvas, chromium, browserless, metrics), got %d", len(ports))
+	if len(ports) != 4 {
+		t.Fatalf("expected 4 ingress ports with chromium (gateway, canvas, chromium, metrics), got %d", len(ports))
 	}
 
 	foundChromiumIngress := false
-	foundBrowserlessIngress := false
 	for _, p := range ports {
 		if p.Port != nil && p.Port.IntValue() == ChromiumPort {
 			foundChromiumIngress = true
-		}
-		if p.Port != nil && p.Port.IntValue() == BrowserlessInternalPort {
-			foundBrowserlessIngress = true
 		}
 	}
 	if !foundChromiumIngress {
 		t.Error("chromium port not found in NetworkPolicy ingress ports")
 	}
-	if !foundBrowserlessIngress {
-		t.Error("browserless internal port not found in NetworkPolicy ingress ports")
-	}
 
-	// Egress: should have a rule for chromium CDP self-traffic (ports 9222 + 9224)
+	// Egress: should have a rule for chromium CDP self-traffic (port 9222)
 	foundChromiumEgress := false
-	foundBrowserlessEgress := false
 	for _, rule := range np.Spec.Egress {
 		for _, p := range rule.Ports {
 			if p.Port != nil && p.Port.IntValue() == ChromiumPort {
@@ -9949,16 +9913,10 @@ func TestBuildNetworkPolicy_ChromiumIngressAndEgress(t *testing.T) {
 					t.Error("chromium egress rule should use podSelector for self-traffic")
 				}
 			}
-			if p.Port != nil && p.Port.IntValue() == BrowserlessInternalPort {
-				foundBrowserlessEgress = true
-			}
 		}
 	}
 	if !foundChromiumEgress {
 		t.Error("chromium egress rule (port 9222) not found in NetworkPolicy")
-	}
-	if !foundBrowserlessEgress {
-		t.Error("browserless internal egress rule (port 9224) not found in NetworkPolicy")
 	}
 }
 
@@ -10970,10 +10928,10 @@ func TestBuildStatefulSet_PodLevelRunAsNonRootFalse_Propagation(t *testing.T) {
 	for _, c := range initContainers {
 		if c.Name == "chromium" {
 			if c.SecurityContext.RunAsNonRoot == nil || !*c.SecurityContext.RunAsNonRoot {
-				t.Error("chromium: runAsNonRoot should still be true (self-consistent with RunAsUser: 999)")
+				t.Error("chromium: runAsNonRoot should still be true (self-consistent with RunAsUser: 1000)")
 			}
-			if c.SecurityContext.RunAsUser == nil || *c.SecurityContext.RunAsUser != 999 {
-				t.Error("chromium: runAsUser should be 999")
+			if c.SecurityContext.RunAsUser == nil || *c.SecurityContext.RunAsUser != 1000 {
+				t.Error("chromium: runAsUser should be 1000")
 			}
 		}
 	}
@@ -11139,8 +11097,8 @@ func TestBuildStatefulSet_FullNonRootFalseScenario(t *testing.T) {
 			if !*c.SecurityContext.RunAsNonRoot {
 				t.Error("chromium: runAsNonRoot should be true (self-consistent)")
 			}
-			if *c.SecurityContext.RunAsUser != 999 {
-				t.Error("chromium: runAsUser should be 999")
+			if *c.SecurityContext.RunAsUser != 1000 {
+				t.Error("chromium: runAsUser should be 1000")
 			}
 		}
 	}
@@ -11191,210 +11149,59 @@ func TestPodRunAsNonRoot_Helper(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Chromium CDP proxy tests
+// Chromium direct Chrome tests (no browserless proxy)
 // ---------------------------------------------------------------------------
 
-func TestBuildStatefulSet_ChromiumProxySidecar(t *testing.T) {
-	instance := newTestInstance("cdp-proxy")
+func TestBuildStatefulSet_NoChromiumProxy(t *testing.T) {
+	instance := newTestInstance("no-proxy")
 	instance.Spec.Chromium.Enabled = true
-
-	sts := BuildStatefulSet(instance, "", nil)
-	initContainers := sts.Spec.Template.Spec.InitContainers
-
-	var proxy *corev1.Container
-	for i := range initContainers {
-		if initContainers[i].Name == "chromium-proxy" {
-			proxy = &initContainers[i]
-			break
-		}
-	}
-	if proxy == nil {
-		t.Fatal("chromium-proxy init container not found")
-	}
-
-	// Should be a native sidecar
-	if proxy.RestartPolicy == nil || *proxy.RestartPolicy != corev1.ContainerRestartPolicyAlways {
-		t.Error("chromium-proxy should have restartPolicy=Always (native sidecar)")
-	}
-
-	// Should use the same nginx image as the gateway proxy
-	if proxy.Image != DefaultGatewayProxyImage {
-		t.Errorf("expected image %s, got %s", DefaultGatewayProxyImage, proxy.Image)
-	}
-
-	// Should listen on the proxy port
-	if len(proxy.Ports) != 1 || proxy.Ports[0].ContainerPort != ChromiumPort {
-		t.Errorf("expected port %d, got %v", ChromiumPort, proxy.Ports)
-	}
-
-	// Should have startup probe on the proxy port
-	if proxy.StartupProbe == nil {
-		t.Fatal("chromium-proxy should have a startup probe")
-	}
-	if proxy.StartupProbe.HTTPGet.Port.IntValue() != int(ChromiumPort) {
-		t.Errorf("startup probe should check port %d, got %d", ChromiumPort, proxy.StartupProbe.HTTPGet.Port.IntValue())
-	}
-
-	// Should come AFTER the chromium (browserless) sidecar
-	chromiumIdx, proxyIdx := -1, -1
-	for i, c := range initContainers {
-		if c.Name == "chromium" {
-			chromiumIdx = i
-		}
-		if c.Name == "chromium-proxy" {
-			proxyIdx = i
-		}
-	}
-	if chromiumIdx < 0 || proxyIdx < 0 || proxyIdx <= chromiumIdx {
-		t.Errorf("chromium-proxy (idx %d) must come after chromium (idx %d)", proxyIdx, chromiumIdx)
-	}
-
-	// Should mount the proxy nginx config
-	foundConfig := false
-	for _, vm := range proxy.VolumeMounts {
-		if vm.SubPath == ChromiumProxyNginxConfigKey {
-			foundConfig = true
-			break
-		}
-	}
-	if !foundConfig {
-		t.Error("chromium-proxy should mount the proxy nginx config")
-	}
-}
-
-func TestBuildStatefulSet_ChromiumProxyNotPresentWhenDisabled(t *testing.T) {
-	instance := newTestInstance("no-cdp-proxy")
-	instance.Spec.Chromium.Enabled = false
 
 	sts := BuildStatefulSet(instance, "", nil)
 	for _, c := range sts.Spec.Template.Spec.InitContainers {
 		if c.Name == "chromium-proxy" {
-			t.Error("chromium-proxy should not be present when chromium is disabled")
+			t.Error("chromium-proxy should not exist - Chrome runs directly without browserless")
 		}
 	}
 }
 
-func TestBuildConfigMap_ChromiumProxyNginxConfig(t *testing.T) {
-	instance := newTestInstance("cdp-cfg")
-	instance.Spec.Chromium.Enabled = true
-	instance.Spec.Chromium.ExtraArgs = []string{"--user-agent=Custom"}
-
-	cm := BuildConfigMap(instance, "", nil)
-	proxyConfig, ok := cm.Data[ChromiumProxyNginxConfigKey]
-	if !ok {
-		t.Fatal("ConfigMap should contain chromium proxy nginx config")
-	}
-
-	// Should contain the proxy port
-	if !strings.Contains(proxyConfig, fmt.Sprintf("listen 0.0.0.0:%d", ChromiumPort)) {
-		t.Error("proxy config should listen on ChromiumPort (9222)")
-	}
-
-	// Should proxy to the internal browserless port
-	if !strings.Contains(proxyConfig, fmt.Sprintf("proxy_pass http://127.0.0.1:%d", BrowserlessInternalPort)) {
-		t.Error("proxy config should forward to BrowserlessInternalPort (9224)")
-	}
-
-	// Should contain the default anti-bot flags (URL-encoded)
-	if !strings.Contains(proxyConfig, "disable-blink-features") {
-		t.Error("proxy config should contain anti-bot launch args")
-	}
-
-	// Should contain user ExtraArgs (URL-encoded)
-	if !strings.Contains(proxyConfig, "Custom") {
-		t.Error("proxy config should contain user ExtraArgs")
-	}
-
-	// Should have WebSocket upgrade headers in @chromium_ws location
-	if !strings.Contains(proxyConfig, "proxy_set_header Upgrade") {
-		t.Error("proxy config should handle WebSocket upgrades")
-	}
-
-	// WebSocket connections should rewrite to /chromium with launch args
-	if !strings.Contains(proxyConfig, "rewrite ^ /chromium?launch=") {
-		t.Error("proxy config should rewrite WebSocket requests to /chromium with launch args")
-	}
-
-	// Should use named location for WebSocket routing
-	if !strings.Contains(proxyConfig, "location @chromium_ws") {
-		t.Error("proxy config should have @chromium_ws named location")
-	}
-
-	// Should redirect WebSocket upgrades via error_page
-	if !strings.Contains(proxyConfig, "error_page 418") {
-		t.Error("proxy config should use error_page 418 for WebSocket routing")
-	}
-
-	// Should have static /json/version response to prevent Playwright bypass
-	if !strings.Contains(proxyConfig, "location = /json/version") {
-		t.Error("proxy config should have exact-match /json/version location")
-	}
-	expectedWsURL := fmt.Sprintf(`"webSocketDebuggerUrl":"ws://127.0.0.1:%d"`, ChromiumPort)
-	if !strings.Contains(proxyConfig, expectedWsURL) {
-		t.Errorf("proxy config should return static webSocketDebuggerUrl pointing to proxy port, want %s", expectedWsURL)
-	}
-}
-
-func TestBuildConfigMap_ChromiumProxyJsonVersionRewrite(t *testing.T) {
-	instance := newTestInstance("cdp-json-version")
-	instance.Spec.Chromium.Enabled = true
-
-	cm := BuildConfigMap(instance, "", nil)
-	proxyConfig := cm.Data[ChromiumProxyNginxConfigKey]
-
-	// The static /json/version must point to the proxy port (ChromiumPort)
-	// so Playwright's connectOverCDP() reconnects through the proxy instead
-	// of discovering Chrome's random direct debugging port.
-	expectedWsURL := fmt.Sprintf(`ws://127.0.0.1:%d`, ChromiumPort)
-	if !strings.Contains(proxyConfig, expectedWsURL) {
-		t.Errorf("static /json/version should contain %s", expectedWsURL)
-	}
-
-	// Must use exact-match location to take priority over the prefix location /
-	if !strings.Contains(proxyConfig, "location = /json/version") {
-		t.Error("/json/version should use exact-match location (= prefix)")
-	}
-
-	// Must return 200 with application/json content type
-	if !strings.Contains(proxyConfig, "return 200") {
-		t.Error("/json/version should return 200")
-	}
-	if !strings.Contains(proxyConfig, "default_type application/json") {
-		t.Error("/json/version should set content type to application/json")
-	}
-}
-
-func TestBuildConfigMap_ChromiumProxyDeduplicatesArgs(t *testing.T) {
+func TestChromiumArgs_Deduplication(t *testing.T) {
 	instance := newTestInstance("cdp-dedup")
 	instance.Spec.Chromium.Enabled = true
-	// Include a flag that's already in DefaultChromiumLaunchArgs
 	instance.Spec.Chromium.ExtraArgs = []string{
 		"--no-first-run",
 		"--window-size=1920,1080",
 	}
 
-	cm := BuildConfigMap(instance, "", nil)
-	proxyConfig := cm.Data[ChromiumProxyNginxConfigKey]
+	args := ChromiumArgs(instance)
+	argsStr := strings.Join(args, " ")
 
 	// --no-first-run should appear only once (deduplicated)
-	count := strings.Count(proxyConfig, "no-first-run")
+	count := strings.Count(argsStr, "--no-first-run")
 	if count != 1 {
 		t.Errorf("--no-first-run should appear once (deduplicated), found %d times", count)
 	}
 
 	// --window-size should be present
-	if !strings.Contains(proxyConfig, "window-size") {
-		t.Error("proxy config should contain --window-size from ExtraArgs")
+	if !strings.Contains(argsStr, "--window-size=1920,1080") {
+		t.Error("args should contain --window-size from ExtraArgs")
+	}
+
+	// Default args should be present
+	if !strings.Contains(argsStr, "--remote-debugging-port=9222") {
+		t.Error("args should contain --remote-debugging-port=9222")
 	}
 }
 
-func TestBuildConfigMap_NoChromiumProxyWhenDisabled(t *testing.T) {
-	instance := newTestInstance("no-cdp-cfg")
-	instance.Spec.Chromium.Enabled = false
+func TestChromiumArgs_PersistenceAddsUserDataDir(t *testing.T) {
+	instance := newTestInstance("cdp-persist")
+	instance.Spec.Chromium.Enabled = true
+	instance.Spec.Chromium.Persistence.Enabled = true
 
-	cm := BuildConfigMap(instance, "", nil)
-	if _, ok := cm.Data[ChromiumProxyNginxConfigKey]; ok {
-		t.Error("ConfigMap should not contain chromium proxy config when chromium is disabled")
+	args := ChromiumArgs(instance)
+	argsStr := strings.Join(args, " ")
+
+	if !strings.Contains(argsStr, "--user-data-dir=/chromium-data") {
+		t.Error("persistence should add --user-data-dir=/chromium-data")
 	}
 }
 

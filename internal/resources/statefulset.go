@@ -418,12 +418,7 @@ func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecre
 	}
 
 	if instance.Spec.Chromium.Enabled {
-		// Use the headless CDP Service DNS name to reach the Chromium sidecar
-		// via the chromium-proxy nginx sidecar. The proxy owns ChromiumPort
-		// (9222) directly, so connections always hit the proxy first --
-		// regardless of whether the Service is headless (where kube-proxy
-		// doesn't translate Port/TargetPort and DNS resolves to pod IPs).
-		//
+		// Use the headless CDP Service DNS name to reach the Chromium sidecar.
 		// A non-loopback address triggers OpenClaw's remote/attach mode so
 		// the browser control service connects to the existing sidecar
 		// instead of trying to launch a local browser process.
@@ -620,17 +615,14 @@ func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance, skillPacks
 	// CDP URL before the Service has endpoints and cache "unreachable"
 	// permanently (see #270).
 	//
-	// The chromium-proxy sidecar is ordered AFTER browserless so it starts
-	// only once browserless is healthy. It injects anti-bot Chrome launch
-	// args into every WebSocket connection via the `launch` query parameter.
+	// Chrome runs directly with --remote-debugging-port=9222 (no browserless
+	// proxy layer). This avoids session lifecycle issues where browserless
+	// kills Chrome when the WebSocket client disconnects between tool calls
+	// (see #360).
 	if instance.Spec.Chromium.Enabled {
 		chromium := buildChromiumContainer(instance)
 		chromium.RestartPolicy = Ptr(corev1.ContainerRestartPolicyAlways)
 		initContainers = append(initContainers, chromium)
-
-		proxy := buildChromiumProxyContainer(instance)
-		proxy.RestartPolicy = Ptr(corev1.ContainerRestartPolicyAlways)
-		initContainers = append(initContainers, proxy)
 	}
 
 	// Custom init containers (user-defined, run after operator-managed ones)
@@ -1325,87 +1317,25 @@ func buildGatewayProxyContainer(instance *openclawv1alpha1.OpenClawInstance) cor
 	}
 }
 
-// buildChromiumProxyContainer creates the nginx CDP proxy sidecar that
-// injects Chrome launch args (anti-bot flags + ExtraArgs) into every
-// browserless request. It runs as a native sidecar after the browserless
-// container to guarantee startup ordering.
-func buildChromiumProxyContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
-	return corev1.Container{
-		Name:            "chromium-proxy",
-		Image:           ApplyRegistryOverride(DefaultGatewayProxyImage, instance.Spec.Registry),
-		ImagePullPolicy: corev1.PullIfNotPresent,
-		Ports: []corev1.ContainerPort{
-			{
-				Name:          "cdp",
-				ContainerPort: ChromiumPort,
-				Protocol:      corev1.ProtocolTCP,
-			},
-		},
-		VolumeMounts: []corev1.VolumeMount{
-			{
-				Name:      "config",
-				MountPath: "/etc/nginx/nginx.conf",
-				SubPath:   ChromiumProxyNginxConfigKey,
-				ReadOnly:  true,
-			},
-			{
-				Name:      "chromium-proxy-tmp",
-				MountPath: "/tmp",
-			},
-		},
-		Resources: corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("10m"),
-				corev1.ResourceMemory: resource.MustParse("16Mi"),
-			},
-			Limits: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("100m"),
-				corev1.ResourceMemory: resource.MustParse("64Mi"),
-			},
-		},
-		SecurityContext: &corev1.SecurityContext{
-			AllowPrivilegeEscalation: Ptr(false),
-			ReadOnlyRootFilesystem:   Ptr(true),
-			RunAsNonRoot:             Ptr(true),
-			RunAsUser:                Ptr(int64(101)), // nginx user in alpine
-			Capabilities: &corev1.Capabilities{
-				Drop: []corev1.Capability{"ALL"},
-			},
-			SeccompProfile: &corev1.SeccompProfile{
-				Type: corev1.SeccompProfileTypeRuntimeDefault,
-			},
-		},
-		// Startup probe verifies the proxy is up via /json/version (static response).
-		// Browserless health is already guaranteed by its own startup probe on
-		// BrowserlessInternalPort (native sidecar ordering). This gates the next
-		// init container / regular containers from starting.
-		StartupProbe: &corev1.Probe{
-			ProbeHandler: corev1.ProbeHandler{
-				HTTPGet: &corev1.HTTPGetAction{
-					Path: "/json/version",
-					Port: intstr.FromInt32(ChromiumPort),
-				},
-			},
-			PeriodSeconds:    1,
-			FailureThreshold: 30,
-			SuccessThreshold: 1,
-			TimeoutSeconds:   2,
-		},
-		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
-		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
-	}
-}
-
-// buildChromiumContainer creates the Chromium sidecar container
+// buildChromiumContainer creates the Chromium sidecar container.
+// Chrome runs directly with --remote-debugging-port=9222 (no browserless
+// proxy layer). This avoids session lifecycle issues where browserless
+// kills Chrome when the WebSocket client disconnects between tool calls
+// (see #360). Launch args (anti-bot flags + user ExtraArgs) are passed
+// as container args instead of being injected via an nginx proxy.
 func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
 	repo := instance.Spec.Chromium.Image.Repository
 	if repo == "" {
-		repo = "ghcr.io/browserless/chromium"
+		repo = DefaultChromiumImage
 	}
 
 	tag := instance.Spec.Chromium.Image.Tag
 	if tag == "" {
-		tag = DefaultImageTag
+		if repo == DefaultChromiumImage {
+			tag = DefaultChromiumTag
+		} else {
+			tag = DefaultImageTag
+		}
 	}
 
 	image := repo + ":" + tag
@@ -1429,16 +1359,10 @@ func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.
 		},
 	}
 
-	// Override the default listening port (3000) to avoid conflicting with
-	// the OpenClaw gateway's built-in browser control service on port 3000.
-	// HOST=:: enables dual-stack listening so the sidecar is reachable on
-	// both IPv4 (127.0.0.1) and IPv6 (::1) loopback addresses.
-	chromiumEnv := []corev1.EnvVar{
-		{Name: "PORT", Value: fmt.Sprintf("%d", BrowserlessInternalPort)},
-		{Name: "HOST", Value: "::"},
-	}
+	var chromiumEnv []corev1.EnvVar
 
-	// Add CA bundle mount and env if configured
+	// Add CA bundle mount if configured. The certificate file is mounted
+	// into the system CA directory so Chrome picks it up automatically.
 	if cab := instance.Spec.Security.CABundle; cab != nil {
 		key := cab.Key
 		if key == "" {
@@ -1450,43 +1374,31 @@ func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.
 			SubPath:   key,
 			ReadOnly:  true,
 		})
-		chromiumEnv = append(chromiumEnv, corev1.EnvVar{
-			Name:  "NODE_EXTRA_CA_CERTS",
-			Value: "/etc/ssl/certs/custom-ca-bundle.crt",
-		})
-	}
-
-	// NOTE: DEFAULT_LAUNCH_ARGS was deprecated in browserless v2.0.0 and is
-	// fully ignored. Chrome launch args are injected by the chromium-proxy
-	// nginx sidecar which routes WebSocket connections to the /chromium
-	// endpoint with DefaultChromiumLaunchArgs + ExtraArgs via the `launch`
-	// query parameter. See chromiumProxyNginxConfig in configmap.go.
-
-	// When persistence is enabled, direct Chromium to store its profile data
-	// on the persistent volume so cookies, localStorage, and session tokens
-	// survive pod restarts. USER_DATA_DIR is the browserless v2 env var for
-	// the default Chrome user data directory.
-	if instance.Spec.Chromium.Persistence.Enabled {
-		chromiumEnv = append(chromiumEnv, corev1.EnvVar{
-			Name:  "DATA_DIR",
-			Value: "/chromium-data",
-		})
 	}
 
 	// Append user-supplied extra env vars
 	chromiumEnv = append(chromiumEnv, instance.Spec.Chromium.ExtraEnv...)
 
+	// Override Command for the default image to bypass its run.sh entrypoint
+	// (which adds a socat proxy layer). Custom images use their own entrypoint.
+	var command []string
+	if repo == DefaultChromiumImage {
+		command = []string{"/headless-shell/headless-shell"}
+	}
+
 	return corev1.Container{
 		Name:                     "chromium",
 		Image:                    image,
 		ImagePullPolicy:          corev1.PullIfNotPresent,
+		Command:                  command,
+		Args:                     ChromiumArgs(instance),
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: Ptr(false),
 			ReadOnlyRootFilesystem:   Ptr(false), // Chromium needs writable dirs for profiles, cache, crash dumps
 			RunAsNonRoot:             Ptr(true),
-			RunAsUser:                Ptr(int64(999)), // browserless built-in user (blessuser)
+			RunAsUser:                Ptr(int64(1000)),
 			Capabilities: &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
 			},
@@ -1496,23 +1408,21 @@ func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.
 		},
 		Ports: []corev1.ContainerPort{
 			{
-				Name:          "browserless",
-				ContainerPort: BrowserlessInternalPort,
+				Name:          "cdp",
+				ContainerPort: ChromiumPort,
 				Protocol:      corev1.ProtocolTCP,
 			},
 		},
 		Resources:    buildChromiumResourceRequirements(instance),
 		Env:          chromiumEnv,
 		VolumeMounts: chromiumMounts,
-		// Startup probe ensures browserless is ready to accept CDP connections
-		// before the pod is marked Ready. Without this, the first browser tool
-		// call from the main container may time out because browserless has not
-		// finished starting yet.
+		// Startup probe ensures Chrome is ready to accept CDP connections
+		// before the pod is marked Ready.
 		StartupProbe: &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
 				HTTPGet: &corev1.HTTPGetAction{
 					Path: "/json/version",
-					Port: intstr.FromInt32(BrowserlessInternalPort),
+					Port: intstr.FromInt32(ChromiumPort),
 				},
 			},
 			InitialDelaySeconds: 1,
@@ -1986,12 +1896,6 @@ func buildVolumes(instance *openclawv1alpha1.OpenClawInstance, skillPacks *Resol
 		volumes = append(volumes,
 			corev1.Volume{
 				Name: "chromium-tmp",
-				VolumeSource: corev1.VolumeSource{
-					EmptyDir: &corev1.EmptyDirVolumeSource{},
-				},
-			},
-			corev1.Volume{
-				Name: "chromium-proxy-tmp",
 				VolumeSource: corev1.VolumeSource{
 					EmptyDir: &corev1.EmptyDirVolumeSource{},
 				},

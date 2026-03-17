@@ -49,23 +49,22 @@ const (
 	// NginxConfigKey is the ConfigMap data key for the nginx stream config
 	NginxConfigKey = "nginx.conf"
 
-	// ChromiumPort is the external CDP port that all clients connect to.
-	// The nginx CDP proxy listens on this port, injecting Chrome launch
-	// args (anti-bot flags) into WebSocket connections before forwarding
-	// to browserless on BrowserlessInternalPort. By owning port 9222
-	// directly, the proxy cannot be bypassed -- even on headless Services
-	// where kube-proxy is not involved and DNS resolves to pod IPs.
+	// ChromiumPort is the CDP port that Chromium listens on directly.
+	// Chrome is started with --remote-debugging-port=9222 so all CDP
+	// clients (OpenClaw, health probes) connect here without any proxy.
 	ChromiumPort = 9222
 
-	// BrowserlessInternalPort is the internal port where the browserless
-	// container actually listens. Traffic should always flow through the
-	// CDP proxy on ChromiumPort first. This port is not exposed via
-	// Services and is only reachable within the pod on localhost.
-	BrowserlessInternalPort = 9224
+	// DefaultChromiumImage is the default image for the Chromium sidecar.
+	// chromedp/headless-shell is a minimal (~133 MB) image purpose-built
+	// for CDP automation with daily automated builds tracking Chrome stable.
+	// Previous versions used ghcr.io/browserless/chromium, but browserless's
+	// session management (launch Chrome per connection, kill on disconnect)
+	// is incompatible with Playwright's connectOverCDP -- see #360.
+	DefaultChromiumImage = "chromedp/headless-shell"
 
-	// ChromiumProxyNginxConfigKey is the ConfigMap data key for the
-	// chromium CDP proxy nginx config
-	ChromiumProxyNginxConfigKey = "chromium-proxy-nginx.conf"
+	// DefaultChromiumTag is the default tag for the Chromium sidecar image.
+	// "stable" tracks the latest Chrome stable channel release.
+	DefaultChromiumTag = "stable"
 
 	// OllamaPort is the port for the Ollama API
 	OllamaPort = 11434
@@ -162,15 +161,61 @@ const (
 	OTelCollectorConfigKey = "otel-collector.yaml"
 )
 
-// DefaultChromiumLaunchArgs are anti-bot Chrome flags injected via the
-// chromium CDP proxy's `launch` query parameter. The proxy routes all
-// WebSocket connections to browserless's /chromium endpoint with these
-// flags (+ user ExtraArgs), ensuring every browser session gets a fresh
-// Chrome launched with the correct args. See chromiumProxyNginxConfig.
+// DefaultChromiumLaunchArgs are Chrome flags passed directly as container
+// args when starting Chromium. These include anti-bot flags and the
+// required --remote-debugging-port/--remote-debugging-address for CDP.
+// User ExtraArgs are appended via deduplicateArgs.
 var DefaultChromiumLaunchArgs = []string{
+	"--no-sandbox",
+	"--remote-debugging-port=9222",
+	"--remote-debugging-address=0.0.0.0",
 	"--disable-blink-features=AutomationControlled",
 	"--disable-features=AutomationControlled",
 	"--no-first-run",
+}
+
+// deduplicateArgs merges default and extra Chrome launch args, removing
+// duplicates. When the same flag appears in both lists, the extra (user)
+// value wins. Flags are compared by their key (everything before '=').
+func deduplicateArgs(defaults, extras []string) []string {
+	seen := make(map[string]int) // flag key -> index in result
+	result := make([]string, 0, len(defaults)+len(extras))
+
+	for _, arg := range defaults {
+		key := argKey(arg)
+		seen[key] = len(result)
+		result = append(result, arg)
+	}
+	for _, arg := range extras {
+		key := argKey(arg)
+		if idx, ok := seen[key]; ok {
+			result[idx] = arg // user value overrides default
+		} else {
+			seen[key] = len(result)
+			result = append(result, arg)
+		}
+	}
+	return result
+}
+
+// argKey extracts the flag key from a Chrome arg for deduplication.
+// "--user-agent=Foo" -> "--user-agent", "--no-sandbox" -> "--no-sandbox".
+func argKey(arg string) string {
+	for i, c := range arg {
+		if c == '=' {
+			return arg[:i]
+		}
+	}
+	return arg
+}
+
+// ChromiumArgs returns the merged Chrome launch args (defaults + user extras).
+func ChromiumArgs(instance *openclawv1alpha1.OpenClawInstance) []string {
+	args := deduplicateArgs(DefaultChromiumLaunchArgs, instance.Spec.Chromium.ExtraArgs)
+	if instance.Spec.Chromium.Persistence.Enabled {
+		args = append(args, "--user-data-dir=/chromium-data")
+	}
+	return args
 }
 
 // Labels returns the standard labels for an OpenClawInstance

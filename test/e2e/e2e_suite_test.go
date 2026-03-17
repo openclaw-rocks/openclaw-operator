@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -1447,7 +1448,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})
 
-		It("Should create chromium sidecar on port 9224 with proxy on port 9222", func() {
+		It("Should create chromium sidecar running Chrome directly on port 9222", func() {
 			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
 				Skip("Skipping resource validation in minimal mode")
 			}
@@ -1484,7 +1485,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				}, statefulSet)
 			}, timeout, interval).Should(Succeed())
 
-			// Verify chromium container exists as native sidecar init container with correct port
+			// Verify chromium container exists as native sidecar init container
 			var chromiumContainer *corev1.Container
 			for i := range statefulSet.Spec.Template.Spec.InitContainers {
 				if statefulSet.Spec.Template.Spec.InitContainers[i].Name == "chromium" {
@@ -1493,21 +1494,21 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				}
 			}
 			Expect(chromiumContainer).NotTo(BeNil(), "chromium sidecar init container should exist")
-			Expect(chromiumContainer.Image).To(Equal("ghcr.io/browserless/chromium:latest"))
+			Expect(chromiumContainer.Image).To(Equal(resources.DefaultChromiumImage + ":" + resources.DefaultChromiumTag))
 			Expect(chromiumContainer.Ports).To(HaveLen(1))
-			Expect(chromiumContainer.Ports[0].ContainerPort).To(Equal(int32(resources.BrowserlessInternalPort)))
+			Expect(chromiumContainer.Ports[0].ContainerPort).To(Equal(int32(resources.ChromiumPort)))
 
-			// Verify chromium container has PORT env var to override default (3000)
-			var foundPortEnv bool
-			for _, env := range chromiumContainer.Env {
-				if env.Name == "PORT" {
-					foundPortEnv = true
-					Expect(env.Value).To(Equal(fmt.Sprintf("%d", resources.BrowserlessInternalPort)),
-						"PORT env should set browserless to internal port so proxy owns port 9222")
-					break
-				}
+			// Chrome runs directly - Args should contain CDP flags
+			Expect(chromiumContainer.Args).NotTo(BeEmpty(), "chromium should have Args with launch flags")
+			argsStr := strings.Join(chromiumContainer.Args, " ")
+			Expect(argsStr).To(ContainSubstring("--remote-debugging-port=9222"))
+			Expect(argsStr).To(ContainSubstring("--no-sandbox"))
+
+			// No chromium-proxy container should exist
+			for _, c := range statefulSet.Spec.Template.Spec.InitContainers {
+				Expect(c.Name).NotTo(Equal("chromium-proxy"),
+					"chromium-proxy should not exist - Chrome runs directly")
 			}
-			Expect(foundPortEnv).To(BeTrue(), "chromium container should have PORT env var")
 
 			// Verify main container has OPENCLAW_CHROMIUM_CDP using service DNS name
 			mainContainer := statefulSet.Spec.Template.Spec.Containers[0]
@@ -1523,7 +1524,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			}
 			Expect(foundChromiumCDP).To(BeTrue(), "OPENCLAW_CHROMIUM_CDP env var should be set")
 
-			// Verify ConfigMap has browser profiles with cdpUrl via env var
+			// Verify ConfigMap has browser profiles with cdpUrl
 			configMap := &corev1.ConfigMap{}
 			Eventually(func() error {
 				return k8sClient.Get(ctx, types.NamespacedName{
@@ -1537,19 +1538,13 @@ var _ = Describe("OpenClawInstance Controller", func() {
 
 			browser, ok := parsed["browser"].(map[string]interface{})
 			Expect(ok).To(BeTrue(), "config should have browser key")
-
-			// attachOnly must be true so OpenClaw skips local browser binary
-			// detection and connects directly to the remote CDP sidecar.
 			Expect(browser["attachOnly"]).To(BeTrue(), "browser.attachOnly should be true")
-
-			// remoteCdpTimeoutMs gives the browser service time to initialize
 			Expect(browser["remoteCdpTimeoutMs"]).To(BeNumerically("==", 30000),
 				"browser.remoteCdpTimeoutMs should be 30000")
 
 			profiles, ok := browser["profiles"].(map[string]interface{})
 			Expect(ok).To(BeTrue(), "browser should have profiles key")
 
-			// cdpUrl is resolved at config build time to the CDP Service DNS name
 			expectedCDPURL := fmt.Sprintf("http://%s.%s.svc:%d",
 				resources.ChromiumCDPServiceName(instance), namespace, resources.ChromiumPort)
 			for _, profileName := range []string{"default", "chrome"} {
@@ -1578,14 +1573,10 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			}
 			Expect(foundChromiumPort).To(BeTrue(), "Service should have chromium port")
 
-			// Verify chromium proxy nginx config has /json/version rewrite
-			proxyConfig, hasProxyConfig := configMap.Data[resources.ChromiumProxyNginxConfigKey]
-			Expect(hasProxyConfig).To(BeTrue(), "ConfigMap should contain chromium proxy nginx config")
-			Expect(proxyConfig).To(ContainSubstring("location = /json/version"),
-				"proxy config should have static /json/version to prevent Playwright bypass")
-			Expect(proxyConfig).To(ContainSubstring(
-				fmt.Sprintf(`"webSocketDebuggerUrl":"ws://127.0.0.1:%d"`, resources.ChromiumPort)),
-				"static /json/version should point webSocketDebuggerUrl to proxy port")
+			// ConfigMap should NOT contain chromium proxy config (no proxy needed)
+			_, hasProxyConfig := configMap.Data["chromium-proxy-nginx.conf"]
+			Expect(hasProxyConfig).To(BeFalse(),
+				"ConfigMap should not contain chromium proxy config - Chrome runs directly")
 
 			// Clean up
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
@@ -1644,7 +1635,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			Expect(dataVol.PersistentVolumeClaim).NotTo(BeNil(), "chromium-data should be a PVC when persistence is enabled")
 			Expect(dataVol.PersistentVolumeClaim.ClaimName).To(Equal(instanceName + "-chromium-data"))
 
-			// Verify chromium container has DATA_DIR env var for persistence
+			// Verify chromium container has --user-data-dir in Args for persistence
 			var chromiumContainer *corev1.Container
 			for i := range statefulSet.Spec.Template.Spec.InitContainers {
 				if statefulSet.Spec.Template.Spec.InitContainers[i].Name == "chromium" {
@@ -1654,15 +1645,9 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			}
 			Expect(chromiumContainer).NotTo(BeNil(), "chromium sidecar init container should exist")
 
-			var dataDir string
-			for _, env := range chromiumContainer.Env {
-				if env.Name == "DATA_DIR" {
-					dataDir = env.Value
-					break
-				}
-			}
-			Expect(dataDir).To(Equal("/chromium-data"),
-				"DATA_DIR should be set to /chromium-data when persistence is enabled")
+			argsStr := strings.Join(chromiumContainer.Args, " ")
+			Expect(argsStr).To(ContainSubstring("--user-data-dir=/chromium-data"),
+				"persistence should add --user-data-dir=/chromium-data to Args")
 
 			// Verify chromium container has chromium-data volume mount
 			var foundDataMount bool

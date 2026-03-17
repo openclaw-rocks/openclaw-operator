@@ -19,7 +19,6 @@ package resources
 import (
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"sort"
 
 	corev1 "k8s.io/api/core/v1"
@@ -117,11 +116,6 @@ func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseCo
 	// Add Tailscale serve config when enabled (sidecar reads this via TS_SERVE_CONFIG)
 	if instance.Spec.Tailscale.Enabled {
 		data[TailscaleServeConfigKey] = BuildTailscaleServeConfig(instance)
-	}
-
-	// Add chromium CDP proxy nginx config when enabled
-	if instance.Spec.Chromium.Enabled {
-		data[ChromiumProxyNginxConfigKey] = chromiumProxyNginxConfig(instance)
 	}
 
 	// Add OTel Collector config when metrics are enabled
@@ -691,122 +685,3 @@ stream {
 `, GatewayProxyPort, GatewayPort, CanvasProxyPort, CanvasPort)
 }
 
-// chromiumProxyNginxConfig returns the nginx HTTP configuration for the
-// chromium CDP proxy sidecar. It sits between OpenClaw and the browserless
-// sidecar, routing WebSocket connections to the /chromium endpoint with
-// Chrome launch args (anti-bot flags + user ExtraArgs) via the `launch`
-// query parameter.
-//
-// Why /chromium specifically: browserless v2 deprecated DEFAULT_LAUNCH_ARGS
-// and only applies the `launch` query parameter on its /chromium WebSocket
-// endpoint (which launches a new Chrome process). Other endpoints like
-// /devtools/browser/<id> connect to already-running Chrome and ignore
-// launch args entirely. By routing all WebSocket upgrades to /chromium,
-// every browser session gets fresh Chrome with the correct flags.
-//
-// The /json/version endpoint returns a static response with
-// webSocketDebuggerUrl pointing back to the proxy (ws://127.0.0.1:9222).
-// This prevents Playwright's connectOverCDP() from discovering Chrome's
-// random direct debugging port and bypassing the proxy -- which would
-// cause browserless to kill Chrome (0 clients) and break the session.
-// Other HTTP requests (health checks, /json/list) pass through unchanged.
-func chromiumProxyNginxConfig(instance *openclawv1alpha1.OpenClawInstance) string {
-	args := deduplicateArgs(DefaultChromiumLaunchArgs, instance.Spec.Chromium.ExtraArgs)
-
-	launchJSON, _ := json.Marshal(map[string]interface{}{"args": args})
-	encoded := url.QueryEscape(string(launchJSON))
-
-	return fmt.Sprintf(`worker_processes 1;
-pid /tmp/nginx.pid;
-error_log /dev/stderr warn;
-
-events {
-    worker_connections 64;
-}
-
-http {
-    # Redirect temp/cache dirs to writable /tmp (rootfs is read-only)
-    client_body_temp_path /tmp/client_body;
-    proxy_temp_path /tmp/proxy;
-    fastcgi_temp_path /tmp/fastcgi;
-    uwsgi_temp_path /tmp/uwsgi;
-    scgi_temp_path /tmp/scgi;
-
-    server {
-        listen 0.0.0.0:%[1]d;
-
-        # Return a static /json/version so Playwright's connectOverCDP()
-        # reconnects through this proxy instead of discovering Chrome's
-        # random direct debugging port and bypassing browserless.
-        location = /json/version {
-            default_type application/json;
-            return 200 '{"webSocketDebuggerUrl":"ws://127.0.0.1:%[1]d"}';
-        }
-
-        # WebSocket connections route to /chromium with launch args.
-        # browserless v2 only applies launch args on the /chromium endpoint
-        # (launches new Chrome), not /devtools/browser/ (existing Chrome).
-        location @chromium_ws {
-            rewrite ^ /chromium?launch=%[2]s break;
-            proxy_pass http://127.0.0.1:%[3]d;
-            proxy_http_version 1.1;
-            proxy_set_header Upgrade $http_upgrade;
-            proxy_set_header Connection "upgrade";
-            proxy_set_header Host $host;
-            proxy_buffering off;
-            proxy_read_timeout 86400s;
-            proxy_send_timeout 86400s;
-        }
-
-        location / {
-            # Route WebSocket upgrades to @chromium_ws via internal redirect.
-            error_page 418 = @chromium_ws;
-            if ($http_upgrade ~* "websocket") {
-                return 418;
-            }
-
-            # HTTP requests pass through to browserless unchanged.
-            proxy_pass http://127.0.0.1:%[3]d;
-            proxy_http_version 1.1;
-            proxy_set_header Host $host;
-            proxy_buffering off;
-        }
-    }
-}
-`, ChromiumPort, encoded, BrowserlessInternalPort)
-}
-
-// deduplicateArgs merges default and extra Chrome launch args, removing
-// duplicates. When the same flag appears in both lists, the extra (user)
-// value wins. Flags are compared by their key (everything before '=').
-func deduplicateArgs(defaults, extras []string) []string {
-	seen := make(map[string]int) // flag key → index in result
-	result := make([]string, 0, len(defaults)+len(extras))
-
-	for _, arg := range defaults {
-		key := argKey(arg)
-		seen[key] = len(result)
-		result = append(result, arg)
-	}
-	for _, arg := range extras {
-		key := argKey(arg)
-		if idx, ok := seen[key]; ok {
-			result[idx] = arg // user value overrides default
-		} else {
-			seen[key] = len(result)
-			result = append(result, arg)
-		}
-	}
-	return result
-}
-
-// argKey extracts the flag key from a Chrome arg for deduplication.
-// "--user-agent=Foo" → "--user-agent", "--no-sandbox" → "--no-sandbox".
-func argKey(arg string) string {
-	for i, c := range arg {
-		if c == '=' {
-			return arg[:i]
-		}
-	}
-	return arg
-}

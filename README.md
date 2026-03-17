@@ -271,8 +271,8 @@ spec:
   chromium:
     enabled: true
     image:
-      repository: ghcr.io/browserless/chromium
-      tag: "v2.0.0"
+      repository: chromedp/headless-shell  # default
+      tag: "stable"
     resources:
       requests:
         cpu: "250m"
@@ -285,8 +285,8 @@ spec:
       - "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     # Inject extra environment variables into the sidecar
     extraEnv:
-      - name: DEFAULT_STEALTH
-        value: "true"
+      - name: DISPLAY
+        value: ":99"
 ```
 
 When enabled, the operator automatically:

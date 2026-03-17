@@ -133,15 +133,11 @@ func buildServicePorts(instance *openclawv1alpha1.OpenClawInstance) []corev1.Ser
 // BuildChromiumCDPService creates a headless Service for the Chromium CDP
 // endpoint with publishNotReadyAddresses=true. This ensures the CDP URL
 // resolves even before the pod is fully Ready, which is critical because the
-// main container (OpenClaw) checks CDP connectivity during startup — before
+// main container (OpenClaw) checks CDP connectivity during startup - before
 // its own readiness probe has passed. Without this, the main ClusterIP Service
 // has no endpoints and the CDP health check fails permanently.
 //
-// Traffic is routed to the chromium CDP proxy on ChromiumPort (9222) which
-// injects anti-bot Chrome launch args before forwarding to browserless on
-// BrowserlessInternalPort (9224). Because the proxy owns port 9222 directly,
-// the headless bypass is eliminated -- DNS resolves to pod IPs, and port
-// 9222 always hits the proxy regardless of whether kube-proxy is involved.
+// Traffic is routed directly to Chrome on ChromiumPort (9222).
 func BuildChromiumCDPService(instance *openclawv1alpha1.OpenClawInstance) *corev1.Service {
 	labels := Labels(instance)
 	selectorLabels := SelectorLabels(instance)

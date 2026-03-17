@@ -253,7 +253,7 @@ Optional Chromium sidecar for browser automation.
 | Field                      | Type              | Default                        | Description                                                                                                          |
 |----------------------------|-------------------|--------------------------------|----------------------------------------------------------------------------------------------------------------------|
 | `enabled`                  | `bool`            | `false`                        | Enable the Chromium sidecar container.                                                                               |
-| `image.repository`         | `string`          | `ghcr.io/browserless/chromium` | Chromium container image repository.                                                                                 |
+| `image.repository`         | `string`          | `chromedp/headless-shell`         | Chromium container image repository.                                                                                 |
 | `image.tag`                | `string`          | `latest`                       | Chromium image tag.                                                                                                  |
 | `image.digest`             | `string`          | --                             | Chromium image digest for supply chain security.                                                                     |
 | `resources.requests.cpu`   | `string`          | `250m`                         | Chromium minimum CPU.                                                                                                |
@@ -269,13 +269,15 @@ Optional Chromium sidecar for browser automation.
 
 When enabled, the sidecar:
 
-- Exposes Chrome DevTools Protocol on port 3000.
-- Runs as UID 999 (blessuser).
+- Runs Chromium directly with `--remote-debugging-port=9222` (no browserless proxy layer).
+- Exposes Chrome DevTools Protocol on port 9222.
+- Runs as UID 1000.
 - Mounts a memory-backed emptyDir at `/dev/shm` (1Gi) for shared memory.
 - Mounts an emptyDir at `/tmp` for scratch space.
+- Anti-bot flags and `extraArgs` are passed directly as container args.
 - When `persistence.enabled` is true, mounts a PVC at `/chromium-data` and passes `--user-data-dir=/chromium-data` to Chrome, persisting cookies, localStorage, IndexedDB, cached credentials, and session tokens across pod restarts.
 
-When Chromium is enabled, the operator also auto-configures browser profiles in the OpenClaw config. Both `"default"` and `"chrome"` profiles are set to point at the sidecar's CDP endpoint via the headless CDP Service DNS name. Traffic goes through the chromium-proxy nginx sidecar which injects anti-bot Chrome launch args (and any user `extraArgs`) into every WebSocket connection. This ensures browser tool calls work regardless of which profile name the LLM passes.
+When Chromium is enabled, the operator also auto-configures browser profiles in the OpenClaw config. Both `"default"` and `"chrome"` profiles are set to point at the sidecar's CDP endpoint via the headless CDP Service DNS name. This ensures browser tool calls work regardless of which profile name the LLM passes.
 
 ### spec.tailscale
 
