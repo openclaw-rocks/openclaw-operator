@@ -2493,4 +2493,79 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			Expect(deployment.Status.AvailableReplicas).To(BeNumerically(">=", 1))
 		})
 	})
+
+	// Smoke test: verify an OpenClaw instance with default settings boots
+	// successfully. This catches config injection bugs like #373 where
+	// invalid keys in openclaw.json crash the application on startup.
+	Context("When deploying an instance with default config (smoke test)", func() {
+		var namespace string
+
+		BeforeEach(func() {
+			namespace = "test-smoke-" + time.Now().Format("20060102150405")
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+			Expect(k8sClient.Create(ctx, ns)).Should(Succeed())
+		})
+
+		AfterEach(func() {
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+			_ = k8sClient.Delete(ctx, ns)
+		})
+
+		It("Should have the pod become Ready with injected config", func() {
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping smoke test in minimal mode")
+			}
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "smoke-test",
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			// Wait for the StatefulSet to have at least 1 Ready replica.
+			// This verifies that:
+			// 1. The injected config (openclaw.json) passes OpenClaw's strict validation
+			// 2. All containers (including sidecars) start successfully
+			// 3. Readiness probes pass (gateway is serving traffic)
+			sts := &appsv1.StatefulSet{}
+			Eventually(func() int32 {
+				if err := k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.StatefulSetName(instance),
+					Namespace: namespace,
+				}, sts); err != nil {
+					return 0
+				}
+				return sts.Status.ReadyReplicas
+			}, 5*time.Minute, 5*time.Second).Should(BeNumerically(">=", 1),
+				"StatefulSet should have at least 1 Ready replica - if this fails, "+
+					"check pod logs for config validation errors or container crashes")
+
+			// If the pod is not becoming Ready, capture pod events for debugging
+			if sts.Status.ReadyReplicas < 1 {
+				podList := &corev1.PodList{}
+				_ = k8sClient.List(ctx, podList, client.InNamespace(namespace))
+				for _, pod := range podList.Items {
+					for _, cs := range pod.Status.ContainerStatuses {
+						if cs.State.Waiting != nil {
+							GinkgoWriter.Printf("Container %s waiting: %s - %s\n",
+								cs.Name, cs.State.Waiting.Reason, cs.State.Waiting.Message)
+						}
+					}
+				}
+			}
+
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+	})
 })
