@@ -553,6 +553,10 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			Expect(ok).To(BeTrue(), "config should have gateway key")
 			Expect(gw["bind"]).To(Equal("loopback"), "gateway.bind should be loopback")
 
+			// Handshake timeout should be injected (workaround for upstream #46892)
+			Expect(gw["handshakeTimeoutMs"]).To(Equal(float64(resources.DefaultHandshakeTimeoutMs)),
+				"gateway.handshakeTimeoutMs should be injected for K8s startup overhead")
+
 			// Device auth should be disabled (incompatible with K8s)
 			controlUI, ok := gw["controlUi"].(map[string]interface{})
 			Expect(ok).To(BeTrue(), "gateway should have controlUi key")

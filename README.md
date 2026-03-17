@@ -747,6 +747,7 @@ These behaviors are always applied - no configuration needed:
 | `gateway.bind` | When the gateway proxy sidecar is enabled (default), binds to loopback and an nginx reverse proxy handles external access. When disabled (`spec.gateway.enabled: false`), binds to `0.0.0.0` so the gateway is reachable directly. |
 | Gateway auth token | Auto-generated Secret per instance; injected into config and env |
 | Control UI origins | `gateway.controlUi.allowedOrigins` auto-injected from localhost + ingress hosts + `spec.gateway.controlUiOrigins` |
+| `gateway.handshakeTimeoutMs` | `10000` (10s) to work around upstream timeout regression in v2026.3.12 ([#46892](https://github.com/openclaw/openclaw/issues/46892)) |
 | `OPENCLAW_DISABLE_BONJOUR=1` | Always set (mDNS does not work in Kubernetes) |
 | Browser profiles | When Chromium is enabled, `"default"` and `"chrome"` profiles are auto-configured with the sidecar's CDP endpoint |
 | Tailscale serve config | When Tailscale is enabled, a `tailscale-serve.json` key is added to the ConfigMap for the sidecar's `TS_SERVE_CONFIG` |

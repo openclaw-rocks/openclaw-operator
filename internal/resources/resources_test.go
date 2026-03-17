@@ -2622,6 +2622,78 @@ func TestEnrichConfigWithDeviceAuth_InvalidJSON(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// enrichConfigWithHandshakeTimeout tests
+// ---------------------------------------------------------------------------
+
+func TestEnrichConfigWithHandshakeTimeout(t *testing.T) {
+	input := []byte(`{}`)
+	out, err := enrichConfigWithHandshakeTimeout(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	gw, _ := cfg["gateway"].(map[string]interface{})
+	if gw == nil {
+		t.Fatal("expected gateway key")
+	}
+	if gw["handshakeTimeoutMs"] != float64(DefaultHandshakeTimeoutMs) {
+		t.Errorf("gateway.handshakeTimeoutMs = %v, want %d", gw["handshakeTimeoutMs"], DefaultHandshakeTimeoutMs)
+	}
+}
+
+func TestEnrichConfigWithHandshakeTimeout_PreservesUserValue(t *testing.T) {
+	input := []byte(`{"gateway":{"handshakeTimeoutMs":5000}}`)
+	out, err := enrichConfigWithHandshakeTimeout(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	gw := cfg["gateway"].(map[string]interface{})
+	if gw["handshakeTimeoutMs"] != float64(5000) {
+		t.Errorf("gateway.handshakeTimeoutMs = %v, want 5000 (user override)", gw["handshakeTimeoutMs"])
+	}
+}
+
+func TestEnrichConfigWithHandshakeTimeout_PreservesOtherFields(t *testing.T) {
+	input := []byte(`{"gateway":{"bind":"loopback"}}`)
+	out, err := enrichConfigWithHandshakeTimeout(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	gw := cfg["gateway"].(map[string]interface{})
+	if gw["handshakeTimeoutMs"] != float64(DefaultHandshakeTimeoutMs) {
+		t.Errorf("gateway.handshakeTimeoutMs = %v, want %d", gw["handshakeTimeoutMs"], DefaultHandshakeTimeoutMs)
+	}
+	if gw["bind"] != "loopback" {
+		t.Errorf("gateway.bind = %v, want loopback (should be preserved)", gw["bind"])
+	}
+}
+
+func TestEnrichConfigWithHandshakeTimeout_InvalidJSON(t *testing.T) {
+	input := []byte(`not-json`)
+	out, err := enrichConfigWithHandshakeTimeout(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != "not-json" {
+		t.Errorf("invalid JSON should be returned unchanged, got %s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // enrichConfigWithTrustedProxies tests
 // ---------------------------------------------------------------------------
 

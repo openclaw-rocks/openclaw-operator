@@ -56,7 +56,7 @@ func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseCo
 		configBytes = []byte("{}")
 	}
 
-	// Enrichment pipeline: OTel metrics -> gateway auth -> device auth -> tailscale -> browser -> gateway bind -> trusted proxies -> control UI origins -> skill packs
+	// Enrichment pipeline: OTel metrics -> gateway auth -> device auth -> tailscale -> browser -> gateway bind -> handshake timeout -> trusted proxies -> control UI origins -> skill packs
 	if IsMetricsEnabled(instance) {
 		if enriched, err := enrichConfigWithOTelMetrics(configBytes); err == nil {
 			configBytes = enriched
@@ -81,6 +81,9 @@ func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseCo
 		}
 	}
 	if enriched, err := enrichConfigWithGatewayBind(configBytes, instance); err == nil {
+		configBytes = enriched
+	}
+	if enriched, err := enrichConfigWithHandshakeTimeout(configBytes); err == nil {
 		configBytes = enriched
 	}
 	if enriched, err := enrichConfigWithTrustedProxies(configBytes); err == nil {
@@ -499,6 +502,35 @@ func HasGatewayBindConflict(instance *openclawv1alpha1.OpenClawInstance) bool {
 	}
 	bindStr, ok := bind.(string)
 	return ok && (bindStr == GatewayBindLoopback || bindStr == "127.0.0.1")
+}
+
+// enrichConfigWithHandshakeTimeout injects gateway.handshakeTimeoutMs into
+// the config JSON. OpenClaw v2026.3.12 reduced the WebSocket handshake
+// timeout from ~10s to 3s, which is too short for Kubernetes environments
+// where plugin loading adds container startup overhead.
+// If the user has already set gateway.handshakeTimeoutMs, the config is
+// returned unchanged (user override wins).
+// See: https://github.com/openclaw/openclaw/issues/46892
+func enrichConfigWithHandshakeTimeout(configJSON []byte) ([]byte, error) {
+	var config map[string]interface{}
+	if err := json.Unmarshal(configJSON, &config); err != nil {
+		return configJSON, nil // not a JSON object, return unchanged
+	}
+
+	gw, _ := config["gateway"].(map[string]interface{})
+	if gw == nil {
+		gw = make(map[string]interface{})
+	}
+
+	// If the user already set handshakeTimeoutMs, don't override
+	if _, ok := gw["handshakeTimeoutMs"]; ok {
+		return configJSON, nil
+	}
+
+	gw["handshakeTimeoutMs"] = DefaultHandshakeTimeoutMs
+	config["gateway"] = gw
+
+	return json.Marshal(config)
 }
 
 // enrichConfigWithTrustedProxies ensures 127.0.0.0/8 is present in
