@@ -46,8 +46,8 @@ func BuildConfigMap(instance *openclawv1alpha1.OpenClawInstance, gatewayToken st
 // BuildConfigMapFromBytes creates a ConfigMap for the OpenClawInstance using
 // the provided base config bytes. This allows the controller to pass config
 // from any source (inline raw, external ConfigMap, or empty default).
-// The enrichment pipeline (metrics, gateway auth, device auth, tailscale,
-// browser, gateway bind, skill packs) always runs on the provided bytes.
+// The enrichment pipeline (gateway auth, device auth, tailscale, browser,
+// gateway bind, skill packs) always runs on the provided bytes.
 func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseConfig []byte, gatewayToken string, skillPacks *ResolvedSkillPacks) *corev1.ConfigMap {
 	labels := Labels(instance)
 
@@ -56,12 +56,7 @@ func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseCo
 		configBytes = []byte("{}")
 	}
 
-	// Enrichment pipeline: metrics -> gateway auth -> device auth -> tailscale -> browser -> gateway bind -> trusted proxies -> control UI origins -> skill packs
-	if IsMetricsEnabled(instance) {
-		if enriched, err := enrichConfigWithMetrics(configBytes, instance); err == nil {
-			configBytes = enriched
-		}
-	}
+	// Enrichment pipeline: gateway auth -> device auth -> tailscale -> browser -> gateway bind -> trusted proxies -> control UI origins -> skill packs
 	if gatewayToken != "" {
 		if enriched, err := enrichConfigWithGatewayAuth(configBytes, gatewayToken); err == nil {
 			configBytes = enriched
@@ -158,38 +153,6 @@ func enrichConfigWithGatewayAuth(configJSON []byte, token string) ([]byte, error
 	auth["token"] = token
 	gw["auth"] = auth
 	config["gateway"] = gw
-
-	return json.Marshal(config)
-}
-
-// enrichConfigWithMetrics injects diagnostics.metrics.enabled=true and
-// diagnostics.metrics.port into the config JSON so OpenClaw starts a
-// Prometheus scrape endpoint on the configured metrics port. Without this
-// injection, the operator creates the container port, Service port, and
-// ServiceMonitor but nothing inside the container actually binds to the port.
-// If the user has already set diagnostics.metrics, the config is returned
-// unchanged (user override wins).
-func enrichConfigWithMetrics(configJSON []byte, instance *openclawv1alpha1.OpenClawInstance) ([]byte, error) {
-	var config map[string]interface{}
-	if err := json.Unmarshal(configJSON, &config); err != nil {
-		return configJSON, nil // not a JSON object, return unchanged
-	}
-
-	diag, _ := config["diagnostics"].(map[string]interface{})
-	if diag == nil {
-		diag = make(map[string]interface{})
-	}
-
-	// If the user already set diagnostics.metrics, don't override
-	if _, ok := diag["metrics"]; ok {
-		return configJSON, nil
-	}
-
-	diag["metrics"] = map[string]interface{}{
-		"enabled": true,
-		"port":    float64(MetricsPort(instance)),
-	}
-	config["diagnostics"] = diag
 
 	return json.Marshal(config)
 }
