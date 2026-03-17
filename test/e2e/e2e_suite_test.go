@@ -175,6 +175,20 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			Expect(statefulSet.Spec.Template.Spec.Containers).To(HaveLen(3))
 			Expect(statefulSet.Spec.Template.Spec.Containers[0].Image).To(Equal("ghcr.io/openclaw/openclaw:latest"))
 
+			// Verify handshake timeout env var is injected (workaround for upstream #46892)
+			mainContainer := statefulSet.Spec.Template.Spec.Containers[0]
+			var foundHandshakeTimeout bool
+			for _, env := range mainContainer.Env {
+				if env.Name == "OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS" {
+					foundHandshakeTimeout = true
+					Expect(env.Value).To(Equal(fmt.Sprintf("%d", resources.DefaultHandshakeTimeoutMs)),
+						"handshake timeout should be set to DefaultHandshakeTimeoutMs")
+					break
+				}
+			}
+			Expect(foundHandshakeTimeout).To(BeTrue(),
+				"OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS env var should be injected for K8s startup overhead")
+
 			// Clean up
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 
@@ -552,10 +566,6 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			gw, ok := parsed["gateway"].(map[string]interface{})
 			Expect(ok).To(BeTrue(), "config should have gateway key")
 			Expect(gw["bind"]).To(Equal("loopback"), "gateway.bind should be loopback")
-
-			// Handshake timeout should be injected (workaround for upstream #46892)
-			Expect(gw["handshakeTimeoutMs"]).To(Equal(float64(resources.DefaultHandshakeTimeoutMs)),
-				"gateway.handshakeTimeoutMs should be injected for K8s startup overhead")
 
 			// Device auth should be disabled (incompatible with K8s)
 			controlUI, ok := gw["controlUi"].(map[string]interface{})

@@ -408,6 +408,12 @@ func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecre
 		{Name: "HOME", Value: "/home/openclaw"},
 		// mDNS/Bonjour pairing is unusable in Kubernetes — always disable it
 		{Name: "OPENCLAW_DISABLE_BONJOUR", Value: "1"},
+		// OpenClaw v2026.3.12 reduced the WebSocket handshake timeout from
+		// ~10s to 3s (GHSA-jv4g-m82p-2j93), which is too short for K8s where
+		// plugin loading adds container startup overhead. Inject a safe
+		// default via env var (config key is not yet supported upstream).
+		// See: https://github.com/openclaw/openclaw/issues/46892
+		{Name: "OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS", Value: fmt.Sprintf("%d", DefaultHandshakeTimeoutMs)},
 		// npm: redirect global installs to the writable PVC subpath at ~/.local
 		{Name: "NPM_CONFIG_PREFIX", Value: "/home/openclaw/.local"},
 		// npm/npx: redirect cache to the writable PVC subpath at ~/.cache

@@ -2622,74 +2622,52 @@ func TestEnrichConfigWithDeviceAuth_InvalidJSON(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// enrichConfigWithHandshakeTimeout tests
+// Handshake timeout env var tests
 // ---------------------------------------------------------------------------
 
-func TestEnrichConfigWithHandshakeTimeout(t *testing.T) {
-	input := []byte(`{}`)
-	out, err := enrichConfigWithHandshakeTimeout(input)
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestHandshakeTimeoutEnvVar(t *testing.T) {
+	instance := newTestInstance("handshake-test")
+	env := buildMainEnv(instance, "test-token-secret")
+	want := fmt.Sprintf("%d", DefaultHandshakeTimeoutMs)
 
-	var cfg map[string]interface{}
-	if err := json.Unmarshal(out, &cfg); err != nil {
-		t.Fatal(err)
+	var found bool
+	for _, e := range env {
+		if e.Name == "OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS" {
+			found = true
+			if e.Value != want {
+				t.Errorf("OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS = %q, want %q", e.Value, want)
+			}
+			break
+		}
 	}
-	gw, _ := cfg["gateway"].(map[string]interface{})
-	if gw == nil {
-		t.Fatal("expected gateway key")
-	}
-	if gw["handshakeTimeoutMs"] != float64(DefaultHandshakeTimeoutMs) {
-		t.Errorf("gateway.handshakeTimeoutMs = %v, want %d", gw["handshakeTimeoutMs"], DefaultHandshakeTimeoutMs)
+	if !found {
+		t.Error("OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS env var not found")
 	}
 }
 
-func TestEnrichConfigWithHandshakeTimeout_PreservesUserValue(t *testing.T) {
-	input := []byte(`{"gateway":{"handshakeTimeoutMs":5000}}`)
-	out, err := enrichConfigWithHandshakeTimeout(input)
-	if err != nil {
-		t.Fatal(err)
+func TestHandshakeTimeoutEnvVar_UserOverrideWins(t *testing.T) {
+	instance := newTestInstance("handshake-override")
+	instance.Spec.Env = []corev1.EnvVar{
+		{Name: "OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS", Value: "5000"},
 	}
+	sts := BuildStatefulSet(instance, "test-token-secret", nil)
+	mainContainer := sts.Spec.Template.Spec.Containers[0]
 
-	var cfg map[string]interface{}
-	if err := json.Unmarshal(out, &cfg); err != nil {
-		t.Fatal(err)
+	var count int
+	var lastValue string
+	for _, e := range mainContainer.Env {
+		if e.Name == "OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS" {
+			count++
+			lastValue = e.Value
+		}
 	}
-	gw := cfg["gateway"].(map[string]interface{})
-	if gw["handshakeTimeoutMs"] != float64(5000) {
-		t.Errorf("gateway.handshakeTimeoutMs = %v, want 5000 (user override)", gw["handshakeTimeoutMs"])
+	// User env vars are appended after operator defaults; K8s uses the
+	// last value when duplicates exist, so the user's value wins.
+	if lastValue != "5000" {
+		t.Errorf("last OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS = %q, want 5000 (user override)", lastValue)
 	}
-}
-
-func TestEnrichConfigWithHandshakeTimeout_PreservesOtherFields(t *testing.T) {
-	input := []byte(`{"gateway":{"bind":"loopback"}}`)
-	out, err := enrichConfigWithHandshakeTimeout(input)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var cfg map[string]interface{}
-	if err := json.Unmarshal(out, &cfg); err != nil {
-		t.Fatal(err)
-	}
-	gw := cfg["gateway"].(map[string]interface{})
-	if gw["handshakeTimeoutMs"] != float64(DefaultHandshakeTimeoutMs) {
-		t.Errorf("gateway.handshakeTimeoutMs = %v, want %d", gw["handshakeTimeoutMs"], DefaultHandshakeTimeoutMs)
-	}
-	if gw["bind"] != "loopback" {
-		t.Errorf("gateway.bind = %v, want loopback (should be preserved)", gw["bind"])
-	}
-}
-
-func TestEnrichConfigWithHandshakeTimeout_InvalidJSON(t *testing.T) {
-	input := []byte(`not-json`)
-	out, err := enrichConfigWithHandshakeTimeout(input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(out) != "not-json" {
-		t.Errorf("invalid JSON should be returned unchanged, got %s", out)
+	if count < 1 {
+		t.Error("OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS env var not found")
 	}
 }
 
