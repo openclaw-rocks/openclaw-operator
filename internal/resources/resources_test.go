@@ -1356,7 +1356,7 @@ func TestBuildStatefulSet_EnvAndEnvFrom(t *testing.T) {
 	main := sts.Spec.Template.Spec.Containers[0]
 
 	names := envNames(main.Env)
-	expectedPrefix := []string{"HOME", "OPENCLAW_DISABLE_BONJOUR", "NPM_CONFIG_PREFIX", "NPM_CONFIG_CACHE", "PIP_USER"}
+	expectedPrefix := []string{"HOME", "OPENCLAW_DISABLE_BONJOUR", "OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS", "NPM_CONFIG_PREFIX", "NPM_CONFIG_CACHE", "PIP_USER"}
 	for i, want := range expectedPrefix {
 		if i >= len(names) || names[i] != want {
 			t.Fatalf("env vars should start with %v, got %v", expectedPrefix, names)
