@@ -171,8 +171,8 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				}, service)
 			}, timeout, interval).Should(Succeed())
 
-			// Verify the StatefulSet has main + gateway-proxy containers
-			Expect(statefulSet.Spec.Template.Spec.Containers).To(HaveLen(2))
+			// Verify the StatefulSet has main + gateway-proxy + otel-collector containers
+			Expect(statefulSet.Spec.Template.Spec.Containers).To(HaveLen(3))
 			Expect(statefulSet.Spec.Template.Spec.Containers[0].Image).To(Equal("ghcr.io/openclaw/openclaw:latest"))
 
 			// Clean up
