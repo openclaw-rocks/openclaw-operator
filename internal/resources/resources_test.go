@@ -2394,35 +2394,28 @@ func TestBuildStatefulSet_OTelCollectorContainer(t *testing.T) {
 
 	var found bool
 	for _, c := range sts.Spec.Template.Spec.Containers {
-		if c.Name == "otel-collector" {
-			found = true
-			// Verify metrics port is on the collector
-			var hasMetricsPort bool
-			for _, p := range c.Ports {
-				if p.Name == "metrics" && p.ContainerPort == DefaultMetricsPort {
-					hasMetricsPort = true
-				}
+		if c.Name != "otel-collector" {
+			continue
+		}
+		found = true
+		// Verify metrics port is on the collector
+		assertContainerPort(t, c.Ports, "metrics", DefaultMetricsPort)
+		// Verify config volume mount
+		var hasConfigMount bool
+		for _, vm := range c.VolumeMounts {
+			if vm.SubPath == OTelCollectorConfigKey {
+				hasConfigMount = true
 			}
-			if !hasMetricsPort {
-				t.Errorf("otel-collector should have metrics port %d", DefaultMetricsPort)
-			}
-			// Verify config volume mount
-			var hasConfigMount bool
-			for _, vm := range c.VolumeMounts {
-				if vm.SubPath == OTelCollectorConfigKey {
-					hasConfigMount = true
-				}
-			}
-			if !hasConfigMount {
-				t.Error("otel-collector should mount OTel Collector config")
-			}
-			// Verify security context
-			if *c.SecurityContext.ReadOnlyRootFilesystem != true {
-				t.Error("otel-collector should have read-only rootfs")
-			}
-			if *c.SecurityContext.RunAsNonRoot != true {
-				t.Error("otel-collector should run as non-root")
-			}
+		}
+		if !hasConfigMount {
+			t.Error("otel-collector should mount OTel Collector config")
+		}
+		// Verify security context
+		if !*c.SecurityContext.ReadOnlyRootFilesystem {
+			t.Error("otel-collector should have read-only rootfs")
+		}
+		if !*c.SecurityContext.RunAsNonRoot {
+			t.Error("otel-collector should run as non-root")
 		}
 	}
 	if !found {

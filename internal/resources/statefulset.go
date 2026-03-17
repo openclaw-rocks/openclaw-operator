@@ -1711,10 +1711,10 @@ func buildOTelCollectorContainer(instance *openclawv1alpha1.OpenClawInstance) co
 	image = ApplyRegistryOverride(image, instance.Spec.Registry)
 
 	return corev1.Container{
-		Name:            "otel-collector",
-		Image:           image,
-		ImagePullPolicy: corev1.PullIfNotPresent,
-		Args:            []string{"--config=/etc/otel-collector/config.yaml"},
+		Name:                     "otel-collector",
+		Image:                    image,
+		ImagePullPolicy:          corev1.PullIfNotPresent,
+		Args:                     []string{"--config=/etc/otel-collector/config.yaml"},
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 		SecurityContext: &corev1.SecurityContext{
