@@ -189,6 +189,11 @@ jobs:
         run: |
           kind load docker-image ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}:e2e --name e2e-test
 
+      - name: Pre-pull Chromium image
+        run: |
+          docker pull chromedp/headless-shell:stable
+          kind load docker-image chromedp/headless-shell:stable --name e2e-test
+
       - name: Install CRDs
         run: make install
 
