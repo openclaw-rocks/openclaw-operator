@@ -49,9 +49,10 @@ const (
 	// NginxConfigKey is the ConfigMap data key for the nginx stream config
 	NginxConfigKey = "nginx.conf"
 
-	// ChromiumPort is the CDP port that Chromium listens on directly.
-	// Chrome is started with --remote-debugging-port=9222 so all CDP
-	// clients (OpenClaw, health probes) connect here without any proxy.
+	// ChromiumPort is the CDP port that Chromium listens on.
+	// The image entrypoint (run.sh) starts Chrome with
+	// --remote-debugging-port=9222 so all CDP clients (OpenClaw,
+	// health probes) connect here.
 	ChromiumPort = 9222
 
 	// DefaultChromiumImage is the default image for the Chromium sidecar.
@@ -168,14 +169,12 @@ const (
 	OTelCollectorConfigKey = "otel-collector.yaml"
 )
 
-// DefaultChromiumLaunchArgs are Chrome flags passed directly as container
-// args when starting Chromium. These include anti-bot flags and the
-// required --remote-debugging-port/--remote-debugging-address for CDP.
+// DefaultChromiumLaunchArgs are additional Chrome flags passed as container
+// args to run.sh. The image entrypoint (run.sh) handles CDP connectivity
+// (--remote-debugging-port/--remote-debugging-address) internally.
 // User ExtraArgs are appended via deduplicateArgs.
 var DefaultChromiumLaunchArgs = []string{
 	"--no-sandbox",
-	"--remote-debugging-port=9222",
-	"--remote-debugging-address=0.0.0.0",
 	"--disable-gpu",
 	"--disable-software-rasterizer",
 	"--disable-blink-features=AutomationControlled",

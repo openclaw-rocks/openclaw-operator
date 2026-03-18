@@ -1512,16 +1512,15 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			Expect(chromiumContainer.Ports).To(HaveLen(1))
 			Expect(chromiumContainer.Ports[0].ContainerPort).To(Equal(int32(resources.ChromiumPort)))
 
-			// Chrome runs directly - Args should contain CDP flags
+			// Chrome runs via run.sh - Args should contain launch flags
 			Expect(chromiumContainer.Args).NotTo(BeEmpty(), "chromium should have Args with launch flags")
 			argsStr := strings.Join(chromiumContainer.Args, " ")
-			Expect(argsStr).To(ContainSubstring("--remote-debugging-port=9222"))
 			Expect(argsStr).To(ContainSubstring("--no-sandbox"))
 
 			// No chromium-proxy container should exist
 			for _, c := range statefulSet.Spec.Template.Spec.InitContainers {
 				Expect(c.Name).NotTo(Equal("chromium-proxy"),
-					"chromium-proxy should not exist - Chrome runs directly")
+					"chromium-proxy should not exist - Chrome runs via run.sh")
 			}
 
 			// Verify main container has OPENCLAW_CHROMIUM_CDP using service DNS name
