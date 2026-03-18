@@ -492,7 +492,7 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 		t.Fatal("chromium container should have Args with Chrome launch flags")
 	}
 	argsStr := strings.Join(chromium.Args, " ")
-	for _, required := range []string{"--remote-debugging-port=9222", "--remote-debugging-address=0.0.0.0", "--no-sandbox"} {
+	for _, required := range []string{"--no-sandbox", "--disable-gpu", "--no-first-run"} {
 		if !strings.Contains(argsStr, required) {
 			t.Errorf("chromium Args missing %q", required)
 		}
@@ -610,8 +610,8 @@ func TestBuildStatefulSet_ChromiumExtraArgs(t *testing.T) {
 		}
 	}
 	// Default args should also be present
-	if !strings.Contains(argsStr, "--remote-debugging-port=9222") {
-		t.Error("chromium Args missing --remote-debugging-port=9222")
+	if !strings.Contains(argsStr, "--no-sandbox") {
+		t.Error("chromium Args missing --no-sandbox")
 	}
 }
 
@@ -678,8 +678,8 @@ func TestBuildStatefulSet_ChromiumNoExtraArgs(t *testing.T) {
 		t.Fatal("chromium container should have default Args")
 	}
 	argsStr := strings.Join(chromium.Args, " ")
-	if !strings.Contains(argsStr, "--remote-debugging-port=9222") {
-		t.Error("chromium Args missing --remote-debugging-port=9222")
+	if !strings.Contains(argsStr, "--no-sandbox") {
+		t.Error("chromium Args missing --no-sandbox")
 	}
 }
 
@@ -11524,7 +11524,7 @@ func TestBuildStatefulSet_NoChromiumProxy(t *testing.T) {
 	sts := BuildStatefulSet(instance, "", nil)
 	for _, c := range sts.Spec.Template.Spec.InitContainers {
 		if c.Name == "chromium-proxy" {
-			t.Error("chromium-proxy should not exist - Chrome runs directly without browserless")
+			t.Error("chromium-proxy should not exist - Chrome runs via run.sh")
 		}
 	}
 }
@@ -11552,8 +11552,8 @@ func TestChromiumArgs_Deduplication(t *testing.T) {
 	}
 
 	// Default args should be present
-	if !strings.Contains(argsStr, "--remote-debugging-port=9222") {
-		t.Error("args should contain --remote-debugging-port=9222")
+	if !strings.Contains(argsStr, "--no-sandbox") {
+		t.Error("args should contain --no-sandbox")
 	}
 }
 

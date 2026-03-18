@@ -626,10 +626,10 @@ func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance, skillPacks
 	// CDP URL before the Service has endpoints and cache "unreachable"
 	// permanently (see #270).
 	//
-	// Chrome runs directly with --remote-debugging-port=9222 (no browserless
-	// proxy layer). This avoids session lifecycle issues where browserless
-	// kills Chrome when the WebSocket client disconnects between tool calls
-	// (see #360).
+	// Chrome runs via run.sh which handles --remote-debugging-port=9222
+	// internally (no browserless proxy layer). This avoids session lifecycle
+	// issues where browserless kills Chrome when the WebSocket client
+	// disconnects between tool calls (see #360).
 	if instance.Spec.Chromium.Enabled {
 		chromium := buildChromiumContainer(instance)
 		chromium.RestartPolicy = Ptr(corev1.ContainerRestartPolicyAlways)
@@ -1428,11 +1428,11 @@ func buildGatewayProxyContainer(instance *openclawv1alpha1.OpenClawInstance) cor
 }
 
 // buildChromiumContainer creates the Chromium sidecar container.
-// Chrome runs directly with --remote-debugging-port=9222 (no browserless
-// proxy layer). This avoids session lifecycle issues where browserless
-// kills Chrome when the WebSocket client disconnects between tool calls
-// (see #360). Launch args (anti-bot flags + user ExtraArgs) are passed
-// as container args instead of being injected via an nginx proxy.
+// Chrome runs via run.sh which handles --remote-debugging-port=9222
+// internally (no browserless proxy layer). This avoids session lifecycle
+// issues where browserless kills Chrome when the WebSocket client
+// disconnects between tool calls (see #360). Additional launch args
+// (anti-bot flags + user ExtraArgs) are passed as container args to run.sh.
 func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
 	repo := instance.Spec.Chromium.Image.Repository
 	if repo == "" {
@@ -1489,18 +1489,10 @@ func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.
 	// Append user-supplied extra env vars
 	chromiumEnv = append(chromiumEnv, instance.Spec.Chromium.ExtraEnv...)
 
-	// Override Command for the default image to bypass its run.sh entrypoint
-	// (which adds a socat proxy layer). Custom images use their own entrypoint.
-	var command []string
-	if repo == DefaultChromiumImage {
-		command = []string{"/headless-shell/headless-shell"}
-	}
-
 	return corev1.Container{
 		Name:                     "chromium",
 		Image:                    image,
 		ImagePullPolicy:          corev1.PullIfNotPresent,
-		Command:                  command,
 		Args:                     ChromiumArgs(instance),
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
