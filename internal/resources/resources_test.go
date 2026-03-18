@@ -517,8 +517,8 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 	if csc.ReadOnlyRootFilesystem == nil || *csc.ReadOnlyRootFilesystem {
 		t.Error("chromium: readOnlyRootFilesystem should be false (Chromium needs writable dirs)")
 	}
-	if csc.RunAsUser == nil || *csc.RunAsUser != 1000 {
-		t.Errorf("chromium: runAsUser = %v, want 1000 (chrome user)", csc.RunAsUser)
+	if csc.RunAsUser == nil || *csc.RunAsUser != 65534 {
+		t.Errorf("chromium: runAsUser = %v, want 65534 (nobody)", csc.RunAsUser)
 	}
 
 	// Chromium resource defaults
@@ -10928,10 +10928,10 @@ func TestBuildStatefulSet_PodLevelRunAsNonRootFalse_Propagation(t *testing.T) {
 	for _, c := range initContainers {
 		if c.Name == "chromium" {
 			if c.SecurityContext.RunAsNonRoot == nil || !*c.SecurityContext.RunAsNonRoot {
-				t.Error("chromium: runAsNonRoot should still be true (self-consistent with RunAsUser: 1000)")
+				t.Error("chromium: runAsNonRoot should still be true (self-consistent with RunAsUser: 65534)")
 			}
-			if c.SecurityContext.RunAsUser == nil || *c.SecurityContext.RunAsUser != 1000 {
-				t.Error("chromium: runAsUser should be 1000")
+			if c.SecurityContext.RunAsUser == nil || *c.SecurityContext.RunAsUser != 65534 {
+				t.Error("chromium: runAsUser should be 65534")
 			}
 		}
 	}
@@ -11097,8 +11097,8 @@ func TestBuildStatefulSet_FullNonRootFalseScenario(t *testing.T) {
 			if !*c.SecurityContext.RunAsNonRoot {
 				t.Error("chromium: runAsNonRoot should be true (self-consistent)")
 			}
-			if *c.SecurityContext.RunAsUser != 1000 {
-				t.Error("chromium: runAsUser should be 1000")
+			if *c.SecurityContext.RunAsUser != 65534 {
+				t.Error("chromium: runAsUser should be 65534")
 			}
 		}
 	}

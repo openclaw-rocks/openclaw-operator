@@ -1398,7 +1398,7 @@ func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.
 			AllowPrivilegeEscalation: Ptr(false),
 			ReadOnlyRootFilesystem:   Ptr(false), // Chromium needs writable dirs for profiles, cache, crash dumps
 			RunAsNonRoot:             Ptr(true),
-			RunAsUser:                Ptr(int64(1000)),
+			RunAsUser:                Ptr(int64(65534)), // nobody - headless-shell has no pre-created users
 			Capabilities: &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
 			},

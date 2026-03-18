@@ -169,6 +169,8 @@ var DefaultChromiumLaunchArgs = []string{
 	"--no-sandbox",
 	"--remote-debugging-port=9222",
 	"--remote-debugging-address=0.0.0.0",
+	"--disable-gpu",
+	"--disable-software-rasterizer",
 	"--disable-blink-features=AutomationControlled",
 	"--disable-features=AutomationControlled",
 	"--no-first-run",

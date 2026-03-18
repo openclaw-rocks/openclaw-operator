@@ -271,7 +271,7 @@ When enabled, the sidecar:
 
 - Runs Chromium directly with `--remote-debugging-port=9222` (no browserless proxy layer).
 - Exposes Chrome DevTools Protocol on port 9222.
-- Runs as UID 1000.
+- Runs as UID 65534 (nobody).
 - Mounts a memory-backed emptyDir at `/dev/shm` (1Gi) for shared memory.
 - Mounts an emptyDir at `/tmp` for scratch space.
 - Anti-bot flags and `extraArgs` are passed directly as container args.
