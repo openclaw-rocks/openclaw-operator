@@ -1363,8 +1363,8 @@ spec:
   chromium:
     enabled: true
     image:
-      repository: ghcr.io/browserless/chromium
-      tag: "v2.0.0"
+      repository: chromedp/headless-shell
+      tag: "stable"
     resources:
       requests:
         cpu: 500m

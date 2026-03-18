@@ -228,7 +228,7 @@ spec:
     - name: openclaw
       image: ghcr.io/openclaw/openclaw:latest
     - name: chromium-sidecar
-      image: ghcr.io/browserless/chromium:latest
+      image: chromedp/headless-shell:stable
   customresourcedefinitions:
     owned:
       - name: openclawinstances.openclaw.rocks

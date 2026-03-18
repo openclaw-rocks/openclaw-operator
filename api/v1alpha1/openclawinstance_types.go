@@ -585,12 +585,12 @@ type ChromiumPersistenceSpec struct {
 // ChromiumImageSpec defines the Chromium container image
 type ChromiumImageSpec struct {
 	// Repository is the container image repository
-	// +kubebuilder:default="ghcr.io/browserless/chromium"
+	// +kubebuilder:default="chromedp/headless-shell"
 	// +optional
 	Repository string `json:"repository,omitempty"`
 
 	// Tag is the container image tag
-	// +kubebuilder:default="latest"
+	// +kubebuilder:default="stable"
 	// +optional
 	Tag string `json:"tag,omitempty"`
 

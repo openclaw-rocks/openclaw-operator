@@ -1505,11 +1505,11 @@ spec:
                           chain security
                         type: string
                       repository:
-                        default: ghcr.io/browserless/chromium
+                        default: chromedp/headless-shell
                         description: Repository is the container image repository
                         type: string
                       tag:
-                        default: latest
+                        default: stable
                         description: Tag is the container image tag
                         type: string
                     type: object
