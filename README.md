@@ -419,7 +419,7 @@ spec:
             primary: "anthropic/claude-sonnet-4-20250514"
 ```
 
-**Caveat:** In merge mode, removing a key from the CR does not remove it from the PVC config - the old value persists because deep-merge only adds or updates keys. If you need to remove stale config keys (e.g., after removing `gateway.mode: local`), temporarily switch to `mergeMode: replace`, apply, wait for the pod to restart, then switch back to `merge`.
+**Caveat:** In merge mode, removing a key from the CR does not remove it from the PVC config - the old value persists because deep-merge only adds or updates keys. If you need to remove stale config keys (e.g., after removing `gateway.mode: local`), temporarily switch to `mergeMode: overwrite`, apply, wait for the pod to restart, then switch back to `merge`.
 
 ### Skill installation
 
