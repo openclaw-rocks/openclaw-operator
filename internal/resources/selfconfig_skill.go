@@ -60,10 +60,10 @@ Use the helper script or create a request directly:
 
 ` + "```" + `bash
 # Add a skill
-bash selfconfig.sh add-skill "@anthropic/mcp-server-fetch"
+bash selfconfig.sh add-skill "mcp-server-fetch"
 
 # Remove a skill
-bash selfconfig.sh remove-skill "@anthropic/mcp-server-fetch"
+bash selfconfig.sh remove-skill "mcp-server-fetch"
 
 # Patch config (JSON string)
 bash selfconfig.sh config-patch '{"mcpServers":{"myserver":{"command":"node","args":["server.js"]}}}'

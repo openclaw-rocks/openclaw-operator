@@ -365,6 +365,36 @@ kubectl describe pvc my-assistant-data -n openclaw
 
 6. **WebSocket connectivity**: The operator automatically adds WebSocket-related nginx annotations. If using a different Ingress controller, you may need to add controller-specific annotations for WebSocket support.
 
+### Control UI Shows "device identity required"
+
+**Symptoms**: Connecting to the Control UI through an Ingress fails with `code=1008 reason=device identity required` in the OpenClaw logs.
+
+**Possible causes and solutions**:
+
+1. **`gateway.mode: local` is set in the config**: This mode enforces browser-based device identity verification, which is incompatible with Kubernetes. Remove `gateway.mode` from your CR's `spec.config.raw` - the operator defaults to server mode which is correct for K8s.
+
+2. **Stale config from merge mode**: If you previously had `gateway.mode: local` in your config and are using `mergeMode: merge`, the old key persists on the PVC even after removing it from the CR. Temporarily set `mergeMode: replace` to wipe stale keys:
+   ```yaml
+   spec:
+     config:
+       mergeMode: replace  # temporarily set, then switch back to merge
+   ```
+
+3. **Upstream OpenClaw bug**: Even with `dangerouslyDisableDeviceAuth: true` (which the operator injects automatically), some OpenClaw versions still enforce device identity. **Workaround**: Pass the gateway token directly in the URL fragment:
+   ```
+   https://openclaw.example.com/#token=<your-gateway-token>
+   ```
+   You can find the token in the auto-generated Secret:
+   ```bash
+   kubectl get secret <instance>-gateway-token -n <namespace> -o jsonpath='{.data.token}' | base64 -d
+   ```
+
+### Gateway Proxy "Connection Refused" on Startup
+
+**Symptoms**: The gateway-proxy (nginx) container logs show `connect() failed (111: Connection refused)` immediately after pod startup.
+
+**This is expected and harmless.** The nginx proxy sidecar starts before the OpenClaw gateway is fully listening. The connection refused errors resolve within a few seconds once the gateway binds to its port. No action is needed - subsequent connections will succeed.
+
 ### Chromium Sidecar Issues
 
 **Symptoms**: The Chromium sidecar is not starting, crashing, or browser automation fails.

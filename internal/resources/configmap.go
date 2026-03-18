@@ -46,8 +46,8 @@ func BuildConfigMap(instance *openclawv1alpha1.OpenClawInstance, gatewayToken st
 // BuildConfigMapFromBytes creates a ConfigMap for the OpenClawInstance using
 // the provided base config bytes. This allows the controller to pass config
 // from any source (inline raw, external ConfigMap, or empty default).
-// The enrichment pipeline (gateway auth, device auth, tailscale, browser,
-// gateway bind, skill packs) always runs on the provided bytes.
+// The enrichment pipeline (OTel metrics, gateway auth, device auth, tailscale,
+// browser, gateway bind, skill packs) always runs on the provided bytes.
 func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseConfig []byte, gatewayToken string, skillPacks *ResolvedSkillPacks) *corev1.ConfigMap {
 	labels := Labels(instance)
 
@@ -56,7 +56,12 @@ func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseCo
 		configBytes = []byte("{}")
 	}
 
-	// Enrichment pipeline: gateway auth -> device auth -> tailscale -> browser -> gateway bind -> trusted proxies -> control UI origins -> skill packs
+	// Enrichment pipeline: OTel metrics -> gateway auth -> device auth -> tailscale -> browser -> gateway bind -> trusted proxies -> control UI origins -> skill packs
+	if IsMetricsEnabled(instance) {
+		if enriched, err := enrichConfigWithOTelMetrics(configBytes); err == nil {
+			configBytes = enriched
+		}
+	}
 	if gatewayToken != "" {
 		if enriched, err := enrichConfigWithGatewayAuth(configBytes, gatewayToken); err == nil {
 			configBytes = enriched
@@ -71,7 +76,7 @@ func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseCo
 		}
 	}
 	if instance.Spec.Chromium.Enabled {
-		if enriched, err := enrichConfigWithBrowser(configBytes); err == nil {
+		if enriched, err := enrichConfigWithBrowser(configBytes, instance); err == nil {
 			configBytes = enriched
 		}
 	}
@@ -102,7 +107,11 @@ func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseCo
 
 	data := map[string]string{
 		"openclaw.json": configContent,
-		NginxConfigKey:  nginxStreamConfig(),
+	}
+
+	// Only include nginx config when the gateway proxy is enabled
+	if IsGatewayProxyEnabled(instance) {
+		data[NginxConfigKey] = nginxStreamConfig()
 	}
 
 	// Add Tailscale serve config when enabled (sidecar reads this via TS_SERVE_CONFIG)
@@ -113,6 +122,11 @@ func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseCo
 	// Add chromium CDP proxy nginx config when enabled
 	if instance.Spec.Chromium.Enabled {
 		data[ChromiumProxyNginxConfigKey] = chromiumProxyNginxConfig(instance)
+	}
+
+	// Add OTel Collector config when metrics are enabled
+	if IsMetricsEnabled(instance) {
+		data[OTelCollectorConfigKey] = otelCollectorConfig(instance)
 	}
 
 	return &corev1.ConfigMap{
@@ -155,6 +169,59 @@ func enrichConfigWithGatewayAuth(configJSON []byte, token string) ([]byte, error
 	config["gateway"] = gw
 
 	return json.Marshal(config)
+}
+
+// enrichConfigWithOTelMetrics injects diagnostics.otel config into the config
+// JSON so OpenClaw pushes metrics to the OTel Collector sidecar via OTLP.
+// The collector then exposes these metrics as a Prometheus scrape endpoint.
+// If the user has already set diagnostics.otel, the config is returned
+// unchanged (user override wins).
+func enrichConfigWithOTelMetrics(configJSON []byte) ([]byte, error) {
+	var config map[string]interface{}
+	if err := json.Unmarshal(configJSON, &config); err != nil {
+		return configJSON, nil // not a JSON object, return unchanged
+	}
+
+	diag, _ := config["diagnostics"].(map[string]interface{})
+	if diag == nil {
+		diag = make(map[string]interface{})
+	}
+
+	// If the user already set diagnostics.otel, don't override
+	if _, ok := diag["otel"]; ok {
+		return configJSON, nil
+	}
+
+	diag["otel"] = map[string]interface{}{
+		"metrics":  true,
+		"endpoint": fmt.Sprintf("http://localhost:%d", OTelHTTPReceiverPort),
+	}
+	config["diagnostics"] = diag
+
+	return json.Marshal(config)
+}
+
+// otelCollectorConfig generates the OTel Collector YAML configuration.
+// The collector receives OTLP metrics from OpenClaw on the HTTP receiver
+// and exposes them as a Prometheus scrape endpoint on the configured
+// metrics port.
+func otelCollectorConfig(instance *openclawv1alpha1.OpenClawInstance) string {
+	return fmt.Sprintf(`receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:%d
+
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:%d
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      exporters: [prometheus]
+`, OTelHTTPReceiverPort, MetricsPort(instance))
 }
 
 // enrichConfigWithDeviceAuth injects gateway.controlUi.dangerouslyDisableDeviceAuth=true
@@ -282,15 +349,23 @@ func BuildTailscaleServeConfig(instance *openclawv1alpha1.OpenClawInstance) stri
 
 // enrichConfigWithBrowser injects browser config into the config JSON so the
 // agent uses the Chromium sidecar instead of the Chrome extension relay.
-// Configures both "default" and "chrome" profiles to point at the sidecar CDP
-// port and sets attachOnly=true so OpenClaw attaches to the existing sidecar
-// instead of trying to launch/manage a browser process locally.
+//
+// Key settings injected:
+//   - attachOnly=true: skips local browser binary detection. Without this,
+//     OpenClaw checks for a local Chrome/Chromium binary first, fails with
+//     "No supported browser found", and never attempts the remote CDP connection.
+//   - remoteCdpTimeoutMs=30000: gives the browser service time to become ready
+//     on startup, avoiding permanent failure when tool registration wins the
+//     race against browser service initialization.
+//   - cdpUrl on "default" and "chrome" profiles: resolved at config build time
+//     to the headless CDP Service DNS name (not an env var reference).
+//
 // The "chrome" profile must be redirected because LLMs frequently pass
 // profile="chrome" explicitly in browser tool calls, bypassing defaultProfile.
 // Without this override the built-in "chrome" profile falls back to the
 // extension relay which does not work in a headless container.
 // Does not override user-set values.
-func enrichConfigWithBrowser(configJSON []byte) ([]byte, error) {
+func enrichConfigWithBrowser(configJSON []byte, instance *openclawv1alpha1.OpenClawInstance) ([]byte, error) {
 	var config map[string]interface{}
 	if err := json.Unmarshal(configJSON, &config); err != nil {
 		return configJSON, nil // not a JSON object, return unchanged
@@ -306,16 +381,31 @@ func enrichConfigWithBrowser(configJSON []byte) ([]byte, error) {
 		browser["defaultProfile"] = "default"
 	}
 
+	// attachOnly=true skips local browser binary detection. In a container
+	// there is no local Chrome binary - without this flag OpenClaw fails with
+	// "No supported browser found" and never attempts the remote CDP connection.
+	if _, ok := browser["attachOnly"]; !ok {
+		browser["attachOnly"] = true
+	}
+
+	// remoteCdpTimeoutMs gives the browser service time to become ready.
+	// OpenClaw's tool registration can fire before the browser service is
+	// fully initialized. Without a timeout, the failure is cached permanently
+	// for the pod's lifetime.
+	if _, ok := browser["remoteCdpTimeoutMs"]; !ok {
+		browser["remoteCdpTimeoutMs"] = float64(30000)
+	}
+
 	profiles, _ := browser["profiles"].(map[string]interface{})
 	if profiles == nil {
 		profiles = make(map[string]interface{})
 	}
 
-	// Use ${OPENCLAW_CHROMIUM_CDP} env var (resolved at runtime by OpenClaw)
-	// which points to the Chromium sidecar via the Kubernetes Service DNS name.
-	// The non-loopback address triggers OpenClaw's remote/attach mode
-	// automatically, so no explicit attachOnly flag is needed.
-	cdpURL := "${OPENCLAW_CHROMIUM_CDP}"
+	// Build the resolved CDP URL at config generation time using the headless
+	// CDP Service DNS name. Previous versions used ${OPENCLAW_CHROMIUM_CDP}
+	// env var interpolation, but this proved unreliable across OpenClaw versions.
+	cdpURL := fmt.Sprintf("http://%s.%s.svc:%d",
+		ChromiumCDPServiceName(instance), instance.Namespace, ChromiumPort)
 
 	// Configure both "default" and "chrome" profiles to point at the sidecar.
 	// LLMs often explicitly pass profile="chrome", so we redirect it to the
@@ -347,12 +437,13 @@ func enrichConfigWithBrowser(configJSON []byte) ([]byte, error) {
 	return json.Marshal(config)
 }
 
-// enrichConfigWithGatewayBind injects gateway.bind=loopback into the config
-// JSON. The gateway proxy sidecar handles external access, so the gateway
-// process always binds to loopback. If the user has already set gateway.bind,
-// the config is returned unchanged (user override wins).
+// enrichConfigWithGatewayBind injects gateway.bind into the config JSON.
+// When the gateway proxy sidecar is enabled, the gateway binds to loopback
+// (the proxy handles external access). When disabled, the gateway must bind
+// to 0.0.0.0 so the kubelet and Service can reach it directly.
+// If the user has already set gateway.bind, the config is returned unchanged
+// (user override wins).
 func enrichConfigWithGatewayBind(configJSON []byte, instance *openclawv1alpha1.OpenClawInstance) ([]byte, error) {
-	_ = instance // signature kept for enrichment pipeline consistency
 	var config map[string]interface{}
 	if err := json.Unmarshal(configJSON, &config); err != nil {
 		return configJSON, nil // not a JSON object, return unchanged
@@ -368,10 +459,46 @@ func enrichConfigWithGatewayBind(configJSON []byte, instance *openclawv1alpha1.O
 		return configJSON, nil
 	}
 
-	gw["bind"] = GatewayBindLoopback
+	if IsGatewayProxyEnabled(instance) {
+		gw["bind"] = GatewayBindLoopback
+	} else {
+		gw["bind"] = GatewayBindAllInterfaces
+	}
 	config["gateway"] = gw
 
 	return json.Marshal(config)
+}
+
+// HasGatewayBindConflict returns true when the gateway proxy is disabled but
+// the user has manually set gateway.bind to loopback in their config JSON.
+// This combination makes the pod unreachable because nothing is listening on
+// the external interface.
+func HasGatewayBindConflict(instance *openclawv1alpha1.OpenClawInstance) bool {
+	if IsGatewayProxyEnabled(instance) {
+		return false
+	}
+
+	configBytes := []byte("{}")
+	if instance.Spec.Config.Raw != nil && len(instance.Spec.Config.Raw.Raw) > 0 {
+		configBytes = instance.Spec.Config.Raw.Raw
+	}
+
+	var config map[string]interface{}
+	if err := json.Unmarshal(configBytes, &config); err != nil {
+		return false
+	}
+
+	gw, _ := config["gateway"].(map[string]interface{})
+	if gw == nil {
+		return false
+	}
+
+	bind, ok := gw["bind"]
+	if !ok {
+		return false
+	}
+	bindStr, ok := bind.(string)
+	return ok && (bindStr == GatewayBindLoopback || bindStr == "127.0.0.1")
 }
 
 // enrichConfigWithTrustedProxies ensures 127.0.0.0/8 is present in
@@ -566,14 +693,25 @@ stream {
 
 // chromiumProxyNginxConfig returns the nginx HTTP configuration for the
 // chromium CDP proxy sidecar. It sits between OpenClaw and the browserless
-// sidecar, injecting Chrome launch args (anti-bot flags + user ExtraArgs)
-// into every request via the `launch` query parameter. This is needed
-// because browserless v2 deprecated DEFAULT_LAUNCH_ARGS and only accepts
-// launch args per-request on the WebSocket URL.
+// sidecar, routing WebSocket connections to the /chromium endpoint with
+// Chrome launch args (anti-bot flags + user ExtraArgs) via the `launch`
+// query parameter.
+//
+// Why /chromium specifically: browserless v2 deprecated DEFAULT_LAUNCH_ARGS
+// and only applies the `launch` query parameter on its /chromium WebSocket
+// endpoint (which launches a new Chrome process). Other endpoints like
+// /devtools/browser/<id> connect to already-running Chrome and ignore
+// launch args entirely. By routing all WebSocket upgrades to /chromium,
+// every browser session gets fresh Chrome with the correct flags.
+//
+// The /json/version endpoint returns a static response with
+// webSocketDebuggerUrl pointing back to the proxy (ws://127.0.0.1:9222).
+// This prevents Playwright's connectOverCDP() from discovering Chrome's
+// random direct debugging port and bypassing the proxy -- which would
+// cause browserless to kill Chrome (0 clients) and break the session.
+// Other HTTP requests (health checks, /json/list) pass through unchanged.
 func chromiumProxyNginxConfig(instance *openclawv1alpha1.OpenClawInstance) string {
-	args := make([]string, 0, len(DefaultChromiumLaunchArgs)+len(instance.Spec.Chromium.ExtraArgs))
-	args = append(args, DefaultChromiumLaunchArgs...)
-	args = append(args, instance.Spec.Chromium.ExtraArgs...)
+	args := deduplicateArgs(DefaultChromiumLaunchArgs, instance.Spec.Chromium.ExtraArgs)
 
 	launchJSON, _ := json.Marshal(map[string]interface{}{"args": args})
 	encoded := url.QueryEscape(string(launchJSON))
@@ -587,30 +725,88 @@ events {
 }
 
 http {
-    map $is_args $launch_sep {
-        "?"     "&";
-        default "?";
-    }
-
-    map $http_upgrade $connection_upgrade {
-        default upgrade;
-        ''      close;
-    }
+    # Redirect temp/cache dirs to writable /tmp (rootfs is read-only)
+    client_body_temp_path /tmp/client_body;
+    proxy_temp_path /tmp/proxy;
+    fastcgi_temp_path /tmp/fastcgi;
+    uwsgi_temp_path /tmp/uwsgi;
+    scgi_temp_path /tmp/scgi;
 
     server {
-        listen 0.0.0.0:%d;
+        listen 0.0.0.0:%[1]d;
 
-        location / {
-            proxy_pass http://127.0.0.1:%d$request_uri${launch_sep}launch=%s;
+        # Return a static /json/version so Playwright's connectOverCDP()
+        # reconnects through this proxy instead of discovering Chrome's
+        # random direct debugging port and bypassing browserless.
+        location = /json/version {
+            default_type application/json;
+            return 200 '{"webSocketDebuggerUrl":"ws://127.0.0.1:%[1]d"}';
+        }
+
+        # WebSocket connections route to /chromium with launch args.
+        # browserless v2 only applies launch args on the /chromium endpoint
+        # (launches new Chrome), not /devtools/browser/ (existing Chrome).
+        location @chromium_ws {
+            rewrite ^ /chromium?launch=%[2]s break;
+            proxy_pass http://127.0.0.1:%[3]d;
             proxy_http_version 1.1;
             proxy_set_header Upgrade $http_upgrade;
-            proxy_set_header Connection $connection_upgrade;
+            proxy_set_header Connection "upgrade";
             proxy_set_header Host $host;
             proxy_buffering off;
             proxy_read_timeout 86400s;
             proxy_send_timeout 86400s;
         }
+
+        location / {
+            # Route WebSocket upgrades to @chromium_ws via internal redirect.
+            error_page 418 = @chromium_ws;
+            if ($http_upgrade ~* "websocket") {
+                return 418;
+            }
+
+            # HTTP requests pass through to browserless unchanged.
+            proxy_pass http://127.0.0.1:%[3]d;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_buffering off;
+        }
     }
 }
-`, ChromiumProxyPort, ChromiumPort, encoded)
+`, ChromiumPort, encoded, BrowserlessInternalPort)
+}
+
+// deduplicateArgs merges default and extra Chrome launch args, removing
+// duplicates. When the same flag appears in both lists, the extra (user)
+// value wins. Flags are compared by their key (everything before '=').
+func deduplicateArgs(defaults, extras []string) []string {
+	seen := make(map[string]int) // flag key → index in result
+	result := make([]string, 0, len(defaults)+len(extras))
+
+	for _, arg := range defaults {
+		key := argKey(arg)
+		seen[key] = len(result)
+		result = append(result, arg)
+	}
+	for _, arg := range extras {
+		key := argKey(arg)
+		if idx, ok := seen[key]; ok {
+			result[idx] = arg // user value overrides default
+		} else {
+			seen[key] = len(result)
+			result = append(result, arg)
+		}
+	}
+	return result
+}
+
+// argKey extracts the flag key from a Chrome arg for deduplication.
+// "--user-agent=Foo" → "--user-agent", "--no-sandbox" → "--no-sandbox".
+func argKey(arg string) string {
+	for i, c := range arg {
+		if c == '=' {
+			return arg[:i]
+		}
+	}
+	return arg
 }

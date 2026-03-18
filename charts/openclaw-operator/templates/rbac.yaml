@@ -26,7 +26,7 @@ rules:
     verbs: ["create", "patch"]
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["list"]
+    verbs: ["get", "list", "watch"]
   # Apps API
   - apiGroups: ["apps"]
     resources: ["statefulsets"]

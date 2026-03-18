@@ -5,6 +5,237 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.2](https://github.com/openclaw-rocks/k8s-operator/compare/v0.21.1...v0.21.2) (2026-03-18)
+
+
+### Bug Fixes
+
+* inject gateway.handshakeTimeoutMs for K8s startup overhead ([#377](https://github.com/openclaw-rocks/k8s-operator/issues/377)) ([b8e7beb](https://github.com/openclaw-rocks/k8s-operator/commit/b8e7beb810a63911322586f158f898e834de03c7))
+
+## [0.21.1](https://github.com/openclaw-rocks/k8s-operator/compare/v0.21.0...v0.21.1) (2026-03-17)
+
+
+### Bug Fixes
+
+* drop read-only PVC mount in backup CronJob to fix fsGroup ([#369](https://github.com/openclaw-rocks/k8s-operator/issues/369)) ([29117d3](https://github.com/openclaw-rocks/k8s-operator/commit/29117d313bce55e589d2ef09cec0ee7736cee565))
+
+## [0.21.0](https://github.com/openclaw-rocks/k8s-operator/compare/v0.20.1...v0.21.0) (2026-03-17)
+
+
+### Features
+
+* add optional gateway proxy sidecar (spec.gateway.enabled) ([#339](https://github.com/openclaw-rocks/k8s-operator/issues/339)) ([24ea26c](https://github.com/openclaw-rocks/k8s-operator/commit/24ea26cdb09a04e125c325e13a6b688555252ad2))
+
+
+### Bug Fixes
+
+* replace invalid metrics config injection with OTel Collector sidecar ([#374](https://github.com/openclaw-rocks/k8s-operator/issues/374)) ([706c77f](https://github.com/openclaw-rocks/k8s-operator/commit/706c77f98a3c06d9023838e279d13efa6dacf87b))
+
+## [0.20.1](https://github.com/openclaw-rocks/k8s-operator/compare/v0.20.0...v0.20.1) (2026-03-16)
+
+
+### Bug Fixes
+
+* **chromium:** return static /json/version to prevent Playwright bypass ([#365](https://github.com/openclaw-rocks/k8s-operator/issues/365)) ([b21e99e](https://github.com/openclaw-rocks/k8s-operator/commit/b21e99eb9ceecd8277eefd04c0edb833b34e33c8)), closes [#360](https://github.com/openclaw-rocks/k8s-operator/issues/360)
+* inject diagnostics.metrics config into OpenClaw when metrics enabled ([a7d4265](https://github.com/openclaw-rocks/k8s-operator/commit/a7d426590d0d948d9c00875d785bce5833c548a9))
+* inject diagnostics.metrics config into OpenClaw when metrics enabled ([2db10e3](https://github.com/openclaw-rocks/k8s-operator/commit/2db10e3619c8aeaf6d92dac56f0543b3406ecf9a)), closes [#356](https://github.com/openclaw-rocks/k8s-operator/issues/356)
+
+## [0.20.0](https://github.com/openclaw-rocks/k8s-operator/compare/v0.19.1...v0.20.0) (2026-03-16)
+
+
+### Features
+
+* support spec.availability.runtimeClassName ([62b9ff4](https://github.com/openclaw-rocks/k8s-operator/commit/62b9ff4ed088d4506eda832a182c7f05d8c3320a))
+* support spec.availability.runtimeClassName for alternative container runtimes ([79637e9](https://github.com/openclaw-rocks/k8s-operator/commit/79637e9517b7e0be63c44495144ba1e4199a8f00)), closes [#358](https://github.com/openclaw-rocks/k8s-operator/issues/358)
+
+
+### Bug Fixes
+
+* **chromium:** swap ports so CDP proxy owns 9222, eliminating headless bypass ([6658b33](https://github.com/openclaw-rocks/k8s-operator/commit/6658b33260522f42c4d8ab266d24535164991373))
+* **chromium:** swap ports so CDP proxy owns 9222, eliminating headless bypass ([6f42b77](https://github.com/openclaw-rocks/k8s-operator/commit/6f42b7792b13c0b2e42d93d976cf223143da9688)), closes [#270](https://github.com/openclaw-rocks/k8s-operator/issues/270)
+
+## [0.19.1](https://github.com/openclaw-rocks/k8s-operator/compare/v0.19.0...v0.19.1) (2026-03-15)
+
+
+### Bug Fixes
+
+* add missing --s3-region flag to periodic backup CronJob ([a5cf0ca](https://github.com/openclaw-rocks/k8s-operator/commit/a5cf0ca6ad9612ec34b60f3a4400bca1ad98557a))
+* add missing --s3-region flag to periodic backup CronJob ([ff73fd7](https://github.com/openclaw-rocks/k8s-operator/commit/ff73fd7122d7bb52a1646bda570abb9ffdc53889)), closes [#351](https://github.com/openclaw-rocks/k8s-operator/issues/351)
+
+## [0.19.0](https://github.com/openclaw-rocks/k8s-operator/compare/v0.18.1...v0.19.0) (2026-03-15)
+
+
+### Features
+
+* add Service and ServiceMonitor for operator metrics ([4ebc545](https://github.com/openclaw-rocks/k8s-operator/commit/4ebc5450a959877fee37655ef904d3fd0a763362)), closes [#348](https://github.com/openclaw-rocks/k8s-operator/issues/348)
+
+## [0.18.1](https://github.com/openclaw-rocks/k8s-operator/compare/v0.18.0...v0.18.1) (2026-03-14)
+
+
+### Bug Fixes
+
+* **chromium:** route CDP traffic through proxy instead of bypassing it ([795920b](https://github.com/openclaw-rocks/k8s-operator/commit/795920ba08dcf4f3856bcf86d783bbb99047d9a5))
+* **chromium:** route CDP traffic through proxy instead of bypassing it ([c8b3a01](https://github.com/openclaw-rocks/k8s-operator/commit/c8b3a010b2954889f7722b82404610772c555c5b)), closes [#270](https://github.com/openclaw-rocks/k8s-operator/issues/270)
+* increase main container startup probe timeout to 300s ([1aad438](https://github.com/openclaw-rocks/k8s-operator/commit/1aad4389a1cb13f43522e3238606417be7b6b5aa))
+* increase main container startup probe timeout to 300s ([59c81cd](https://github.com/openclaw-rocks/k8s-operator/commit/59c81cdcc72cdb0bb096fd222a77f64940f44ebd)), closes [#344](https://github.com/openclaw-rocks/k8s-operator/issues/344)
+
+## [0.18.0](https://github.com/openclaw-rocks/k8s-operator/compare/v0.17.0...v0.18.0) (2026-03-14)
+
+
+### Features
+
+* incremental periodic backups with retention-based cleanup ([1f486b6](https://github.com/openclaw-rocks/k8s-operator/commit/1f486b62a230869d691ff5be6d3ac25f4984526c))
+* incremental periodic backups with retention-based cleanup ([b1060f3](https://github.com/openclaw-rocks/k8s-operator/commit/b1060f3543e6dcec8e7fa8cbc8255f191a5ba52c))
+
+
+### Bug Fixes
+
+* include metrics port in NetworkPolicy ingress rules ([be89d79](https://github.com/openclaw-rocks/k8s-operator/commit/be89d79616c20469a0093633db7cca69efae9c8f))
+* include metrics port in NetworkPolicy ingress rules ([027ad39](https://github.com/openclaw-rocks/k8s-operator/commit/027ad39f14a40001d9db0ebbbc5255172c1cd836)), closes [#341](https://github.com/openclaw-rocks/k8s-operator/issues/341)
+
+## [0.17.0](https://github.com/openclaw-rocks/k8s-operator/compare/v0.16.2...v0.17.0) (2026-03-13)
+
+
+### Features
+
+* use VolumeClaimTemplates for per-replica PVCs when HPA is enabled ([2bd17dc](https://github.com/openclaw-rocks/k8s-operator/commit/2bd17dc8e2fabd492307b9b9790ee73972d1adec))
+* use VolumeClaimTemplates for per-replica PVCs when HPA is enabled ([2969f64](https://github.com/openclaw-rocks/k8s-operator/commit/2969f6448bfe5585b7d0e7f8dbddeebfbc97be45))
+
+
+### Bug Fixes
+
+* compare VCT specs in VolumeClaimTemplatesEqual to detect size/storageClass changes ([8547a6e](https://github.com/openclaw-rocks/k8s-operator/commit/8547a6ea601d0eb5e26843628f0837088a7083bf))
+* emit warning event for orphaned standalone PVC when HPA is enabled ([5094c0a](https://github.com/openclaw-rocks/k8s-operator/commit/5094c0a95ea926318b3fbe4e5142632bd1235421))
+* handle immutable VolumeClaimTemplates by recreating StatefulSet on VCT changes ([4fe0fbe](https://github.com/openclaw-rocks/k8s-operator/commit/4fe0fbee80f632b76b419a6cccb16ed05ae516fe))
+* normalize VolumeMode on VCTs to prevent reconcile spec drift ([639c3ec](https://github.com/openclaw-rocks/k8s-operator/commit/639c3ec6fd09c86c78173ea5ad478e4eb6b1723b))
+* reduce noisy API calls and events in HPA reconcile path ([4c79955](https://github.com/openclaw-rocks/k8s-operator/commit/4c79955b7acadfa84617ee5341d3005eae49e6f2))
+* use apiequality.Semantic.DeepEqual for VCT spec comparison ([cb46bc2](https://github.com/openclaw-rocks/k8s-operator/commit/cb46bc2c67d31ec350493d7aeb20b8de48f6b2e3))
+* use PascalCase+verb convention for StorageReady condition reason ([baeb26f](https://github.com/openclaw-rocks/k8s-operator/commit/baeb26fc832449c4d892513891935568d76cfd33))
+* warn when existingClaim is ignored due to HPA-managed VolumeClaimTemplates ([df28db4](https://github.com/openclaw-rocks/k8s-operator/commit/df28db47a58d44323fc2edf5a451f132836589e2))
+
+
+### Refactoring
+
+* compute desired StatefulSet once in reconcileStatefulSet ([8c6c779](https://github.com/openclaw-rocks/k8s-operator/commit/8c6c779c61e18332a1d438de2fe91026951f52c9))
+* extract IsPersistenceEnabled helper to deduplicate persistence checks ([46e940b](https://github.com/openclaw-rocks/k8s-operator/commit/46e940beae21037593e717d3d7e3943112dda3ff))
+* hoist gwSecretName computation to avoid duplication in reconcileStatefulSet ([fba54ae](https://github.com/openclaw-rocks/k8s-operator/commit/fba54aedf501df95e2a7511e0ed2872d6b3100d0))
+
+## [0.16.2](https://github.com/openclaw-rocks/k8s-operator/compare/v0.16.1...v0.16.2) (2026-03-13)
+
+
+### Bug Fixes
+
+* add npm skill bin path to container PATH ([9237c68](https://github.com/openclaw-rocks/k8s-operator/commit/9237c6846c31cce485b7f38762b4e778580cf99c))
+* add npm skill binaries to PATH via global install ([#335](https://github.com/openclaw-rocks/k8s-operator/issues/335)) ([926e034](https://github.com/openclaw-rocks/k8s-operator/commit/926e034edcc43cb729f21fc83df8747c1d8f89b7))
+* update e2e test to expect npm install -g ([02944f0](https://github.com/openclaw-rocks/k8s-operator/commit/02944f0a66edb1a33a0feec426b365ef1de81823))
+
+## [0.16.1](https://github.com/openclaw-rocks/k8s-operator/compare/v0.16.0...v0.16.1) (2026-03-13)
+
+
+### Bug Fixes
+
+* Add get and watch RBAC permissions for pods ([69c6c8b](https://github.com/openclaw-rocks/k8s-operator/commit/69c6c8b0d37bd4640811c85e7cbc7147eb9c4267))
+* add get and watch verbs for pods RBAC permission ([ad04174](https://github.com/openclaw-rocks/k8s-operator/commit/ad04174db42b4dbf358a403ff8cdf3ce9dc50c08))
+* **chromium:** inject attachOnly, remoteCdpTimeoutMs, and resolved cdpUrl ([8bc75f3](https://github.com/openclaw-rocks/k8s-operator/commit/8bc75f34cdfca024987b67fd94c7d3534f393329)), closes [#270](https://github.com/openclaw-rocks/k8s-operator/issues/270)
+* **chromium:** inject attachOnly, timeout, and resolved cdpUrl ([3019c6d](https://github.com/openclaw-rocks/k8s-operator/commit/3019c6d5853282a84b725a2c43a91084f611e5b4))
+
+## [0.16.0](https://github.com/openclaw-rocks/k8s-operator/compare/v0.15.1...v0.16.0) (2026-03-12)
+
+
+### Features
+
+* add PodAnnotations field to pod template ([d7c9fdd](https://github.com/openclaw-rocks/k8s-operator/commit/d7c9fdd69efe8dd5317e33789a0201a9d239015b))
+* add PodAnnotations field to pod template ([2ecd1f0](https://github.com/openclaw-rocks/k8s-operator/commit/2ecd1f0c5958590147a78e8f1a2b23af0abdda24))
+
+## [0.15.1](https://github.com/openclaw-rocks/k8s-operator/compare/v0.15.0...v0.15.1) (2026-03-12)
+
+
+### Bug Fixes
+
+* **backup:** use secretKeyRef instead of plaintext credentials in Job specs ([e45ef9c](https://github.com/openclaw-rocks/k8s-operator/commit/e45ef9c87f5b03463ca7811d55019be74ce02c53))
+* **backup:** use secretKeyRef instead of plaintext credentials in Job specs ([e4f2f4d](https://github.com/openclaw-rocks/k8s-operator/commit/e4f2f4d1bb27fb889d594f7f8dbaff3d6e707328)), closes [#322](https://github.com/openclaw-rocks/k8s-operator/issues/322)
+* resolve variable shadowing lint errors in mirror secret calls ([a673e60](https://github.com/openclaw-rocks/k8s-operator/commit/a673e605bda6767d9929ba811ac94a525d0685e7))
+
+## [0.15.0](https://github.com/openclaw-rocks/k8s-operator/compare/v0.14.1...v0.15.0) (2026-03-12)
+
+
+### Features
+
+* **backup:** add S3_PROVIDER for multi-cloud workload identity support ([93e22b5](https://github.com/openclaw-rocks/k8s-operator/commit/93e22b50f49dc4df4744df6a369e53bbc1c149aa))
+* **backup:** support IRSA and Pod Identity for S3 backup credentials ([8a06d85](https://github.com/openclaw-rocks/k8s-operator/commit/8a06d850965521c60f26bf7d02c7228927e70b2e)), closes [#320](https://github.com/openclaw-rocks/k8s-operator/issues/320)
+* **backup:** support workload identity and configurable S3 provider for backup credentials ([4b8e3ca](https://github.com/openclaw-rocks/k8s-operator/commit/4b8e3ca40490da53d990e4dc0fb35e44059cc62b))
+
+
+### Bug Fixes
+
+* **backup:** validate partial S3 credentials configuration ([e89c4a3](https://github.com/openclaw-rocks/k8s-operator/commit/e89c4a349c44c928738086933012606790484363))
+
+## [0.14.1](https://github.com/openclaw-rocks/k8s-operator/compare/v0.14.0...v0.14.1) (2026-03-11)
+
+
+### Bug Fixes
+
+* **autoupdate:** scale StatefulSet back up after pre-update backup ([2f52f73](https://github.com/openclaw-rocks/k8s-operator/commit/2f52f735a5205de84a2cb3189ad19b6900eb0829))
+* **autoupdate:** scale StatefulSet back up after pre-update backup ([083d752](https://github.com/openclaw-rocks/k8s-operator/commit/083d752e20cc9acaa631b9634e62336afaa155af)), closes [#299](https://github.com/openclaw-rocks/k8s-operator/issues/299)
+
+## [0.14.0](https://github.com/openclaw-rocks/k8s-operator/compare/v0.13.0...v0.14.0) (2026-03-11)
+
+
+### Features
+
+* inject BOOTSTRAP.md for first-run agent onboarding ([bd58ad9](https://github.com/openclaw-rocks/k8s-operator/commit/bd58ad9205023fbafb9d6040812a252443b9671c))
+
+## [0.13.0](https://github.com/openclaw-rocks/k8s-operator/compare/v0.12.0...v0.13.0) (2026-03-11)
+
+
+### Features
+
+* **init-skills:** propagate spec.env and spec.envFrom to skills init container ([d3a08f3](https://github.com/openclaw-rocks/k8s-operator/commit/d3a08f3a5ea5412c3f9eab9e3b009908e7632d2f))
+* **init-skills:** propagate spec.env and spec.envFrom to skills init container ([44aff0c](https://github.com/openclaw-rocks/k8s-operator/commit/44aff0cc1be6a29d2195f5f03636ee89066c6e15)), closes [#307](https://github.com/openclaw-rocks/k8s-operator/issues/307)
+
+
+### Bug Fixes
+
+* **chromium:** use rewrite + bare proxy_pass in named location ([53f23d9](https://github.com/openclaw-rocks/k8s-operator/commit/53f23d9df68eb17f9c2380c935128e6e40b49ba5))
+* **chromium:** use rewrite + bare proxy_pass in named location ([#270](https://github.com/openclaw-rocks/k8s-operator/issues/270)) ([f4f0a58](https://github.com/openclaw-rocks/k8s-operator/commit/f4f0a582f3fe1a465e758cd59abebbe895d148ff))
+* combine consecutive appends to satisfy gocritic lint ([da357de](https://github.com/openclaw-rocks/k8s-operator/commit/da357de16fbdc06686d0f216fe5dd56d1a38b1ef))
+* **skills:** persist ClawHub-installed skills on PVC ([b17bad4](https://github.com/openclaw-rocks/k8s-operator/commit/b17bad47006a9c6b4eab76b49fe2c94f154dab83))
+* **skills:** persist ClawHub-installed skills on PVC ([#313](https://github.com/openclaw-rocks/k8s-operator/issues/313)) ([7a7dbfd](https://github.com/openclaw-rocks/k8s-operator/commit/7a7dbfdf83c5a26d9d34af94e6807eee05c8f6e0))
+* **web-terminal:** pass -W flag when ReadOnly is false ([a7f806b](https://github.com/openclaw-rocks/k8s-operator/commit/a7f806b11cdf6b96a6b8249a01631ed61c48a986))
+* **web-terminal:** pass -W flag when ReadOnly is false ([ff87cfd](https://github.com/openclaw-rocks/k8s-operator/commit/ff87cfd85108982e8c678602866670e20607631a))
+
+## [0.12.0](https://github.com/openclaw-rocks/k8s-operator/compare/v0.11.2...v0.12.0) (2026-03-10)
+
+
+### Features
+
+* apply registry override to init container images ([34aca73](https://github.com/openclaw-rocks/k8s-operator/commit/34aca73a55c773f854c476ae3c1d5c5f73f2a6a4))
+* **operator:** add global container image registry override field ([589ddf4](https://github.com/openclaw-rocks/k8s-operator/commit/589ddf44a207b8a66c4c2d10e030dc528275922b))
+* **operator:** add global container image registry override field ([3dfa1d0](https://github.com/openclaw-rocks/k8s-operator/commit/3dfa1d0304432d06bc9f8fe861ad49b023353628))
+
+
+### Bug Fixes
+
+* **chromium:** route WebSocket connections to /chromium endpoint for launch args ([c39bc45](https://github.com/openclaw-rocks/k8s-operator/commit/c39bc45d82121ce8f375cea91a07c87391056730)), closes [#270](https://github.com/openclaw-rocks/k8s-operator/issues/270)
+* **chromium:** route WebSocket to /chromium endpoint for launch args ([0e39b89](https://github.com/openclaw-rocks/k8s-operator/commit/0e39b892d56e0764a24f74bbda6cf13b965e0212))
+* **resources:** handle trailing slash in registry override. ([6ba4b94](https://github.com/openclaw-rocks/k8s-operator/commit/6ba4b94835cb543b21bfb34ea82cbe3698059ddd))
+
+## [0.11.2](https://github.com/openclaw-rocks/k8s-operator/compare/v0.11.1...v0.11.2) (2026-03-10)
+
+
+### Bug Fixes
+
+* normalize ClawHub skill slugs and fix documentation ([f738e67](https://github.com/openclaw-rocks/k8s-operator/commit/f738e678893ca233d686f08b733ddf5e2b7fab8d))
+* normalize ClawHub skill slugs and fix documentation format ([ab4af55](https://github.com/openclaw-rocks/k8s-operator/commit/ab4af552427d87d9f1f521572b1986959eac475f)), closes [#288](https://github.com/openclaw-rocks/k8s-operator/issues/288)
+* update E2E test to expect normalized skill slug ([7f71bc9](https://github.com/openclaw-rocks/k8s-operator/commit/7f71bc9712a17fdba31efc268dc15fdbac449bf4))
+
+## [0.11.1](https://github.com/openclaw-rocks/k8s-operator/compare/v0.11.0...v0.11.1) (2026-03-10)
+
+
+### Bug Fixes
+
+* redirect nginx http temp dirs to /tmp for read-only rootfs ([#295](https://github.com/openclaw-rocks/k8s-operator/issues/295)) ([ef98bc9](https://github.com/openclaw-rocks/k8s-operator/commit/ef98bc93ec3b3d43a83148d32a4b83476a674ef8))
+
 ## [0.11.0](https://github.com/openclaw-rocks/k8s-operator/compare/v0.10.30...v0.11.0) (2026-03-10)
 
 

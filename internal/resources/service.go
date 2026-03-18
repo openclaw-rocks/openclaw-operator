@@ -75,17 +75,26 @@ func buildServicePorts(instance *openclawv1alpha1.OpenClawInstance) []corev1.Ser
 		return ports
 	}
 
+	// When the gateway proxy is enabled, route through the proxy ports.
+	// When disabled, target the gateway and canvas ports directly.
+	gwTarget := int32(GatewayProxyPort)
+	canvasTarget := int32(CanvasProxyPort)
+	if !IsGatewayProxyEnabled(instance) {
+		gwTarget = int32(GatewayPort)
+		canvasTarget = int32(CanvasPort)
+	}
+
 	ports := []corev1.ServicePort{
 		{
 			Name:       "gateway",
 			Port:       int32(GatewayPort),
-			TargetPort: intstr.FromInt32(int32(GatewayProxyPort)),
+			TargetPort: intstr.FromInt32(gwTarget),
 			Protocol:   corev1.ProtocolTCP,
 		},
 		{
 			Name:       "canvas",
 			Port:       int32(CanvasPort),
-			TargetPort: intstr.FromInt32(int32(CanvasProxyPort)),
+			TargetPort: intstr.FromInt32(canvasTarget),
 			Protocol:   corev1.ProtocolTCP,
 		},
 	}
@@ -128,8 +137,11 @@ func buildServicePorts(instance *openclawv1alpha1.OpenClawInstance) []corev1.Ser
 // its own readiness probe has passed. Without this, the main ClusterIP Service
 // has no endpoints and the CDP health check fails permanently.
 //
-// Traffic is routed to the chromium CDP proxy (ChromiumProxyPort) which
-// injects anti-bot Chrome launch args before forwarding to browserless.
+// Traffic is routed to the chromium CDP proxy on ChromiumPort (9222) which
+// injects anti-bot Chrome launch args before forwarding to browserless on
+// BrowserlessInternalPort (9224). Because the proxy owns port 9222 directly,
+// the headless bypass is eliminated -- DNS resolves to pod IPs, and port
+// 9222 always hits the proxy regardless of whether kube-proxy is involved.
 func BuildChromiumCDPService(instance *openclawv1alpha1.OpenClawInstance) *corev1.Service {
 	labels := Labels(instance)
 	selectorLabels := SelectorLabels(instance)
@@ -149,7 +161,7 @@ func BuildChromiumCDPService(instance *openclawv1alpha1.OpenClawInstance) *corev
 				{
 					Name:       "cdp",
 					Port:       int32(ChromiumPort),
-					TargetPort: intstr.FromInt32(int32(ChromiumProxyPort)),
+					TargetPort: intstr.FromInt32(int32(ChromiumPort)),
 					Protocol:   corev1.ProtocolTCP,
 				},
 			},

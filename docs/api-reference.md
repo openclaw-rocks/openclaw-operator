@@ -24,6 +24,31 @@ When listing resources with `kubectl get openclawinstances`, the following colum
 
 ## Spec Fields
 
+### spec.registry
+
+Global container image registry override. When set, this registry replaces the registry part of all container images used by the instance (main container, sidecars, init containers).
+
+| Field       | Type       | Default | Description                                                                                       |
+|-------------|------------|---------|---------------------------------------------------------------------------------------------------|
+| `registry`  | `string`   | --      | Global registry hostname/port to use for all images. Example: `my-registry.example.com` or `my-registry:5000`. |
+
+**Example:**
+
+```yaml
+spec:
+  registry: my-registry.example.com
+```
+
+**Transformation examples:**
+
+| Original image | With `registry: my-registry.example.com` |
+|----------------|-------------------------------------------|
+| `ghcr.io/openclaw/openclaw:latest` | `my-registry.example.com/openclaw/openclaw:latest` |
+| `nginx:1.27-alpine` | `my-registry.example.com/nginx:1.27-alpine` |
+| `ollama/ollama:latest` | `my-registry.example.com/ollama/ollama:latest` |
+| `ghcr.io/openclaw/openclaw@sha256:abc123` | `my-registry.example.com/openclaw/openclaw@sha256:abc123` |
+
+
 ### spec.image
 
 Container image configuration for the main OpenClaw workload.
@@ -44,7 +69,7 @@ Configuration for the OpenClaw application (`openclaw.json`).
 |----------------|-----------------------|---------------|----------------------------------------------------------------------------|
 | `configMapRef` | `ConfigMapKeySelector`| --            | Reference to an external ConfigMap. If set, `raw` is ignored.              |
 | `raw`          | `RawConfig`           | --            | Inline JSON configuration. The operator creates a managed ConfigMap.       |
-| `mergeMode`    | `string`              | `overwrite`   | How config is applied to the PVC. `overwrite` replaces on every restart. `merge` deep-merges with existing PVC config, preserving runtime changes. |
+| `mergeMode`    | `string`              | `overwrite`   | How config is applied to the PVC. `overwrite` replaces on every restart. `merge` deep-merges with existing PVC config, preserving runtime changes. **Caveat:** in merge mode, removing a key from the CR does not delete it from the PVC - temporarily use `replace` to wipe stale keys. |
 | `format`       | `string`              | `json`        | Config file format. `json` (standard JSON) or `json5` (JSON5 with comments/trailing commas). JSON5 requires `configMapRef` - inline `raw` must be valid JSON. JSON5 is converted to standard JSON by the init container using npx json5. |
 
 **ConfigMapKeySelector:**
@@ -82,12 +107,12 @@ spec:
 
 | Field    | Type       | Default | Description                                                                                       |
 |----------|------------|---------|---------------------------------------------------------------------------------------------------|
-| `skills` | `[]string` | --      | Skills to install. Three formats supported: ClawHub identifiers (e.g., `@anthropic/mcp-server-fetch`), npm packages with `npm:` prefix (e.g., `npm:@openclaw/matrix`), and GitHub-hosted skill packs with `pack:` prefix (e.g., `pack:openclaw-rocks/skills/image-gen`). ClawHub installs are idempotent - already-installed skills are skipped gracefully, making restarts safe with persistent storage. npm lifecycle scripts are disabled for security. Max 20 items. |
+| `skills` | `[]string` | --      | Skills to install. Three formats supported: ClawHub identifiers (e.g., `mcp-server-fetch`), npm packages with `npm:` prefix (e.g., `npm:@openclaw/matrix`), and GitHub-hosted skill packs with `pack:` prefix (e.g., `pack:openclaw-rocks/skills/image-gen`). ClawHub installs are idempotent - already-installed skills are skipped gracefully, making restarts safe with persistent storage. npm lifecycle scripts are disabled for security. Max 20 items. |
 
 ```yaml
 spec:
   skills:
-    - "@anthropic/mcp-server-fetch"                         # ClawHub
+    - "mcp-server-fetch"                                     # ClawHub
     - "npm:@openclaw/matrix"                                # npm package
     - "pack:openclaw-rocks/skills/image-gen"                # skill pack (latest)
     - "pack:openclaw-rocks/skills/image-gen@v1.0.0"         # skill pack (pinned)
@@ -265,7 +290,7 @@ When enabled, the sidecar:
 - Mounts an emptyDir at `/tmp` for scratch space.
 - When `persistence.enabled` is true, mounts a PVC at `/chromium-data` and passes `--user-data-dir=/chromium-data` to Chrome, persisting cookies, localStorage, IndexedDB, cached credentials, and session tokens across pod restarts.
 
-When Chromium is enabled, the operator also auto-configures browser profiles in the OpenClaw config. Both `"default"` and `"chrome"` profiles are set to point at the sidecar's CDP endpoint (`http://localhost:3000`). This ensures browser tool calls work regardless of which profile name the LLM passes.
+When Chromium is enabled, the operator also auto-configures browser profiles in the OpenClaw config. Both `"default"` and `"chrome"` profiles are set to point at the sidecar's CDP endpoint via the headless CDP Service DNS name. Traffic goes through the chromium-proxy nginx sidecar which injects anti-bot Chrome launch args (and any user `extraArgs`) into every WebSocket connection. This ensures browser tool calls work regardless of which profile name the LLM passes.
 
 ### spec.tailscale
 
@@ -410,7 +435,7 @@ spec:
 |------------|-----------------|---------|---------------------------------------------------------------------------------------------------|
 | `sidecars` | `[]Container`   | --      | Additional sidecar containers to inject into the pod. Use for custom sidecars like database proxies, log forwarders, or service meshes. |
 
-Standard Kubernetes `Container` spec. Sidecar containers run alongside the main OpenClaw container.
+Standard Kubernetes `Container` spec. Sidecar containers run alongside the main OpenClaw container. If your sidecar replaces the built-in gateway proxy, set `spec.gateway.enabled: false` to avoid running both.
 
 ```yaml
 spec:
@@ -502,7 +527,7 @@ When `ports` is not set, the Service exposes these default ports:
 |-------------|--------|-------------|---------------------------------|
 | `gateway`   | 18789  | 18790       | OpenClaw WebSocket gateway (via nginx proxy sidecar). |
 | `canvas`    | 18793  | 18794       | OpenClaw Canvas HTTP server (via nginx proxy sidecar). |
-| `chromium`  | 9222   | 9222        | Chrome DevTools Protocol (only if Chromium sidecar is enabled). |
+| `chromium`  | 9222   | 9222        | Chrome DevTools Protocol via nginx CDP proxy (only if Chromium sidecar is enabled). Browserless listens internally on port 9224. |
 
 The gateway and canvas ports route through an nginx reverse proxy sidecar because the gateway process binds to loopback (`127.0.0.1`). The proxy listens on dedicated ports (`0.0.0.0`) and forwards traffic to loopback. This avoids CWE-319 plaintext WebSocket security errors on non-loopback addresses.
 
@@ -643,10 +668,10 @@ Health probe configuration for the main OpenClaw container. All probes use HTTP 
 | Field                 | Type     | Default | Description                                           |
 |-----------------------|----------|---------|-------------------------------------------------------|
 | `enabled`             | `*bool`  | `true`  | Enable the startup probe.                             |
-| `initialDelaySeconds` | `*int32` | `0`     | Seconds to wait before the first check.               |
+| `initialDelaySeconds` | `*int32` | `5`     | Seconds to wait before the first check.               |
 | `periodSeconds`       | `*int32` | `5`     | Seconds between checks.                              |
 | `timeoutSeconds`      | `*int32` | `3`     | Seconds before the check times out.                  |
-| `failureThreshold`    | `*int32` | `30`    | Consecutive failures before killing the container. Allows up to 150s startup. |
+| `failureThreshold`    | `*int32` | `60`    | Consecutive failures before killing the container. Allows up to 300s startup. |
 
 ### spec.observability
 
@@ -656,8 +681,8 @@ Metrics and logging configuration.
 
 | Field                       | Type                | Default | Description                                   |
 |-----------------------------|---------------------|---------|-----------------------------------------------|
-| `enabled`                   | `*bool`             | `true`  | Enable the metrics endpoint on the managed instance. |
-| `port`                      | `*int32`            | `9090`  | Metrics port.                                 |
+| `enabled`                   | `*bool`             | `true`  | Enable the metrics pipeline. When enabled, the operator injects `diagnostics.otel` config into OpenClaw to push OTLP metrics, adds an OTel Collector sidecar that exposes a Prometheus scrape endpoint, and creates the Service port and NetworkPolicy ingress rule. |
+| `port`                      | `*int32`            | `9090`  | Prometheus metrics port exposed by the OTel Collector sidecar. Used for the Service port and ServiceMonitor target. |
 | `serviceMonitor.enabled`    | `*bool`             | `false` | Create a Prometheus `ServiceMonitor`.         |
 | `serviceMonitor.interval`   | `string`            | `30s`   | Prometheus scrape interval.                   |
 | `serviceMonitor.labels`     | `map[string]string` | --      | Labels to add to the ServiceMonitor (for Prometheus selector matching). |
@@ -713,11 +738,15 @@ High availability and scheduling configuration.
 | `tolerations`                     | `[]Toleration`      | --      | Tolerations for pod scheduling.                          |
 | `affinity`                        | `*Affinity`         | --      | Affinity and anti-affinity rules.                        |
 | `topologySpreadConstraints`       | `[]TopologySpreadConstraint` | --      | Topology spread constraints for pod scheduling.          |
+| `runtimeClassName`                | `*string`           | --      | RuntimeClass to use for the pod. Selects an alternative container runtime (e.g. Kata Containers, gVisor). If unset, the cluster default runtime is used. See [RuntimeClass docs](https://kubernetes.io/docs/concepts/containers/runtime-class/). |
+| `podAnnotations`                  | `map[string]string` | --      | Extra annotations merged into the StatefulSet pod template. Operator-managed keys (`openclaw.rocks/config-hash`, `openclaw.rocks/secret-hash`) always take precedence. |
 | `autoScaling.enabled`             | `*bool`             | `false` | Create a HorizontalPodAutoscaler.                        |
 | `autoScaling.minReplicas`         | `*int32`            | `1`     | Minimum number of replicas.                              |
 | `autoScaling.maxReplicas`         | `*int32`            | `5`     | Maximum number of replicas.                              |
 | `autoScaling.targetCPUUtilization` | `*int32`           | `80`    | Target average CPU utilization (percentage).             |
 | `autoScaling.targetMemoryUtilization` | `*int32`        | --      | Target average memory utilization (percentage).          |
+
+When `autoScaling.enabled` is `true` with persistence enabled, the operator uses StatefulSet `VolumeClaimTemplates` instead of a standalone PVC. Each replica gets its own PVC (`data-<instance>-<ordinal>`) using `size`, `storageClass`, and `accessModes` from `spec.storage.persistence`. The `existingClaim` field is ignored in this mode. PVC retention policy is `Retain` for both scale-down and deletion.
 
 ### spec.backup
 
@@ -729,25 +758,41 @@ Configures periodic scheduled backups to S3-compatible storage. Requires the `s3
 | `historyLimit`       | `*int32` | `3`     | Number of successful CronJob runs to retain.                                                       |
 | `failedHistoryLimit` | `*int32` | `1`     | Number of failed CronJob runs to retain.                                                           |
 | `timeout`            | `string` | `30m`   | Maximum duration to wait for a pre-delete backup to complete before giving up and proceeding with deletion (Go duration string, e.g. `"30m"`, `"1h"`). Covers all phases: StatefulSet scale-down, pod termination, Job execution, and Job failure retries. Minimum: `5m`, Maximum: `24h`. |
+| `serviceAccountName` | `string` | --      | ServiceAccount to use for backup and restore Jobs. Set this to an IRSA-annotated or Pod Identity-enabled ServiceAccount so Jobs authenticate via the AWS credential chain instead of static credentials. Applies to all backup Jobs (pre-delete, pre-update, periodic, and restore). |
+| `retentionDays`      | `*int32` | `7`     | Number of days to keep daily snapshots in S3. Snapshots older than this are pruned after each successful backup. Minimum: `1`, Maximum: `365`. |
 
-The CronJob mounts the PVC read-only (hot backup - no downtime) and uses pod affinity to schedule on the same node as the StatefulSet pod (required for RWO PVCs). Each run stores data under a unique timestamped path: `backups/<tenantId>/<instanceName>/periodic/<timestamp>`.
+The CronJob mounts the PVC (hot backup - no downtime) and uses pod affinity to schedule on the same node as the StatefulSet pod (required for RWO PVCs).
+
+Periodic backups use an incremental sync strategy to minimize S3 transactions and storage costs:
+
+1. **Incremental sync** to a fixed `latest` path - only uploads changed files
+2. **Daily snapshot** - copies `latest` to `snapshots/YYYY-MM-DD` (near-free if today's snapshot already exists)
+3. **Retention cleanup** - prunes snapshots older than `retentionDays`
+
+S3 path structure:
+```
+backups/<tenantId>/<instanceName>/periodic/latest/              # incrementally synced
+backups/<tenantId>/<instanceName>/periodic/snapshots/2026-03-13/ # daily snapshot (auto-pruned)
+```
 
 ```yaml
 spec:
   backup:
     schedule: "0 2 * * *"   # Daily at 2 AM UTC
+    retentionDays: 7         # Keep 7 days of daily snapshots (default)
     historyLimit: 5          # Keep last 5 successful runs
     failedHistoryLimit: 2    # Keep last 2 failed runs
     timeout: "30m"           # Max time for pre-delete backup (default: 30m)
+    serviceAccountName: "my-irsa-sa"  # Optional: use IRSA/Pod Identity for S3 auth
 ```
 
 ### spec.restoreFrom
 
 | Field         | Type     | Default | Description                                                                                       |
 |---------------|----------|---------|---------------------------------------------------------------------------------------------------|
-| `restoreFrom` | `string` | --      | S3 path to restore data from (e.g., `backups/{tenantId}/{instanceId}/{timestamp}`). When set, the operator restores PVC data from this path before creating the StatefulSet. Cleared automatically after successful restore. Requires the `s3-backup-credentials` Secret to be present in the operator namespace. |
+| `restoreFrom` | `string` | --      | S3 path to restore data from (e.g., `backups/{tenantId}/{instanceId}/{timestamp}`). When set, the operator restores PVC data from this path before creating the StatefulSet. Works on both existing and new instances (enabling clone/migrate workflows). Cleared automatically after successful restore. Requires the `s3-backup-credentials` Secret to be present in the operator namespace. |
 
-See [Backup and Restore](#backup-and-restore) for full setup instructions.
+See [Backup and Restore](#backup-and-restore) for full setup instructions, including [clone/migrate workflows](#clone--migrate-an-instance).
 
 ### spec.runtimeDeps
 
@@ -767,10 +812,11 @@ spec:
 
 ### spec.gateway
 
-Configures the gateway authentication token and Control UI origins.
+Configures the gateway reverse proxy, authentication token, and Control UI origins.
 
 | Field              | Type       | Default | Description                                                                                       |
 |--------------------|------------|---------|---------------------------------------------------------------------------------------------------|
+| `enabled`          | `*bool`    | `true`  | Enable the gateway reverse proxy (nginx) sidecar. When disabled, the gateway binds to `0.0.0.0` and probes/Service target it directly. **Do not** manually set `gateway.bind: loopback` in your config when the proxy is disabled - the pod will be unreachable. The operator emits a `GatewayBindConflict` warning event if this is detected. When disabled, the gateway serves plaintext `ws://` on `0.0.0.0` - ensure your replacement proxy or Ingress handles TLS termination (CWE-319). |
 | `existingSecret`   | `string`   | --      | Name of a user-managed Secret containing the gateway token. The Secret must have a key named `token`. When set, the operator skips auto-generating a gateway token Secret and uses this Secret instead. |
 | `controlUiOrigins` | `[]string` | --      | Additional allowed origins for the Control UI. The operator always auto-injects `http://localhost:18789` and `http://127.0.0.1:18789` (for port-forwarding) and derives origins from ingress hosts. Use this field to add extra origins (e.g., custom reverse proxy URLs). Max 20 items. |
 
@@ -778,7 +824,11 @@ When `existingSecret` is not set, the operator automatically generates a random 
 
 **Auto-injected settings:**
 
-The operator always injects `gateway.controlUi.dangerouslyDisableDeviceAuth: true` into the config JSON. Device pairing (introduced in OpenClaw v2026.3.2) is fundamentally incompatible with Kubernetes because users cannot approve pairing from inside a container, connections always come through the nginx proxy sidecar (non-local), and mDNS is unavailable. If you explicitly set `gateway.controlUi.dangerouslyDisableDeviceAuth` in your config, your value takes precedence.
+The operator always injects `gateway.controlUi.dangerouslyDisableDeviceAuth: true` into the config JSON. Device pairing (introduced in OpenClaw v2026.3.2) is fundamentally incompatible with Kubernetes because users cannot approve pairing from inside a container, connections always come through the nginx proxy sidecar (non-local), and mDNS is unavailable. If you explicitly set `gateway.controlUi.dangerouslyDisableDeviceAuth` in your config, your value takes precedence. **Do not set `gateway.mode: local`** - this desktop-only mode enforces device identity checks that cannot work behind a reverse proxy.
+
+The operator also injects the `OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS=10000` environment variable (10 seconds). OpenClaw v2026.3.12 reduced the WebSocket handshake timeout from ~10s to 3s, which is too short for Kubernetes where plugin loading adds startup overhead. See [upstream issue #46892](https://github.com/openclaw/openclaw/issues/46892). If you set `OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS` in `spec.env`, your value takes precedence.
+
+When accessing the Control UI through an Ingress, authenticate by appending the gateway token to the URL fragment: `https://openclaw.example.com/#token=<your-token>`.
 
 The operator auto-injects `gateway.controlUi.allowedOrigins` into the config JSON with:
 - **Localhost** (always): `http://localhost:18789`, `http://127.0.0.1:18789`
@@ -948,15 +998,16 @@ stringData:
   # S3_REGION: "us-east-1"  # optional - see below
 ```
 
-The first four keys are required. The operator uses rclone's S3 backend (`--s3-provider=Other`), which is compatible with AWS S3, Backblaze B2, MinIO, Cloudflare R2, Wasabi, and any other S3-compatible service.
+`S3_ENDPOINT` and `S3_BUCKET` are required. The operator uses rclone's S3 backend, which is compatible with AWS S3, Backblaze B2, MinIO, Cloudflare R2, Wasabi, Google Cloud Storage (S3-compatible), and any other S3-compatible service.
 
 | Key | Required | Description |
 |-----|----------|-------------|
 | `S3_ENDPOINT` | Yes | S3-compatible endpoint URL (e.g., `https://s3.us-east-1.amazonaws.com`) |
 | `S3_BUCKET` | Yes | Bucket name for backups |
-| `S3_ACCESS_KEY_ID` | Yes | Access key ID |
-| `S3_SECRET_ACCESS_KEY` | Yes | Secret access key |
+| `S3_ACCESS_KEY_ID` | No | Access key ID. When omitted (together with `S3_SECRET_ACCESS_KEY`), rclone uses `--s3-env-auth=true` to authenticate via the provider's native credential chain. |
+| `S3_SECRET_ACCESS_KEY` | No | Secret access key. When omitted (together with `S3_ACCESS_KEY_ID`), rclone uses `--s3-env-auth=true`. |
 | `S3_REGION` | No | S3 region (e.g., `us-east-1`). Required for MinIO instances configured with a custom region. Without this, rclone defaults to `us-east-1`, which causes authentication failures on providers using a different region. |
+| `S3_PROVIDER` | No | rclone S3 provider (default: `Other`). Set to `AWS` for native AWS credential chain, `GCS` for Google Cloud Storage, `Ceph` for Ceph/RadosGW, etc. Setting the correct provider enables provider-specific auth flows and optimizations. See [rclone S3 providers](https://rclone.org/s3/#s3-provider). |
 
 ### When backups run automatically
 
@@ -1015,6 +1066,54 @@ spec:
 
 To find available backups, list the S3 bucket directly (e.g., `aws s3 ls s3://my-openclaw-backups/backups/`). The `status.lastBackupPath` field on any existing instance shows its last backup path.
 
+**Restore behavior:**
+
+- The restore Job runs **before** the StatefulSet is created (reconcile order: PVC -> restore Job -> StatefulSet)
+- `spec.restoreFrom` is cleared automatically after a successful restore and the original path is recorded in `status.restoredFrom`
+- The restore Job uses `spec.backup.serviceAccountName` when set, so workload identity (IRSA/Pod Identity) works for restores
+- If the restore Job fails, the operator sets `RestoreComplete=False` and retries. Delete the failed Job to trigger a fresh attempt
+
+### Clone / migrate an instance
+
+`spec.restoreFrom` works on **new instances** (with empty PVCs), not just existing ones. This enables cloning and cross-namespace migration workflows.
+
+**Example - clone instance A from namespace X to namespace Y:**
+
+```yaml
+# 1. Check the source instance's last backup path:
+#    kubectl get openclawinstance my-agent -n ns-x -o jsonpath='{.status.lastBackupPath}'
+#    -> backups/tenant-x/my-agent/2026-03-15T02:00:00Z
+
+# 2. Create a new instance in the target namespace with restoreFrom:
+apiVersion: openclaw.rocks/v1alpha1
+kind: OpenClawInstance
+metadata:
+  name: my-agent-clone
+  namespace: ns-y
+spec:
+  image:
+    repository: ghcr.io/openclaw/openclaw
+    tag: latest
+  restoreFrom: "backups/tenant-x/my-agent/2026-03-15T02:00:00Z"
+  backup:
+    serviceAccountName: "openclaw-backup"  # if using workload identity
+```
+
+The operator creates the PVC, runs the restore Job (rclone sync from S3 to the new PVC), then starts the StatefulSet with the restored data. The new instance gets a fresh gateway token - the source instance is unaffected.
+
+**ArgoCD integration:** The operator auto-clears `spec.restoreFrom` after a successful restore. To prevent ArgoCD from detecting this as drift, add it to `ignoreDifferences`:
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+spec:
+  ignoreDifferences:
+    - group: openclaw.rocks
+      kind: OpenClawInstance
+      jsonPointers:
+        - /spec/restoreFrom
+```
+
 ### Periodic / scheduled backups
 
 Set `spec.backup.schedule` to a cron expression to enable periodic backups:
@@ -1029,7 +1128,7 @@ spec:
 
 The operator creates a Kubernetes CronJob (`<instance>-backup-periodic`) that:
 
-- Mounts the PVC **read-only** (hot backup - no downtime or StatefulSet scale-down)
+- Mounts the PVC with **fsGroup** matching the StatefulSet (hot backup - no downtime or StatefulSet scale-down)
 - Uses **pod affinity** to co-locate on the same node as the StatefulSet pod (required for RWO PVCs)
 - Stores each run under a unique timestamped path: `backups/<tenantId>/<instanceName>/periodic/<YYYYMMDDTHHMMSSz>`
 - Uses `ConcurrencyPolicy: Forbid` to prevent overlapping backup runs
@@ -1038,6 +1137,58 @@ The operator creates a Kubernetes CronJob (`<instance>-backup-periodic`) that:
 **Requirements:** persistence must be enabled and the `s3-backup-credentials` Secret must exist. If either is missing, the CronJob is not created and a `ScheduledBackupReady=False` condition is set.
 
 **Removing the schedule:** set `spec.backup.schedule` to an empty string (or remove the `backup` section entirely) and the CronJob is automatically deleted.
+
+### Workload Identity (cloud-native auth)
+
+Instead of static credentials, you can use your cloud provider's workload identity to authenticate backup Jobs:
+
+- **AWS EKS**: [IRSA](https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html) or [EKS Pod Identity](https://docs.aws.amazon.com/eks/latest/userguide/pod-identities.html) with `S3_PROVIDER=AWS`
+- **GKE**: [Workload Identity Federation](https://cloud.google.com/kubernetes-engine/docs/how-to/workload-identity) with `S3_PROVIDER=GCS` (using GCS S3-compatible endpoint)
+- **AKS**: [Workload Identity](https://learn.microsoft.com/en-us/azure/aks/workload-identity-overview) with static HMAC keys or a compatible S3 provider
+
+The setup has three parts: (1) a ServiceAccount with provider-specific annotations, (2) the `s3-backup-credentials` Secret without static keys, and (3) `spec.backup.serviceAccountName` on the instance.
+
+**Example (AWS IRSA):**
+
+1. Create an IRSA-annotated ServiceAccount in the instance namespace:
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: openclaw-backup
+  namespace: oc-tenant-my-tenant
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/openclaw-backup-role
+```
+
+2. Omit `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` from the credentials Secret and set `S3_PROVIDER`:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: s3-backup-credentials
+  namespace: openclaw-operator-system
+stringData:
+  S3_ENDPOINT: "https://s3.us-east-1.amazonaws.com"
+  S3_BUCKET: "my-openclaw-backups"
+  S3_REGION: "us-east-1"
+  S3_PROVIDER: "AWS"  # enables AWS-native credential chain
+```
+
+3. Reference the ServiceAccount in the instance spec:
+
+```yaml
+spec:
+  backup:
+    schedule: "0 2 * * *"
+    serviceAccountName: "openclaw-backup"
+```
+
+When `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` are omitted, the operator passes `--s3-env-auth=true` to rclone, which uses the provider's native credential chain. The `serviceAccountName` is set on all backup and restore Job pods so they inherit the cloud IAM role.
+
+Setting `S3_PROVIDER` to the correct value (e.g., `AWS`, `GCS`) enables provider-specific optimizations in rclone. When left unset, it defaults to `Other` which works with any S3-compatible backend using static credentials.
 
 ---
 
@@ -1124,7 +1275,7 @@ metadata:
 spec:
   instanceRef: my-agent
   addSkills:
-    - "@anthropic/mcp-server-fetch"
+    - "mcp-server-fetch"
   addEnvVars:
     - name: MY_CUSTOM_VAR
       value: "hello"
@@ -1165,7 +1316,7 @@ spec:
         Use the filesystem MCP server for file operations.
 
   skills:
-    - "@anthropic/mcp-server-fetch"
+    - "mcp-server-fetch"
     - "npm:@openclaw/matrix"
 
   envFrom:

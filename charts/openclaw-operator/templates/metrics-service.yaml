@@ -1,0 +1,23 @@
+{{- if .Values.metrics.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "openclaw-operator.fullname" . }}-metrics
+  labels:
+    {{- include "openclaw-operator.labels" . | nindent 4 }}
+    control-plane: controller-manager
+  {{- with .Values.metrics.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "openclaw-operator.selectorLabels" . | nindent 4 }}
+    control-plane: controller-manager
+  ports:
+    - name: metrics
+      port: {{ .Values.metrics.service.port }}
+      targetPort: metrics
+      protocol: TCP
+{{- end }}

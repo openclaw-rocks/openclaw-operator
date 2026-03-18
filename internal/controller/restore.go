@@ -69,6 +69,11 @@ func (r *OpenClawInstanceReconciler) reconcileRestore(ctx context.Context, insta
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, false, nil
 	}
 
+	// Reconcile mirror Secret for secretKeyRef (no-op for env-auth mode)
+	if mirrorErr := r.reconcileS3MirrorSecret(ctx, instance, creds); mirrorErr != nil {
+		return ctrl.Result{}, false, mirrorErr
+	}
+
 	jobName := restoreJobName(instance)
 	pvcName := pvcNameForInstance(instance)
 
@@ -81,7 +86,7 @@ func (r *OpenClawInstanceReconciler) reconcileRestore(ctx context.Context, insta
 	if apierrors.IsNotFound(err) || existingJob == nil {
 		// Create restore Job
 		labels := backupLabels(instance, "restore")
-		job := buildRcloneJob(jobName, instance.Namespace, pvcName, instance.Spec.RestoreFrom, labels, creds, false, instance.Spec.Availability.NodeSelector, instance.Spec.Availability.Tolerations)
+		job := buildRcloneJob(jobName, instance.Namespace, pvcName, instance.Spec.RestoreFrom, labels, creds, false, instance.Spec.Availability.NodeSelector, instance.Spec.Availability.Tolerations, instance.Spec.Backup.ServiceAccountName, mirrorSecretName(instance))
 
 		// Set owner reference
 		if err := controllerutil.SetControllerReference(instance, job, r.Scheme); err != nil {

@@ -17,6 +17,7 @@ limitations under the License.
 package e2e
 
 import (
+	"encoding/json"
 	"os"
 	"time"
 
@@ -312,7 +313,7 @@ var _ = Describe("Observability - Deep Insights", func() {
 			}
 			Expect(foundMetricsSvcPort).To(BeTrue(), "Service should have a metrics port")
 
-			// Verify StatefulSet main container has metrics port
+			// Verify StatefulSet has OTel Collector sidecar with metrics port
 			sts := &appsv1.StatefulSet{}
 			Eventually(func() error {
 				return k8sClient.Get(ctx, types.NamespacedName{
@@ -321,15 +322,48 @@ var _ = Describe("Observability - Deep Insights", func() {
 				}, sts)
 			}, timeout, interval).Should(Succeed())
 
-			mainContainer := sts.Spec.Template.Spec.Containers[0]
-			foundMetricsContainerPort := false
-			for _, p := range mainContainer.Ports {
-				if p.Name == "metrics" {
-					foundMetricsContainerPort = true
-					Expect(p.ContainerPort).To(Equal(resources.DefaultMetricsPort))
+			foundOTelCollector := false
+			for _, c := range sts.Spec.Template.Spec.Containers {
+				if c.Name == "otel-collector" {
+					foundOTelCollector = true
+					foundMetricsPort := false
+					for _, p := range c.Ports {
+						if p.Name == "metrics" {
+							foundMetricsPort = true
+							Expect(p.ContainerPort).To(Equal(resources.DefaultMetricsPort))
+						}
+					}
+					Expect(foundMetricsPort).To(BeTrue(), "otel-collector should have metrics port")
 				}
 			}
-			Expect(foundMetricsContainerPort).To(BeTrue(), "main container should have a metrics port")
+			Expect(foundOTelCollector).To(BeTrue(), "StatefulSet should have otel-collector sidecar")
+
+			// Verify ConfigMap injects diagnostics.otel (NOT diagnostics.metrics)
+			cm := &corev1.ConfigMap{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.ConfigMapName(instance),
+					Namespace: namespace,
+				}, cm)
+			}, timeout, interval).Should(Succeed())
+
+			configContent, ok := cm.Data["openclaw.json"]
+			Expect(ok).To(BeTrue(), "ConfigMap should have openclaw.json key")
+
+			var parsed map[string]interface{}
+			Expect(json.Unmarshal([]byte(configContent), &parsed)).To(Succeed())
+
+			diag, hasDiag := parsed["diagnostics"].(map[string]interface{})
+			Expect(hasDiag).To(BeTrue(), "config should have diagnostics key")
+			Expect(diag).NotTo(HaveKey("metrics"),
+				"diagnostics.metrics must not be injected - OpenClaw rejects this key")
+			otel, hasOTel := diag["otel"].(map[string]interface{})
+			Expect(hasOTel).To(BeTrue(), "diagnostics should have otel key")
+			Expect(otel["metrics"]).To(Equal(true), "diagnostics.otel.metrics should be true")
+
+			// Verify OTel Collector config is in ConfigMap
+			_, hasCollectorConfig := cm.Data[resources.OTelCollectorConfigKey]
+			Expect(hasCollectorConfig).To(BeTrue(), "ConfigMap should have OTel Collector config")
 
 			// Verify ServiceMonitor targets metrics port
 			sm := &unstructured.Unstructured{}

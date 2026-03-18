@@ -17,6 +17,8 @@ limitations under the License.
 package resources
 
 import (
+	"strings"
+
 	"k8s.io/apimachinery/pkg/api/resource"
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -47,16 +49,19 @@ const (
 	// NginxConfigKey is the ConfigMap data key for the nginx stream config
 	NginxConfigKey = "nginx.conf"
 
-	// ChromiumPort is the port the chromium sidecar listens on.
-	// The browserless image defaults to 3000, but we override it to 9222
-	// via the PORT env var to avoid conflicting with the OpenClaw gateway's
-	// built-in browser control service on port 3000.
+	// ChromiumPort is the external CDP port that all clients connect to.
+	// The nginx CDP proxy listens on this port, injecting Chrome launch
+	// args (anti-bot flags) into WebSocket connections before forwarding
+	// to browserless on BrowserlessInternalPort. By owning port 9222
+	// directly, the proxy cannot be bypassed -- even on headless Services
+	// where kube-proxy is not involved and DNS resolves to pod IPs.
 	ChromiumPort = 9222
 
-	// ChromiumProxyPort is the port the nginx CDP proxy listens on.
-	// It sits between OpenClaw and the browserless sidecar, injecting
-	// Chrome launch args (anti-bot flags) into WebSocket connections.
-	ChromiumProxyPort = 9223
+	// BrowserlessInternalPort is the internal port where the browserless
+	// container actually listens. Traffic should always flow through the
+	// CDP proxy on ChromiumPort first. This port is not exposed via
+	// Services and is only reachable within the pod on localhost.
+	BrowserlessInternalPort = 9224
 
 	// ChromiumProxyNginxConfigKey is the ConfigMap data key for the
 	// chromium CDP proxy nginx config
@@ -130,14 +135,45 @@ const (
 	// CWE-319 plaintext ws:// errors on non-loopback addresses.
 	GatewayBindLoopback = "loopback"
 
+	// GatewayBindAllInterfaces is the bind value when the gateway proxy sidecar
+	// is disabled. The gateway must bind to all interfaces so the kubelet and
+	// Service can reach it directly. Note: OpenClaw's gateway.bind accepts both
+	// mode keywords ("loopback") and raw IPs ("0.0.0.0", "127.0.0.1"). There
+	// is no "all" keyword, so a raw IP is required here.
+	GatewayBindAllInterfaces = "0.0.0.0"
+
+	// DefaultHandshakeTimeoutMs is the WebSocket handshake timeout injected
+	// into gateway.handshakeTimeoutMs. OpenClaw v2026.3.12 reduced the
+	// hardcoded default from ~10s to 3s as a security measure, but 3s is too
+	// short for Kubernetes where plugin loading adds startup overhead.
+	// See: https://github.com/openclaw/openclaw/issues/46892
+	DefaultHandshakeTimeoutMs = 10000
+
 	// DefaultMetricsPort is the default port for the Prometheus metrics endpoint
 	DefaultMetricsPort int32 = 9090
+
+	// DefaultOTelCollectorImage is the default image for the OTel Collector sidecar.
+	// The core distribution is lightweight (~80MB) and includes the OTLP receiver
+	// and Prometheus exporter needed for the metrics pipeline.
+	DefaultOTelCollectorImage = "otel/opentelemetry-collector"
+
+	// DefaultOTelCollectorTag is the default tag for the OTel Collector image
+	DefaultOTelCollectorTag = "0.120.0"
+
+	// OTelHTTPReceiverPort is the port for the OTLP HTTP receiver.
+	// OpenClaw pushes metrics to this endpoint via diagnostics.otel.endpoint.
+	// This port is internal to the pod (localhost only).
+	OTelHTTPReceiverPort int32 = 4318
+
+	// OTelCollectorConfigKey is the ConfigMap data key for the OTel Collector config
+	OTelCollectorConfigKey = "otel-collector.yaml"
 )
 
-// DefaultChromiumLaunchArgs are anti-bot Chrome flags injected by the
-// chromium CDP proxy into every browserless WebSocket connection.
-// Browserless v2 deprecated DEFAULT_LAUNCH_ARGS (fully ignored since v2.0.0)
-// and only accepts launch args via the `launch` query parameter.
+// DefaultChromiumLaunchArgs are anti-bot Chrome flags injected via the
+// chromium CDP proxy's `launch` query parameter. The proxy routes all
+// WebSocket connections to browserless's /chromium endpoint with these
+// flags (+ user ExtraArgs), ensuring every browser session gets a fresh
+// Chrome launched with the correct args. See chromiumProxyNginxConfig.
 var DefaultChromiumLaunchArgs = []string{
 	"--disable-blink-features=AutomationControlled",
 	"--disable-features=AutomationControlled",
@@ -217,6 +253,12 @@ func PVCName(instance *openclawv1alpha1.OpenClawInstance) string {
 	return instance.Name + "-data"
 }
 
+// IsPersistenceEnabled returns true if persistent storage is enabled for the instance.
+// Defaults to true when not explicitly set.
+func IsPersistenceEnabled(instance *openclawv1alpha1.OpenClawInstance) bool {
+	return instance.Spec.Storage.Persistence.Enabled == nil || *instance.Spec.Storage.Persistence.Enabled
+}
+
 // ChromiumPVCName returns the name of the Chromium browser profile PVC
 func ChromiumPVCName(instance *openclawv1alpha1.OpenClawInstance) string {
 	return instance.Name + "-chromium-data"
@@ -271,10 +313,13 @@ func GetImageTag(instance *openclawv1alpha1.OpenClawInstance) string {
 // GetImage returns the full image reference
 func GetImage(instance *openclawv1alpha1.OpenClawInstance) string {
 	repo := GetImageRepository(instance)
+	var image string
 	if instance.Spec.Image.Digest != "" {
-		return repo + "@" + instance.Spec.Image.Digest
+		image = repo + "@" + instance.Spec.Image.Digest
+	} else {
+		image = repo + ":" + GetImageTag(instance)
 	}
-	return repo + ":" + GetImageTag(instance)
+	return ApplyRegistryOverride(image, instance.Spec.Registry)
 }
 
 // GetTailscaleImage returns the full Tailscale sidecar image reference
@@ -284,15 +329,23 @@ func GetTailscaleImage(instance *openclawv1alpha1.OpenClawInstance) string {
 		repo = DefaultTailscaleImage
 	}
 
+	var image string
 	if instance.Spec.Tailscale.Image.Digest != "" {
-		return repo + "@" + instance.Spec.Tailscale.Image.Digest
+		image = repo + "@" + instance.Spec.Tailscale.Image.Digest
+	} else {
+		tag := instance.Spec.Tailscale.Image.Tag
+		if tag == "" {
+			tag = DefaultImageTag
+		}
+		image = repo + ":" + tag
 	}
+	return ApplyRegistryOverride(image, instance.Spec.Registry)
+}
 
-	tag := instance.Spec.Tailscale.Image.Tag
-	if tag == "" {
-		tag = DefaultImageTag
-	}
-	return repo + ":" + tag
+// IsGatewayProxyEnabled returns true if the built-in gateway reverse proxy
+// sidecar should be injected. Defaults to true when not explicitly set.
+func IsGatewayProxyEnabled(instance *openclawv1alpha1.OpenClawInstance) bool {
+	return instance.Spec.Gateway.Enabled == nil || *instance.Spec.Gateway.Enabled
 }
 
 // IsMetricsEnabled returns true if the metrics endpoint is enabled for the instance
@@ -325,4 +378,72 @@ func ParseQuantity(s, defaultValue string) resource.Quantity {
 		return resource.MustParse(defaultValue)
 	}
 	return q
+}
+
+// ApplyRegistryOverride replaces the registry part of an image reference with
+// the given registry if the registry is not empty.
+//
+// Examples:
+//
+//	ApplyRegistryOverride("ghcr.io/openclaw/openclaw:latest", "my-registry.example.com")
+//	→ "my-registry.example.com/openclaw/openclaw:latest"
+//
+//	ApplyRegistryOverride("ollama/ollama:latest", "my-registry.example.com")
+//	→ "my-registry.example.com/ollama/ollama:latest"
+//
+//	ApplyRegistryOverride("nginx:1.27-alpine", "my-registry.example.com")
+//	→ "my-registry.example.com/nginx:1.27-alpine"
+//
+//	ApplyRegistryOverride("ghcr.io/openclaw/openclaw:latest", "")
+//	→ "ghcr.io/openclaw/openclaw:latest" (unchanged)
+func ApplyRegistryOverride(image, registry string) string {
+	if registry == "" {
+		return image
+	}
+	registry = strings.TrimRight(registry, "/")
+
+	slashIndex := strings.Index(image, "/")
+	if slashIndex == -1 {
+		// No slashes - it's just an image name (possibly with tag/digest)
+		return registry + "/" + image
+	}
+
+	firstPart := image[:slashIndex]
+	if looksLikeRegistry(firstPart) {
+		// Replace the registry part
+		return registry + image[slashIndex:]
+	}
+
+	// The first part isn't a registry, just prepend the registry
+	return registry + "/" + image
+}
+
+// looksLikeRegistry checks if a string looks like a container registry hostname.
+func looksLikeRegistry(s string) bool {
+	// Contains a dot - definitely a registry (e.g., ghcr.io, docker.io)
+	if strings.Contains(s, ".") {
+		return true
+	}
+
+	// IPv6 address (e.g., [::1], [::1]:5000)
+	if strings.HasPrefix(s, "[") && strings.Contains(s, "]") {
+		return true
+	}
+
+	// Has a colon and everything after is digits - it's a registry with port (e.g., localhost:5000)
+	colonIdx := strings.LastIndex(s, ":")
+	if colonIdx != -1 && colonIdx < len(s)-1 {
+		allDigits := true
+		for _, c := range s[colonIdx+1:] {
+			if c < '0' || c > '9' {
+				allDigits = false
+				break
+			}
+		}
+		if allDigits {
+			return true
+		}
+	}
+
+	return false
 }

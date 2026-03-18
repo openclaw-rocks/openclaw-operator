@@ -101,7 +101,7 @@ type OpenClawInstanceReconciler struct {
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=pods,verbs=list
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=prometheusrules,verbs=get;list;watch;create;update;patch;delete
@@ -350,6 +350,11 @@ func (r *OpenClawInstanceReconciler) reconcileResources(ctx context.Context, ins
 		return fmt.Errorf("failed to reconcile ConfigMap: %w", err)
 	}
 	logger.V(1).Info("ConfigMap reconciled")
+
+	if resources.HasGatewayBindConflict(instance) {
+		r.Recorder.Event(instance, corev1.EventTypeWarning, "GatewayBindConflict",
+			"gateway.enabled is false but config sets gateway.bind to loopback - the pod will be unreachable because no proxy is running on the external interface")
+	}
 
 	// 3b. Reconcile Workspace ConfigMap (seed files for workspace)
 	if err := r.reconcileWorkspaceConfigMap(ctx, instance, skillPacks); err != nil {
@@ -757,10 +762,38 @@ func (r *OpenClawInstanceReconciler) reconcileWorkspaceConfigMap(ctx context.Con
 // reconcilePVC reconciles the PersistentVolumeClaim
 func (r *OpenClawInstanceReconciler) reconcilePVC(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) error {
 	// Check if persistence is enabled
-	enabled := instance.Spec.Storage.Persistence.Enabled == nil || *instance.Spec.Storage.Persistence.Enabled
-
-	if !enabled {
+	if !resources.IsPersistenceEnabled(instance) {
 		instance.Status.ManagedResources.PVC = ""
+		return nil
+	}
+
+	// When HPA is enabled, VolumeClaimTemplates on the StatefulSet handle
+	// per-replica PVCs - skip creating the standalone PVC.
+	if resources.IsHPAEnabled(instance) {
+		// Log when existingClaim is set but ignored due to HPA (config choice, not operational issue)
+		if instance.Spec.Storage.Persistence.ExistingClaim != "" {
+			log.FromContext(ctx).V(1).Info("existingClaim ignored when autoScaling is enabled - each replica gets its own PVC via VolumeClaimTemplates",
+				"existingClaim", instance.Spec.Storage.Persistence.ExistingClaim)
+		}
+		// Warn if a standalone PVC exists that is now orphaned by the switch to VCTs.
+		// Only check when status still references the PVC to avoid a needless API call every reconcile.
+		if instance.Status.ManagedResources.PVC != "" {
+			orphanedPVC := &corev1.PersistentVolumeClaim{}
+			pvcName := resources.PVCName(instance)
+			if err := r.Get(ctx, types.NamespacedName{Name: pvcName, Namespace: instance.Namespace}, orphanedPVC); err == nil {
+				r.Recorder.Eventf(instance, corev1.EventTypeWarning, "OrphanedPVC",
+					"Standalone PVC %q is no longer used - per-replica PVCs are now managed by StatefulSet VolumeClaimTemplates. Delete the orphaned PVC manually if no longer needed.",
+					pvcName)
+			}
+			instance.Status.ManagedResources.PVC = ""
+		}
+		meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+			Type:               openclawv1alpha1.ConditionTypeStorageReady,
+			Status:             metav1.ConditionTrue,
+			Reason:             "ManagedByVolumeClaimTemplates",
+			Message:            "Per-replica PVCs managed by StatefulSet VolumeClaimTemplates",
+			ObservedGeneration: instance.Generation,
+		})
 		return nil
 	}
 
@@ -1006,24 +1039,50 @@ func (r *OpenClawInstanceReconciler) reconcileStatefulSet(ctx context.Context, i
 		})
 	}
 
+	// Compute gateway token secret name once for both VCT-change detection and CreateOrUpdate
+	var gwSecretName string
+	if gatewayToken != "" {
+		if instance.Spec.Gateway.ExistingSecret != "" {
+			gwSecretName = instance.Spec.Gateway.ExistingSecret
+		} else {
+			gwSecretName = resources.GatewayTokenSecretName(instance)
+		}
+	}
+
+	// Build the desired StatefulSet once and reuse for both VCT comparison
+	// and the CreateOrUpdate mutate func.
+	desired := resources.BuildStatefulSet(instance, gwSecretName, skillPacks)
+	resources.NormalizeStatefulSet(desired)
+
 	sts := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      resources.StatefulSetName(instance),
 			Namespace: instance.Namespace,
 		},
 	}
-	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sts, func() error {
-		// Pass the gateway token secret name so the env var can be injected
-		var gwSecretName string
-		if gatewayToken != "" {
-			if instance.Spec.Gateway.ExistingSecret != "" {
-				gwSecretName = instance.Spec.Gateway.ExistingSecret
-			} else {
-				gwSecretName = resources.GatewayTokenSecretName(instance)
+
+	// VolumeClaimTemplates are immutable on existing StatefulSets. Detect
+	// transitions (e.g. enabling/disabling HPA with persistence) and
+	// delete+recreate the StatefulSet when VCTs need to change.
+	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(sts), sts); err == nil {
+		if !resources.VolumeClaimTemplatesEqual(sts.Spec.VolumeClaimTemplates, desired.Spec.VolumeClaimTemplates) {
+			log.FromContext(ctx).Info("VolumeClaimTemplates changed, recreating StatefulSet")
+			if err := r.Client.Delete(ctx, sts); err != nil {
+				return fmt.Errorf("deleting StatefulSet for VCT change: %w", err)
 			}
+			// Returning an error triggers exponential backoff; the next reconcile recreates the StatefulSet
+			return fmt.Errorf("StatefulSet deleted for VolumeClaimTemplate change, will recreate on next reconcile")
 		}
-		desired := resources.BuildStatefulSet(instance, gwSecretName, skillPacks)
-		resources.NormalizeStatefulSet(desired)
+	}
+
+	// Reset sts to a clean object for CreateOrUpdate (the Get above may have populated it)
+	sts = &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      resources.StatefulSetName(instance),
+			Namespace: instance.Namespace,
+		},
+	}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sts, func() error {
 		sts.Labels = desired.Labels
 		// Preserve current replica count when HPA manages scaling
 		existingReplicas := sts.Spec.Replicas

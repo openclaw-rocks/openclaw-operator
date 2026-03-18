@@ -256,9 +256,8 @@ func (r *OpenClawInstanceReconciler) driveUpdateStateMachine(ctx context.Context
 
 	// Step 2: Backup if needed
 	needsBackup := instance.Spec.AutoUpdate.BackupBeforeUpdate == nil || *instance.Spec.AutoUpdate.BackupBeforeUpdate
-	persistenceEnabled := instance.Spec.Storage.Persistence.Enabled == nil || *instance.Spec.Storage.Persistence.Enabled
 
-	if needsBackup && persistenceEnabled {
+	if needsBackup && resources.IsPersistenceEnabled(instance) {
 		switch instance.Status.AutoUpdate.UpdatePhase {
 		case "", updatePhaseBackingUp:
 			result, done, err := r.drivePreUpdateBackup(ctx, instance)
@@ -293,6 +292,26 @@ func (r *OpenClawInstanceReconciler) driveUpdateStateMachine(ctx context.Context
 	instance.Spec.Image.Tag = pendingVersion
 	if err := r.Patch(ctx, instance, client.MergeFrom(original)); err != nil {
 		return r.abortUpdate(ctx, instance, fmt.Sprintf("failed to patch image tag: %v", err))
+	}
+
+	// Step 4b: Scale StatefulSet back up if it was scaled down for backup.
+	// The backup flow scales to 0 replicas, and the main reconcile loop won't
+	// reach reconcileResources() while pendingVersion is set (early return),
+	// so we must explicitly restore replicas here (#299).
+	if needsBackup && resources.IsPersistenceEnabled(instance) {
+		sts := &appsv1.StatefulSet{}
+		stsKey := client.ObjectKey{Name: resources.StatefulSetName(instance), Namespace: instance.Namespace}
+		if getErr := r.Get(ctx, stsKey, sts); getErr == nil {
+			if sts.Spec.Replicas != nil && *sts.Spec.Replicas == 0 {
+				one := int32(1)
+				stsOriginal := sts.DeepCopy()
+				sts.Spec.Replicas = &one
+				if patchErr := r.Patch(ctx, sts, client.MergeFrom(stsOriginal)); patchErr != nil {
+					return r.abortUpdate(ctx, instance, fmt.Sprintf("failed to scale StatefulSet back up: %v", patchErr))
+				}
+				logger.Info("Scaled StatefulSet back up after pre-update backup")
+			}
+		}
 	}
 
 	// Step 5: Enter health check phase (keep PendingVersion set)
@@ -430,10 +449,8 @@ func (r *OpenClawInstanceReconciler) driveRollback(ctx context.Context, instance
 	}
 
 	backupPath := instance.Status.AutoUpdate.PreUpdateBackupPath
-	persistenceEnabled := instance.Spec.Storage.Persistence.Enabled == nil || *instance.Spec.Storage.Persistence.Enabled
-
 	// Step 8b: Restore from backup if available and persistence is enabled
-	if backupPath != "" && persistenceEnabled {
+	if backupPath != "" && resources.IsPersistenceEnabled(instance) {
 		result, done, err := r.driveRollbackRestore(ctx, instance, backupPath)
 		if err != nil {
 			logger.Error(err, "Rollback restore failed, reverting image tag only")
@@ -535,6 +552,11 @@ func (r *OpenClawInstanceReconciler) driveRollbackRestore(ctx context.Context, i
 		return ctrl.Result{}, false, fmt.Errorf("failed to get S3 credentials for rollback: %w", err)
 	}
 
+	// Reconcile mirror Secret for secretKeyRef (no-op for env-auth mode)
+	if mirrorErr := r.reconcileS3MirrorSecret(ctx, instance, creds); mirrorErr != nil {
+		return ctrl.Result{}, false, mirrorErr
+	}
+
 	// Create or check restore job
 	jobName := rollbackRestoreJobName(instance)
 	existingJob, err := r.getJob(ctx, jobName, instance.Namespace)
@@ -546,7 +568,7 @@ func (r *OpenClawInstanceReconciler) driveRollbackRestore(ctx context.Context, i
 		pvcName := pvcNameForInstance(instance)
 		labels := backupLabels(instance, "rollback-restore")
 
-		job := buildRcloneJob(jobName, instance.Namespace, pvcName, backupPath, labels, creds, false, instance.Spec.Availability.NodeSelector, instance.Spec.Availability.Tolerations)
+		job := buildRcloneJob(jobName, instance.Namespace, pvcName, backupPath, labels, creds, false, instance.Spec.Availability.NodeSelector, instance.Spec.Availability.Tolerations, instance.Spec.Backup.ServiceAccountName, mirrorSecretName(instance))
 		if err := controllerutil.SetControllerReference(instance, job, r.Scheme); err != nil {
 			return ctrl.Result{}, false, err
 		}
@@ -677,6 +699,11 @@ func (r *OpenClawInstanceReconciler) drivePreUpdateBackup(ctx context.Context, i
 		return ctrl.Result{}, false, fmt.Errorf("failed to get S3 credentials: %w", err)
 	}
 
+	// Reconcile mirror Secret for secretKeyRef (no-op for env-auth mode)
+	if mirrorErr := r.reconcileS3MirrorSecret(ctx, instance, creds); mirrorErr != nil {
+		return ctrl.Result{}, false, mirrorErr
+	}
+
 	// Create or check backup job
 	jobName := preUpdateBackupJobName(instance)
 	existingJob, err := r.getJob(ctx, jobName, instance.Namespace)
@@ -692,7 +719,7 @@ func (r *OpenClawInstanceReconciler) drivePreUpdateBackup(ctx context.Context, i
 		pvcName := pvcNameForInstance(instance)
 		labels := backupLabels(instance, "pre-update-backup")
 
-		job := buildRcloneJob(jobName, instance.Namespace, pvcName, b2Path, labels, creds, true, instance.Spec.Availability.NodeSelector, instance.Spec.Availability.Tolerations)
+		job := buildRcloneJob(jobName, instance.Namespace, pvcName, b2Path, labels, creds, true, instance.Spec.Availability.NodeSelector, instance.Spec.Availability.Tolerations, instance.Spec.Backup.ServiceAccountName, mirrorSecretName(instance))
 		if err := controllerutil.SetControllerReference(instance, job, r.Scheme); err != nil {
 			return ctrl.Result{}, false, err
 		}

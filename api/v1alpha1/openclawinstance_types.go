@@ -9,6 +9,14 @@ import (
 
 // OpenClawInstanceSpec defines the desired state of OpenClawInstance
 type OpenClawInstanceSpec struct {
+	// Registry is the global container image registry override.
+	// When set, this registry replaces the registry part of all container images
+	// used by the instance (main container, sidecars, init containers).
+	// Example: "my-registry.example.com" will change "ghcr.io/openclaw/openclaw:latest"
+	// to "my-registry.example.com/openclaw/openclaw:latest".
+	// +optional
+	Registry string `json:"registry,omitempty"`
+
 	// Image configuration for the OpenClaw container
 	// +optional
 	Image ImageSpec `json:"image,omitempty"`
@@ -136,7 +144,7 @@ type OpenClawInstanceSpec struct {
 	// +optional
 	RuntimeDeps RuntimeDepsSpec `json:"runtimeDeps,omitempty"`
 
-	// Gateway configures the gateway authentication token
+	// Gateway configures the gateway reverse proxy and authentication token
 	// +optional
 	Gateway GatewaySpec `json:"gateway,omitempty"`
 
@@ -148,6 +156,11 @@ type OpenClawInstanceSpec struct {
 	// When enabled, the operator injects RBAC, env vars, and a helper skill into the workspace.
 	// +optional
 	SelfConfigure SelfConfigureSpec `json:"selfConfigure,omitempty"`
+
+	// PodAnnotations are extra annotations merged into the pod template metadata.
+	// Operator-managed annotations (e.g. config-hash) take precedence on conflict.
+	// +optional
+	PodAnnotations map[string]string `json:"podAnnotations,omitempty"`
 }
 
 // ImageSpec defines the container image configuration
@@ -496,6 +509,24 @@ type BackupSpec struct {
 	// Minimum: 5m, Maximum: 24h, Default: 30m.
 	// +optional
 	Timeout string `json:"timeout,omitempty"`
+
+	// ServiceAccountName is the name of the ServiceAccount to use for backup and restore Jobs.
+	// Use this to assign a cloud-provider workload identity ServiceAccount (e.g., AWS IRSA,
+	// GKE Workload Identity, AKS Workload Identity) so backup Jobs can authenticate to the
+	// storage backend without static credentials.
+	// When set, all backup Jobs (pre-delete, pre-update, periodic, and restore) use this SA.
+	// +optional
+	ServiceAccountName string `json:"serviceAccountName,omitempty"`
+
+	// RetentionDays is the number of days to keep daily snapshots in S3.
+	// The periodic backup syncs incrementally to a fixed "latest" path and
+	// takes a daily snapshot. Snapshots older than RetentionDays are pruned
+	// after each successful backup.
+	// +kubebuilder:default=7
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=365
+	// +optional
+	RetentionDays *int32 `json:"retentionDays,omitempty"`
 }
 
 // ChromiumSpec defines the Chromium sidecar configuration
@@ -1103,6 +1134,14 @@ type AvailabilitySpec struct {
 	// TopologySpreadConstraints describes how pods should spread across topology domains
 	// +optional
 	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
+
+	// RuntimeClassName refers to a RuntimeClass object in the cluster,
+	// which should be used to run this pod.
+	// If no RuntimeClass resource matches the named class, the pod will not be run.
+	// If unset or empty, the default container runtime is used.
+	// More info: https://kubernetes.io/docs/concepts/containers/runtime-class/
+	// +optional
+	RuntimeClassName *string `json:"runtimeClassName,omitempty"`
 }
 
 // AutoScalingSpec configures horizontal pod auto-scaling via HPA
@@ -1196,8 +1235,16 @@ type RuntimeDepsSpec struct {
 	Python bool `json:"python,omitempty"`
 }
 
-// GatewaySpec configures the gateway authentication token
+// GatewaySpec configures the gateway reverse proxy and authentication token
 type GatewaySpec struct {
+	// Enabled controls whether the built-in gateway reverse proxy sidecar is
+	// injected into the pod. When false, no proxy container is added and health
+	// probes target the OpenClaw gateway directly on port 18789.
+	// Defaults to true.
+	// +optional
+	// +kubebuilder:default=true
+	Enabled *bool `json:"enabled,omitempty"`
+
 	// ExistingSecret is the name of a user-managed Secret containing the gateway token.
 	// The Secret must have a key named "token". When set, the operator skips
 	// auto-generating a gateway token Secret and uses this Secret instead.

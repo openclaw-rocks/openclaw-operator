@@ -303,10 +303,10 @@ func TestBuildStatefulSet_Defaults(t *testing.T) {
 		t.Error("pod security context: seccomp profile should be RuntimeDefault")
 	}
 
-	// Containers (main + gateway-proxy)
+	// Containers (main + gateway-proxy + otel-collector; metrics enabled by default)
 	containers := sts.Spec.Template.Spec.Containers
-	if len(containers) != 2 {
-		t.Fatalf("expected 2 containers (main + gateway-proxy), got %d", len(containers))
+	if len(containers) != 3 {
+		t.Fatalf("expected 3 containers (main + gateway-proxy + otel-collector), got %d", len(containers))
 	}
 
 	main := containers[0]
@@ -343,13 +343,12 @@ func TestBuildStatefulSet_Defaults(t *testing.T) {
 		t.Error("HOME env var should be set to /home/openclaw")
 	}
 
-	// Ports (gateway, canvas, metrics - metrics enabled by default)
-	if len(main.Ports) != 3 {
-		t.Fatalf("expected 3 ports, got %d", len(main.Ports))
+	// Ports (gateway, canvas - metrics port is on the OTel collector sidecar)
+	if len(main.Ports) != 2 {
+		t.Fatalf("expected 2 ports, got %d", len(main.Ports))
 	}
 	assertContainerPort(t, main.Ports, "gateway", GatewayPort)
 	assertContainerPort(t, main.Ports, "canvas", CanvasPort)
-	assertContainerPort(t, main.Ports, "metrics", DefaultMetricsPort)
 
 	// Default resources
 	cpuReq := main.Resources.Requests[corev1.ResourceCPU]
@@ -403,8 +402,11 @@ func TestBuildStatefulSet_Defaults(t *testing.T) {
 	}
 
 	// Startup probe defaults
-	if main.StartupProbe.FailureThreshold != 30 {
-		t.Errorf("startup probe failureThreshold = %d, want 30", main.StartupProbe.FailureThreshold)
+	if main.StartupProbe.InitialDelaySeconds != 5 {
+		t.Errorf("startup probe initialDelaySeconds = %d, want 5", main.StartupProbe.InitialDelaySeconds)
+	}
+	if main.StartupProbe.FailureThreshold != 60 {
+		t.Errorf("startup probe failureThreshold = %d, want 60", main.StartupProbe.FailureThreshold)
 	}
 
 	// Data volume mount
@@ -432,8 +434,8 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 	containers := sts.Spec.Template.Spec.Containers
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
-	if len(containers) != 2 {
-		t.Fatalf("expected 2 containers (main + gateway-proxy), got %d", len(containers))
+	if len(containers) != 3 {
+		t.Fatalf("expected 3 containers (main + gateway-proxy + otel-collector), got %d", len(containers))
 	}
 
 	// Find chromium in init containers (native sidecar)
@@ -475,8 +477,8 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 	for _, env := range chromium.Env {
 		if env.Name == "PORT" {
 			foundPortEnv = true
-			if env.Value != fmt.Sprintf("%d", ChromiumPort) {
-				t.Errorf("chromium PORT env = %q, want %q", env.Value, fmt.Sprintf("%d", ChromiumPort))
+			if env.Value != fmt.Sprintf("%d", BrowserlessInternalPort) {
+				t.Errorf("chromium PORT env = %q, want %q", env.Value, fmt.Sprintf("%d", BrowserlessInternalPort))
 			}
 		}
 		if env.Name == "HOST" {
@@ -502,11 +504,11 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 	if len(chromium.Ports) != 1 {
 		t.Fatalf("chromium container should have 1 port, got %d", len(chromium.Ports))
 	}
-	if chromium.Ports[0].ContainerPort != ChromiumPort {
-		t.Errorf("chromium port = %d, want %d", chromium.Ports[0].ContainerPort, ChromiumPort)
+	if chromium.Ports[0].ContainerPort != BrowserlessInternalPort {
+		t.Errorf("chromium port = %d, want %d", chromium.Ports[0].ContainerPort, BrowserlessInternalPort)
 	}
-	if chromium.Ports[0].Name != "cdp" {
-		t.Errorf("chromium port name = %q, want %q", chromium.Ports[0].Name, "cdp")
+	if chromium.Ports[0].Name != "browserless" {
+		t.Errorf("chromium port name = %q, want %q", chromium.Ports[0].Name, "browserless")
 	}
 
 	// Chromium security context
@@ -607,7 +609,8 @@ func TestBuildStatefulSet_ChromiumExtraArgs(t *testing.T) {
 		t.Errorf("expected no container Args, got %v", chromium.Args)
 	}
 
-	// DEFAULT_LAUNCH_ARGS no longer exists; ExtraArgs are currently not applied (TODO)
+	// DEFAULT_LAUNCH_ARGS is deprecated; ExtraArgs are injected via the
+	// chromium-proxy's nginx config (launch query parameter on /chromium endpoint).
 	for _, env := range chromium.Env {
 		if env.Name == "DEFAULT_LAUNCH_ARGS" {
 			t.Error("DEFAULT_LAUNCH_ARGS env var should not be set on chromium container")
@@ -1264,6 +1267,78 @@ func TestBuildStatefulSet_TopologySpreadConstraints_Empty(t *testing.T) {
 	}
 }
 
+func TestBuildStatefulSet_RuntimeClassName(t *testing.T) {
+	instance := newTestInstance("rtc-test")
+	instance.Spec.Availability.RuntimeClassName = Ptr("kata-fc")
+
+	sts := BuildStatefulSet(instance, "", nil)
+	podSpec := sts.Spec.Template.Spec
+
+	if podSpec.RuntimeClassName == nil {
+		t.Fatal("expected RuntimeClassName to be set")
+	}
+	if *podSpec.RuntimeClassName != "kata-fc" {
+		t.Errorf("RuntimeClassName = %q, want %q", *podSpec.RuntimeClassName, "kata-fc")
+	}
+}
+
+func TestBuildStatefulSet_RuntimeClassName_Unset(t *testing.T) {
+	instance := newTestInstance("rtc-unset")
+
+	sts := BuildStatefulSet(instance, "", nil)
+	podSpec := sts.Spec.Template.Spec
+
+	if podSpec.RuntimeClassName != nil {
+		t.Errorf("expected nil RuntimeClassName, got %q", *podSpec.RuntimeClassName)
+	}
+}
+
+func TestBuildStatefulSet_PodAnnotations_UserAnnotationsPresent(t *testing.T) {
+	instance := newTestInstance("pod-ann-test")
+	instance.Spec.PodAnnotations = map[string]string{
+		"cluster-autoscaler.kubernetes.io/safe-to-evict": "false",
+		"custom.io/label": "value",
+	}
+
+	sts := BuildStatefulSet(instance, "", nil)
+	ann := sts.Spec.Template.Annotations
+
+	if ann["cluster-autoscaler.kubernetes.io/safe-to-evict"] != "false" {
+		t.Errorf("expected safe-to-evict=false, got %q", ann["cluster-autoscaler.kubernetes.io/safe-to-evict"])
+	}
+	if ann["custom.io/label"] != "value" {
+		t.Errorf("expected custom.io/label=value, got %q", ann["custom.io/label"])
+	}
+}
+
+func TestBuildStatefulSet_PodAnnotations_OperatorKeyWins(t *testing.T) {
+	instance := newTestInstance("pod-ann-conflict")
+	instance.Spec.PodAnnotations = map[string]string{
+		"openclaw.rocks/config-hash": "user-supplied-value",
+	}
+
+	sts := BuildStatefulSet(instance, "", nil)
+	ann := sts.Spec.Template.Annotations
+
+	if ann["openclaw.rocks/config-hash"] == "user-supplied-value" {
+		t.Error("operator-managed config-hash should not be overridable by user podAnnotations")
+	}
+	if ann["openclaw.rocks/config-hash"] == "" {
+		t.Error("config-hash annotation should still be present")
+	}
+}
+
+func TestBuildStatefulSet_PodAnnotations_NilStillHasConfigHash(t *testing.T) {
+	instance := newTestInstance("pod-ann-nil")
+
+	sts := BuildStatefulSet(instance, "", nil)
+	ann := sts.Spec.Template.Annotations
+
+	if _, ok := ann["openclaw.rocks/config-hash"]; !ok {
+		t.Error("config-hash annotation must always be present even when podAnnotations is nil")
+	}
+}
+
 func TestBuildStatefulSet_EnvAndEnvFrom(t *testing.T) {
 	instance := newTestInstance("env-test")
 	instance.Spec.Env = []corev1.EnvVar{
@@ -1281,7 +1356,7 @@ func TestBuildStatefulSet_EnvAndEnvFrom(t *testing.T) {
 	main := sts.Spec.Template.Spec.Containers[0]
 
 	names := envNames(main.Env)
-	expectedPrefix := []string{"HOME", "OPENCLAW_DISABLE_BONJOUR", "NPM_CONFIG_PREFIX", "NPM_CONFIG_CACHE", "PIP_USER"}
+	expectedPrefix := []string{"HOME", "OPENCLAW_DISABLE_BONJOUR", "OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS", "NPM_CONFIG_PREFIX", "NPM_CONFIG_CACHE", "PIP_USER"}
 	for i, want := range expectedPrefix {
 		if i >= len(names) || names[i] != want {
 			t.Fatalf("env vars should start with %v, got %v", expectedPrefix, names)
@@ -1547,12 +1622,13 @@ func TestBuildNetworkPolicy_Default(t *testing.T) {
 		t.Errorf("ingress namespace selector = %v, want test-ns", nsSel.MatchLabels)
 	}
 
-	// Ingress ports - gateway proxy and canvas proxy
-	if len(firstIngress.Ports) != 2 {
-		t.Fatalf("expected 2 ingress ports, got %d", len(firstIngress.Ports))
+	// Ingress ports - gateway proxy, canvas proxy, and metrics (enabled by default)
+	if len(firstIngress.Ports) != 3 {
+		t.Fatalf("expected 3 ingress ports, got %d", len(firstIngress.Ports))
 	}
 	assertNPPort(t, firstIngress.Ports, GatewayProxyPort)
 	assertNPPort(t, firstIngress.Ports, CanvasProxyPort)
+	assertNPPort(t, firstIngress.Ports, int(DefaultMetricsPort))
 
 	// Egress rules - DNS (UDP+TCP 53) and HTTPS (443)
 	if len(np.Spec.Egress) < 2 {
@@ -1602,13 +1678,14 @@ func TestBuildNetworkPolicy_CustomServicePorts(t *testing.T) {
 
 	np := BuildNetworkPolicy(instance)
 
-	// Same-namespace ingress rule should use custom ports
+	// Same-namespace ingress rule should use custom ports + metrics (enabled by default)
 	firstIngress := np.Spec.Ingress[0]
-	if len(firstIngress.Ports) != 2 {
-		t.Fatalf("expected 2 ingress ports for custom service ports, got %d", len(firstIngress.Ports))
+	if len(firstIngress.Ports) != 3 {
+		t.Fatalf("expected 3 ingress ports for custom service ports + metrics, got %d", len(firstIngress.Ports))
 	}
 	assertNPPort(t, firstIngress.Ports, 3978)
 	assertNPPort(t, firstIngress.Ports, 50051)
+	assertNPPort(t, firstIngress.Ports, int(DefaultMetricsPort))
 }
 
 func TestBuildNetworkPolicy_CustomServicePortsWithTargetPort(t *testing.T) {
@@ -1620,11 +1697,12 @@ func TestBuildNetworkPolicy_CustomServicePortsWithTargetPort(t *testing.T) {
 	np := BuildNetworkPolicy(instance)
 
 	firstIngress := np.Spec.Ingress[0]
-	if len(firstIngress.Ports) != 1 {
-		t.Fatalf("expected 1 ingress port, got %d", len(firstIngress.Ports))
+	if len(firstIngress.Ports) != 2 {
+		t.Fatalf("expected 2 ingress ports (custom + metrics), got %d", len(firstIngress.Ports))
 	}
 	// NetworkPolicy should use targetPort (container port), not service port
 	assertNPPort(t, firstIngress.Ports, 3978)
+	assertNPPort(t, firstIngress.Ports, int(DefaultMetricsPort))
 }
 
 func TestBuildNetworkPolicy_CustomPortsApplyToAllRules(t *testing.T) {
@@ -1642,10 +1720,11 @@ func TestBuildNetworkPolicy_CustomPortsApplyToAllRules(t *testing.T) {
 		t.Fatalf("expected 3 ingress rules, got %d", len(np.Spec.Ingress))
 	}
 	for i, rule := range np.Spec.Ingress {
-		if len(rule.Ports) != 1 {
-			t.Fatalf("rule %d: expected 1 port, got %d", i, len(rule.Ports))
+		if len(rule.Ports) != 2 {
+			t.Fatalf("rule %d: expected 2 ports (custom + metrics), got %d", i, len(rule.Ports))
 		}
 		assertNPPort(t, rule.Ports, 8080)
+		assertNPPort(t, rule.Ports, int(DefaultMetricsPort))
 	}
 }
 
@@ -2189,6 +2268,187 @@ func TestBuildConfigMapFromBytes_JSON5Passthrough(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// OTel metrics config injection tests (#356, #373)
+// The operator injects diagnostics.otel (NOT diagnostics.metrics) and adds
+// an OTel Collector sidecar that exposes a Prometheus scrape endpoint.
+// ---------------------------------------------------------------------------
+
+func TestBuildConfigMap_NoDiagnosticsMetricsInjected(t *testing.T) {
+	instance := newTestInstance("cm-no-metrics-inject")
+	cm := BuildConfigMap(instance, "", nil)
+
+	content := cm.Data["openclaw.json"]
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config: %v", err)
+	}
+
+	diag, ok := parsed["diagnostics"].(map[string]interface{})
+	if ok {
+		if _, hasMetrics := diag["metrics"]; hasMetrics {
+			t.Error("diagnostics.metrics must not be injected - OpenClaw rejects this key")
+		}
+	}
+}
+
+func TestEnrichConfigWithOTelMetrics(t *testing.T) {
+	input := []byte(`{}`)
+	out, err := enrichConfigWithOTelMetrics(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	diag, ok := cfg["diagnostics"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected diagnostics key")
+	}
+	otel, ok := diag["otel"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected diagnostics.otel key")
+	}
+	if otel["metrics"] != true {
+		t.Errorf("diagnostics.otel.metrics = %v, want true", otel["metrics"])
+	}
+	expectedEndpoint := fmt.Sprintf("http://localhost:%d", OTelHTTPReceiverPort)
+	if otel["endpoint"] != expectedEndpoint {
+		t.Errorf("diagnostics.otel.endpoint = %v, want %s", otel["endpoint"], expectedEndpoint)
+	}
+}
+
+func TestEnrichConfigWithOTelMetrics_PreservesUserOverride(t *testing.T) {
+	input := []byte(`{"diagnostics":{"otel":{"metrics":true,"endpoint":"http://my-collector:4318"}}}`)
+	out, err := enrichConfigWithOTelMetrics(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	diag := cfg["diagnostics"].(map[string]interface{})
+	otel := diag["otel"].(map[string]interface{})
+	if otel["endpoint"] != "http://my-collector:4318" {
+		t.Errorf("user-set endpoint should be preserved, got %v", otel["endpoint"])
+	}
+}
+
+func TestEnrichConfigWithOTelMetrics_DisabledNoInjection(t *testing.T) {
+	instance := newTestInstance("cm-metrics-disabled")
+	disabled := false
+	instance.Spec.Observability.Metrics.Enabled = &disabled
+	cm := BuildConfigMap(instance, "", nil)
+
+	content := cm.Data["openclaw.json"]
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config: %v", err)
+	}
+
+	if diag, ok := parsed["diagnostics"].(map[string]interface{}); ok {
+		if _, hasOTel := diag["otel"]; hasOTel {
+			t.Error("diagnostics.otel should not be injected when metrics.enabled=false")
+		}
+	}
+}
+
+func TestBuildConfigMap_OTelCollectorConfig(t *testing.T) {
+	instance := newTestInstance("cm-otel-config")
+	cm := BuildConfigMap(instance, "", nil)
+
+	config, ok := cm.Data[OTelCollectorConfigKey]
+	if !ok {
+		t.Fatal("ConfigMap should have OTel Collector config key")
+	}
+	if !strings.Contains(config, "otlp:") {
+		t.Error("OTel config should contain OTLP receiver")
+	}
+	if !strings.Contains(config, "prometheus:") {
+		t.Error("OTel config should contain Prometheus exporter")
+	}
+	if !strings.Contains(config, fmt.Sprintf("0.0.0.0:%d", DefaultMetricsPort)) {
+		t.Errorf("OTel config should contain Prometheus exporter on port %d", DefaultMetricsPort)
+	}
+}
+
+func TestBuildConfigMap_MetricsDisabled_NoOTelConfig(t *testing.T) {
+	instance := newTestInstance("cm-no-otel-config")
+	disabled := false
+	instance.Spec.Observability.Metrics.Enabled = &disabled
+	cm := BuildConfigMap(instance, "", nil)
+
+	if _, ok := cm.Data[OTelCollectorConfigKey]; ok {
+		t.Error("OTel Collector config should not be present when metrics disabled")
+	}
+}
+
+func TestBuildStatefulSet_OTelCollectorContainer(t *testing.T) {
+	instance := newTestInstance("sts-otel-collector")
+	sts := BuildStatefulSet(instance, "", nil)
+
+	var found bool
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		if c.Name != "otel-collector" {
+			continue
+		}
+		found = true
+		// Verify metrics port is on the collector
+		assertContainerPort(t, c.Ports, "metrics", DefaultMetricsPort)
+		// Verify config volume mount
+		var hasConfigMount bool
+		for _, vm := range c.VolumeMounts {
+			if vm.SubPath == OTelCollectorConfigKey {
+				hasConfigMount = true
+			}
+		}
+		if !hasConfigMount {
+			t.Error("otel-collector should mount OTel Collector config")
+		}
+		// Verify security context
+		if !*c.SecurityContext.ReadOnlyRootFilesystem {
+			t.Error("otel-collector should have read-only rootfs")
+		}
+		if !*c.SecurityContext.RunAsNonRoot {
+			t.Error("otel-collector should run as non-root")
+		}
+	}
+	if !found {
+		t.Error("StatefulSet should have otel-collector container when metrics enabled")
+	}
+}
+
+func TestBuildStatefulSet_MetricsDisabled_NoOTelCollector(t *testing.T) {
+	instance := newTestInstance("sts-no-otel-collector")
+	disabled := false
+	instance.Spec.Observability.Metrics.Enabled = &disabled
+	sts := BuildStatefulSet(instance, "", nil)
+
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		if c.Name == "otel-collector" {
+			t.Error("otel-collector should not be present when metrics disabled")
+		}
+	}
+}
+
+func TestBuildStatefulSet_MainContainerNoMetricsPort(t *testing.T) {
+	instance := newTestInstance("sts-main-no-metrics")
+	sts := BuildStatefulSet(instance, "", nil)
+
+	main := sts.Spec.Template.Spec.Containers[0]
+	for _, p := range main.Ports {
+		if p.Name == "metrics" {
+			t.Error("main container should not have metrics port (it belongs on otel-collector)")
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // enrichConfigWithGatewayBind tests
 // ---------------------------------------------------------------------------
 
@@ -2358,6 +2618,56 @@ func TestEnrichConfigWithDeviceAuth_InvalidJSON(t *testing.T) {
 
 	if !bytes.Equal(out, input) {
 		t.Errorf("invalid JSON should be returned unchanged")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Handshake timeout env var tests
+// ---------------------------------------------------------------------------
+
+func TestHandshakeTimeoutEnvVar(t *testing.T) {
+	instance := newTestInstance("handshake-test")
+	env := buildMainEnv(instance, "test-token-secret")
+	want := fmt.Sprintf("%d", DefaultHandshakeTimeoutMs)
+
+	var found bool
+	for _, e := range env {
+		if e.Name == "OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS" {
+			found = true
+			if e.Value != want {
+				t.Errorf("OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS = %q, want %q", e.Value, want)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Error("OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS env var not found")
+	}
+}
+
+func TestHandshakeTimeoutEnvVar_UserOverrideWins(t *testing.T) {
+	instance := newTestInstance("handshake-override")
+	instance.Spec.Env = []corev1.EnvVar{
+		{Name: "OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS", Value: "5000"},
+	}
+	sts := BuildStatefulSet(instance, "test-token-secret", nil)
+	mainContainer := sts.Spec.Template.Spec.Containers[0]
+
+	var count int
+	var lastValue string
+	for _, e := range mainContainer.Env {
+		if e.Name == "OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS" {
+			count++
+			lastValue = e.Value
+		}
+	}
+	// User env vars are appended after operator defaults; K8s uses the
+	// last value when duplicates exist, so the user's value wins.
+	if lastValue != "5000" {
+		t.Errorf("last OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS = %q, want 5000 (user override)", lastValue)
+	}
+	if count < 1 {
+		t.Error("OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS env var not found")
 	}
 }
 
@@ -4186,12 +4496,14 @@ func TestBuildWorkspaceConfigMap_Nil(t *testing.T) {
 	instance.Spec.Workspace = nil
 
 	cm := BuildWorkspaceConfigMap(instance, nil)
-	// ENVIRONMENT.md is always injected
+	// Operator files are always injected
 	if cm == nil {
-		t.Fatal("expected non-nil ConfigMap (ENVIRONMENT.md is always injected)")
+		t.Fatal("expected non-nil ConfigMap (operator files are always injected)")
 	}
-	if _, ok := cm.Data["ENVIRONMENT.md"]; !ok {
-		t.Error("expected ENVIRONMENT.md in workspace ConfigMap")
+	for _, f := range []string{"ENVIRONMENT.md", "BOOTSTRAP.md"} {
+		if _, ok := cm.Data[f]; !ok {
+			t.Errorf("expected %s in workspace ConfigMap", f)
+		}
 	}
 }
 
@@ -4202,12 +4514,14 @@ func TestBuildWorkspaceConfigMap_EmptyFiles(t *testing.T) {
 	}
 
 	cm := BuildWorkspaceConfigMap(instance, nil)
-	// ENVIRONMENT.md is always injected
+	// Operator files are always injected
 	if cm == nil {
-		t.Fatal("expected non-nil ConfigMap (ENVIRONMENT.md is always injected)")
+		t.Fatal("expected non-nil ConfigMap (operator files are always injected)")
 	}
-	if _, ok := cm.Data["ENVIRONMENT.md"]; !ok {
-		t.Error("expected ENVIRONMENT.md in workspace ConfigMap")
+	for _, f := range []string{"ENVIRONMENT.md", "BOOTSTRAP.md"} {
+		if _, ok := cm.Data[f]; !ok {
+			t.Errorf("expected %s in workspace ConfigMap", f)
+		}
 	}
 }
 
@@ -4230,9 +4544,9 @@ func TestBuildWorkspaceConfigMap_WithFiles(t *testing.T) {
 	if cm.Namespace != "test-ns" {
 		t.Errorf("ConfigMap namespace = %q, want %q", cm.Namespace, "test-ns")
 	}
-	// 2 user files + ENVIRONMENT.md = 3
-	if len(cm.Data) != 3 {
-		t.Fatalf("expected 3 data entries (2 user + ENVIRONMENT.md), got %d", len(cm.Data))
+	// 2 user files + ENVIRONMENT.md + BOOTSTRAP.md = 4
+	if len(cm.Data) != 4 {
+		t.Fatalf("expected 4 data entries (2 user + ENVIRONMENT.md + BOOTSTRAP.md), got %d", len(cm.Data))
 	}
 	if cm.Data["SOUL.md"] != "# Personality\nBe helpful." {
 		t.Errorf("SOUL.md content mismatch")
@@ -4240,8 +4554,10 @@ func TestBuildWorkspaceConfigMap_WithFiles(t *testing.T) {
 	if cm.Data["AGENTS.md"] != "# Agents config" {
 		t.Errorf("AGENTS.md content mismatch")
 	}
-	if _, ok := cm.Data["ENVIRONMENT.md"]; !ok {
-		t.Error("expected ENVIRONMENT.md in workspace ConfigMap")
+	for _, f := range []string{"ENVIRONMENT.md", "BOOTSTRAP.md"} {
+		if _, ok := cm.Data[f]; !ok {
+			t.Errorf("expected %s in workspace ConfigMap", f)
+		}
 	}
 }
 
@@ -4274,8 +4590,8 @@ func TestShellQuote(t *testing.T) {
 	}
 }
 
-// envSeedLines is the init script suffix that seeds ENVIRONMENT.md (always present).
-const envSeedLines = "mkdir -p /data/workspace\n[ -f /data/workspace/'ENVIRONMENT.md' ] || cp /workspace-init/'ENVIRONMENT.md' /data/workspace/'ENVIRONMENT.md'"
+// operatorSeedLines is the init script suffix that seeds operator-injected workspace files (always present).
+const operatorSeedLines = "mkdir -p /data/workspace\n[ -f /data/workspace/'BOOTSTRAP.md' ] || cp /workspace-init/'BOOTSTRAP.md' /data/workspace/'BOOTSTRAP.md'\n[ -f /data/workspace/'ENVIRONMENT.md' ] || cp /workspace-init/'ENVIRONMENT.md' /data/workspace/'ENVIRONMENT.md'"
 
 func TestBuildInitScript_ConfigOnly(t *testing.T) {
 	instance := newTestInstance("init-config-only")
@@ -4284,7 +4600,7 @@ func TestBuildInitScript_ConfigOnly(t *testing.T) {
 	}
 
 	script := BuildInitScript(instance, nil)
-	expected := "cp /config/'openclaw.json' /data/openclaw.json\n" + envSeedLines
+	expected := "cp /config/'openclaw.json' /data/openclaw.json\n" + operatorSeedLines
 	if script != expected {
 		t.Errorf("unexpected script:\ngot:  %q\nwant: %q", script, expected)
 	}
@@ -4300,7 +4616,7 @@ func TestBuildInitScript_WorkspaceOnly(t *testing.T) {
 	}
 
 	script := BuildInitScript(instance, nil)
-	expected := "cp /config/'openclaw.json' /data/openclaw.json\nmkdir -p /data/workspace/'memory'\nmkdir -p /data/workspace\n[ -f /data/workspace/'ENVIRONMENT.md' ] || cp /workspace-init/'ENVIRONMENT.md' /data/workspace/'ENVIRONMENT.md'\n[ -f /data/workspace/'SOUL.md' ] || cp /workspace-init/'SOUL.md' /data/workspace/'SOUL.md'"
+	expected := "cp /config/'openclaw.json' /data/openclaw.json\nmkdir -p /data/workspace/'memory'\nmkdir -p /data/workspace\n[ -f /data/workspace/'BOOTSTRAP.md' ] || cp /workspace-init/'BOOTSTRAP.md' /data/workspace/'BOOTSTRAP.md'\n[ -f /data/workspace/'ENVIRONMENT.md' ] || cp /workspace-init/'ENVIRONMENT.md' /data/workspace/'ENVIRONMENT.md'\n[ -f /data/workspace/'SOUL.md' ] || cp /workspace-init/'SOUL.md' /data/workspace/'SOUL.md'"
 	if script != expected {
 		t.Errorf("unexpected script:\ngot:  %q\nwant: %q", script, expected)
 	}
@@ -4321,10 +4637,10 @@ func TestBuildInitScript_Both(t *testing.T) {
 
 	script := BuildInitScript(instance, nil)
 
-	// Verify all expected lines are present (sorted order, ENVIRONMENT.md included)
+	// Verify all expected lines are present (sorted order, operator files included)
 	lines := strings.Split(script, "\n")
-	if len(lines) != 7 {
-		t.Fatalf("expected 7 lines, got %d:\n%s", len(lines), script)
+	if len(lines) != 8 {
+		t.Fatalf("expected 8 lines, got %d:\n%s", len(lines), script)
 	}
 	if lines[0] != "cp /config/'openclaw.json' /data/openclaw.json" {
 		t.Errorf("line 0: %q", lines[0])
@@ -4341,11 +4657,14 @@ func TestBuildInitScript_Both(t *testing.T) {
 	if lines[4] != "[ -f /data/workspace/'AGENTS.md' ] || cp /workspace-init/'AGENTS.md' /data/workspace/'AGENTS.md'" {
 		t.Errorf("line 4: %q", lines[4])
 	}
-	if lines[5] != "[ -f /data/workspace/'ENVIRONMENT.md' ] || cp /workspace-init/'ENVIRONMENT.md' /data/workspace/'ENVIRONMENT.md'" {
+	if lines[5] != "[ -f /data/workspace/'BOOTSTRAP.md' ] || cp /workspace-init/'BOOTSTRAP.md' /data/workspace/'BOOTSTRAP.md'" {
 		t.Errorf("line 5: %q", lines[5])
 	}
-	if lines[6] != "[ -f /data/workspace/'SOUL.md' ] || cp /workspace-init/'SOUL.md' /data/workspace/'SOUL.md'" {
+	if lines[6] != "[ -f /data/workspace/'ENVIRONMENT.md' ] || cp /workspace-init/'ENVIRONMENT.md' /data/workspace/'ENVIRONMENT.md'" {
 		t.Errorf("line 6: %q", lines[6])
+	}
+	if lines[7] != "[ -f /data/workspace/'SOUL.md' ] || cp /workspace-init/'SOUL.md' /data/workspace/'SOUL.md'" {
+		t.Errorf("line 7: %q", lines[7])
 	}
 }
 
@@ -4356,7 +4675,7 @@ func TestBuildInitScript_DirsOnly(t *testing.T) {
 	}
 
 	script := BuildInitScript(instance, nil)
-	expected := "cp /config/'openclaw.json' /data/openclaw.json\nmkdir -p /data/workspace/'memory'\nmkdir -p /data/workspace/'tools/scripts'\n" + envSeedLines
+	expected := "cp /config/'openclaw.json' /data/openclaw.json\nmkdir -p /data/workspace/'memory'\nmkdir -p /data/workspace/'tools/scripts'\n" + operatorSeedLines
 	if script != expected {
 		t.Errorf("unexpected script:\ngot:  %q\nwant: %q", script, expected)
 	}
@@ -4371,7 +4690,7 @@ func TestBuildInitScript_ShellQuotesSpecialChars(t *testing.T) {
 	}
 
 	script := BuildInitScript(instance, nil)
-	expected := "cp /config/'openclaw.json' /data/openclaw.json\nmkdir -p /data/workspace\n[ -f /data/workspace/'ENVIRONMENT.md' ] || cp /workspace-init/'ENVIRONMENT.md' /data/workspace/'ENVIRONMENT.md'\n[ -f /data/workspace/'it'\\''s a file.md' ] || cp /workspace-init/'it'\\''s a file.md' /data/workspace/'it'\\''s a file.md'"
+	expected := "cp /config/'openclaw.json' /data/openclaw.json\nmkdir -p /data/workspace\n[ -f /data/workspace/'BOOTSTRAP.md' ] || cp /workspace-init/'BOOTSTRAP.md' /data/workspace/'BOOTSTRAP.md'\n[ -f /data/workspace/'ENVIRONMENT.md' ] || cp /workspace-init/'ENVIRONMENT.md' /data/workspace/'ENVIRONMENT.md'\n[ -f /data/workspace/'it'\\''s a file.md' ] || cp /workspace-init/'it'\\''s a file.md' /data/workspace/'it'\\''s a file.md'"
 	if script != expected {
 		t.Errorf("unexpected script:\ngot:  %q\nwant: %q", script, expected)
 	}
@@ -4397,7 +4716,7 @@ func TestBuildInitScript_VanillaDeployment(t *testing.T) {
 	instance := newTestInstance("init-empty")
 	script := BuildInitScript(instance, nil)
 	// Vanilla deployments get config copy + ENVIRONMENT.md seeding
-	expected := "cp /config/'openclaw.json' /data/openclaw.json\n" + envSeedLines
+	expected := "cp /config/'openclaw.json' /data/openclaw.json\n" + operatorSeedLines
 	if script != expected {
 		t.Errorf("unexpected script:\ngot:  %q\nwant: %q", script, expected)
 	}
@@ -4778,9 +5097,39 @@ func TestBuildInitScript_MergeMode_NoConfig(t *testing.T) {
 // Feature 3: Declarative skill installation tests
 // ---------------------------------------------------------------------------
 
+func TestNormalizeClawHubSlug(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"bare slug", "mcp-server-fetch", "mcp-server-fetch"},
+		{"@owner/slug", "@anthropic/mcp-server-fetch", "mcp-server-fetch"},
+		{"@slug (no owner)", "@mcp-server-fetch", "mcp-server-fetch"},
+		{"nested path", "@org/sub/skill-name", "skill-name"},
+		{"npm: passthrough", "npm:@openclaw/matrix", "npm:@openclaw/matrix"},
+		{"pack: passthrough", "pack:openclaw-rocks/skills/image-gen", "pack:openclaw-rocks/skills/image-gen"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeClawHubSlug(tt.input); got != tt.want {
+				t.Errorf("normalizeClawHubSlug(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseSkillEntry_ClawHub(t *testing.T) {
 	got := parseSkillEntry("@anthropic/mcp-server-fetch")
-	want := "_install_skill '@anthropic/mcp-server-fetch'"
+	want := "_install_skill 'mcp-server-fetch'"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestParseSkillEntry_ClawHub_BareSlug(t *testing.T) {
+	got := parseSkillEntry("mcp-server-fetch")
+	want := "_install_skill 'mcp-server-fetch'"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -4788,7 +5137,7 @@ func TestParseSkillEntry_ClawHub(t *testing.T) {
 
 func TestParseSkillEntry_Npm(t *testing.T) {
 	got := parseSkillEntry("npm:@openclaw/matrix")
-	want := "cd /home/openclaw/.openclaw && npm install '@openclaw/matrix'"
+	want := "npm install -g '@openclaw/matrix'"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -4796,7 +5145,7 @@ func TestParseSkillEntry_Npm(t *testing.T) {
 
 func TestParseSkillEntry_NpmUnscoped(t *testing.T) {
 	got := parseSkillEntry("npm:some-package")
-	want := "cd /home/openclaw/.openclaw && npm install 'some-package'"
+	want := "npm install -g 'some-package'"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -4819,14 +5168,17 @@ func TestBuildSkillsScript_WithSkills(t *testing.T) {
 	if !strings.HasPrefix(script, "set -e\n") {
 		t.Error("script should start with set -e")
 	}
+	if !strings.Contains(script, clawHubSkillsSetup) {
+		t.Error("script should contain clawhub skills setup (PVC redirect)")
+	}
 	if !strings.Contains(script, skillInstallWrapper) {
 		t.Error("script should contain the _install_skill wrapper")
 	}
-	if !strings.Contains(script, "_install_skill '@anthropic/mcp-server-fetch'") {
-		t.Error("script should contain _install_skill for @anthropic/mcp-server-fetch")
+	if !strings.Contains(script, "_install_skill 'mcp-server-fetch'") {
+		t.Error("script should contain _install_skill for mcp-server-fetch (normalized from @anthropic/mcp-server-fetch)")
 	}
-	if !strings.Contains(script, "_install_skill '@github/copilot-skill'") {
-		t.Error("script should contain _install_skill for @github/copilot-skill")
+	if !strings.Contains(script, "_install_skill 'copilot-skill'") {
+		t.Error("script should contain _install_skill for copilot-skill (normalized from @github/copilot-skill)")
 	}
 }
 
@@ -4843,17 +5195,20 @@ func TestBuildSkillsScript_MixedPrefixes(t *testing.T) {
 	if !strings.HasPrefix(script, "set -e\n") {
 		t.Error("script should start with set -e")
 	}
+	if !strings.Contains(script, clawHubSkillsSetup) {
+		t.Error("script should contain clawhub skills setup (PVC redirect)")
+	}
 	if !strings.Contains(script, skillInstallWrapper) {
 		t.Error("script should contain the _install_skill wrapper (has clawhub skills)")
 	}
-	if !strings.Contains(script, "_install_skill '@anthropic/mcp-server-fetch'") {
-		t.Error("script should contain _install_skill for clawhub skill")
+	if !strings.Contains(script, "_install_skill 'mcp-server-fetch'") {
+		t.Error("script should contain _install_skill for clawhub skill (normalized)")
 	}
-	if !strings.Contains(script, "cd /home/openclaw/.openclaw && npm install '@openclaw/matrix'") {
-		t.Error("script should contain npm install for @openclaw/matrix")
+	if !strings.Contains(script, "npm install -g '@openclaw/matrix'") {
+		t.Error("script should contain npm install -g for @openclaw/matrix")
 	}
-	if !strings.Contains(script, "cd /home/openclaw/.openclaw && npm install 'some-tool'") {
-		t.Error("script should contain npm install for some-tool")
+	if !strings.Contains(script, "npm install -g 'some-tool'") {
+		t.Error("script should contain npm install -g for some-tool")
 	}
 }
 
@@ -4868,6 +5223,9 @@ func TestBuildSkillsScript_OnlyNpmSkills_NoWrapper(t *testing.T) {
 	}
 	if strings.Contains(script, "_install_skill") {
 		t.Error("script should not contain _install_skill wrapper when only npm skills")
+	}
+	if strings.Contains(script, clawHubSkillsSetup) {
+		t.Error("script should not contain clawhub skills setup when only npm skills")
 	}
 	if !strings.Contains(script, "npm install") {
 		t.Error("script should contain npm install commands")
@@ -4902,14 +5260,18 @@ func TestBuildSkillsScript_WrapperOrdering(t *testing.T) {
 	script := BuildSkillsScript(instance)
 
 	setEIdx := strings.Index(script, "set -e")
+	setupIdx := strings.Index(script, "mkdir -p /home/openclaw/.openclaw/skills")
 	wrapperIdx := strings.Index(script, "_install_skill()")
-	installIdx := strings.Index(script, "_install_skill '@anthropic/mcp-server-fetch'")
+	installIdx := strings.Index(script, "_install_skill 'mcp-server-fetch'")
 
-	if setEIdx == -1 || wrapperIdx == -1 || installIdx == -1 {
+	if setEIdx == -1 || setupIdx == -1 || wrapperIdx == -1 || installIdx == -1 {
 		t.Fatalf("missing expected content in script:\n%s", script)
 	}
-	if setEIdx >= wrapperIdx {
-		t.Error("set -e must come before the wrapper function")
+	if setEIdx >= setupIdx {
+		t.Error("set -e must come before the skills setup")
+	}
+	if setupIdx >= wrapperIdx {
+		t.Error("skills setup must come before the wrapper function")
 	}
 	if wrapperIdx >= installIdx {
 		t.Error("wrapper function must come before install commands")
@@ -5011,6 +5373,56 @@ func TestBuildStatefulSet_WithNpmSkill_InitSkillsScript(t *testing.T) {
 	}
 }
 
+func TestBuildStatefulSet_WithSkills_EnvAndEnvFromPropagated(t *testing.T) {
+	instance := newTestInstance("skills-env")
+	instance.Spec.Skills = []string{"@anthropic/mcp-server-fetch"}
+	instance.Spec.Env = []corev1.EnvVar{
+		{Name: "CLAWHUB_TOKEN", Value: "secret-token"},
+	}
+	instance.Spec.EnvFrom = []corev1.EnvFromSource{
+		{
+			SecretRef: &corev1.SecretEnvSource{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "vault-secrets"},
+			},
+		},
+	}
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	var skillsContainer *corev1.Container
+	for i := range sts.Spec.Template.Spec.InitContainers {
+		if sts.Spec.Template.Spec.InitContainers[i].Name == "init-skills" {
+			skillsContainer = &sts.Spec.Template.Spec.InitContainers[i]
+			break
+		}
+	}
+	if skillsContainer == nil {
+		t.Fatal("init-skills container not found")
+	}
+
+	// Hardcoded env vars should come first (take precedence)
+	names := envNames(skillsContainer.Env)
+	if len(names) < 5 {
+		t.Fatalf("expected at least 5 env vars, got %d: %v", len(names), names)
+	}
+	if names[0] != "HOME" || names[1] != "NPM_CONFIG_CACHE" || names[2] != "NPM_CONFIG_PREFIX" || names[3] != "NPM_CONFIG_IGNORE_SCRIPTS" {
+		t.Errorf("hardcoded env vars should come first, got %v", names[:4])
+	}
+
+	// User-defined env var should be appended after hardcoded ones
+	if names[len(names)-1] != "CLAWHUB_TOKEN" {
+		t.Errorf("user-defined CLAWHUB_TOKEN should be last, got %v", names)
+	}
+
+	// EnvFrom should be propagated
+	if len(skillsContainer.EnvFrom) != 1 {
+		t.Fatalf("expected 1 envFrom source, got %d", len(skillsContainer.EnvFrom))
+	}
+	if skillsContainer.EnvFrom[0].SecretRef.Name != "vault-secrets" {
+		t.Errorf("envFrom secretRef = %q, want vault-secrets", skillsContainer.EnvFrom[0].SecretRef.Name)
+	}
+}
+
 func TestBuildStatefulSet_WithSkills_SkillsTmpVolume(t *testing.T) {
 	instance := newTestInstance("skills-vol")
 	instance.Spec.Skills = []string{"some-skill"}
@@ -5032,6 +5444,179 @@ func TestBuildStatefulSet_NoSkills_NoSkillsTmpVolume(t *testing.T) {
 	skillsTmpVol := findVolume(sts.Spec.Template.Spec.Volumes, "skills-tmp")
 	if skillsTmpVol != nil {
 		t.Error("skills-tmp volume should not exist without skills")
+	}
+}
+
+func TestBuildStatefulSet_ClawHubSkills_MainContainerSkillsMount(t *testing.T) {
+	instance := newTestInstance("clawhub-skills-mount")
+	instance.Spec.Skills = []string{"@anthropic/mcp-server-fetch"}
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	var mainContainer *corev1.Container
+	for i := range sts.Spec.Template.Spec.Containers {
+		if sts.Spec.Template.Spec.Containers[i].Name == "openclaw" {
+			mainContainer = &sts.Spec.Template.Spec.Containers[i]
+			break
+		}
+	}
+	if mainContainer == nil {
+		t.Fatal("main container not found")
+	}
+
+	// ClawHub skills should cause a PVC subpath mount at /app/skills (#313)
+	var found bool
+	for _, m := range mainContainer.VolumeMounts {
+		if m.MountPath == "/app/skills" {
+			found = true
+			if m.Name != "data" {
+				t.Errorf("skills mount volume name = %q, want \"data\"", m.Name)
+			}
+			if m.SubPath != "skills" {
+				t.Errorf("skills mount subpath = %q, want \"skills\"", m.SubPath)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Error("main container should have /app/skills volume mount for ClawHub skills")
+	}
+}
+
+func TestBuildStatefulSet_NpmSkills_PathIncludesLocalBin(t *testing.T) {
+	instance := newTestInstance("npm-path")
+	instance.Spec.Skills = []string{"npm:mcporter"}
+
+	sts := BuildStatefulSet(instance, "", nil)
+	main := sts.Spec.Template.Spec.Containers[0]
+
+	var pathVar *corev1.EnvVar
+	for i := range main.Env {
+		if main.Env[i].Name == "PATH" {
+			pathVar = &main.Env[i]
+			break
+		}
+	}
+	if pathVar == nil {
+		t.Fatal("PATH env var should be set when npm skills are configured")
+	}
+	if !strings.Contains(pathVar.Value, RuntimeDepsLocalBin) {
+		t.Errorf("PATH should contain %q for npm skill binaries, got %q", RuntimeDepsLocalBin, pathVar.Value)
+	}
+}
+
+func TestBuildStatefulSet_ClawHubOnlySkills_NoPathOverride(t *testing.T) {
+	instance := newTestInstance("clawhub-no-path")
+	instance.Spec.Skills = []string{"@anthropic/mcp-server-fetch"}
+
+	sts := BuildStatefulSet(instance, "", nil)
+	main := sts.Spec.Template.Spec.Containers[0]
+
+	for i := range main.Env {
+		if main.Env[i].Name == "PATH" {
+			t.Errorf("PATH should not be set for clawhub-only skills (no runtime deps), got %q", main.Env[i].Value)
+			return
+		}
+	}
+}
+
+func TestBuildStatefulSet_MixedSkills_PathIncludesLocalBin(t *testing.T) {
+	instance := newTestInstance("mixed-skills-path")
+	instance.Spec.Skills = []string{"@anthropic/mcp-server-fetch", "npm:mcporter"}
+
+	sts := BuildStatefulSet(instance, "", nil)
+	main := sts.Spec.Template.Spec.Containers[0]
+
+	var pathVar *corev1.EnvVar
+	for i := range main.Env {
+		if main.Env[i].Name == "PATH" {
+			pathVar = &main.Env[i]
+			break
+		}
+	}
+	if pathVar == nil {
+		t.Fatal("PATH env var should be set when npm skills are configured")
+	}
+	if !strings.Contains(pathVar.Value, RuntimeDepsLocalBin) {
+		t.Errorf("PATH should contain %q, got %q", RuntimeDepsLocalBin, pathVar.Value)
+	}
+}
+
+func TestBuildStatefulSet_NpmSkills_InitContainerUsesGlobalInstall(t *testing.T) {
+	instance := newTestInstance("npm-global")
+	instance.Spec.Skills = []string{"npm:mcporter"}
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	var skillsContainer *corev1.Container
+	for i := range sts.Spec.Template.Spec.InitContainers {
+		if sts.Spec.Template.Spec.InitContainers[i].Name == "init-skills" {
+			skillsContainer = &sts.Spec.Template.Spec.InitContainers[i]
+			break
+		}
+	}
+	if skillsContainer == nil {
+		t.Fatal("init-skills container not found")
+	}
+
+	// Should use npm install -g (global), not local install
+	script := skillsContainer.Command[2]
+	if !strings.Contains(script, "npm install -g") {
+		t.Errorf("expected global npm install in script, got: %q", script)
+	}
+
+	// NPM_CONFIG_PREFIX should redirect global installs to PVC .local dir
+	envMap := map[string]string{}
+	for _, e := range skillsContainer.Env {
+		envMap[e.Name] = e.Value
+	}
+	if envMap["NPM_CONFIG_PREFIX"] != "/home/openclaw/.openclaw/.local" {
+		t.Errorf("NPM_CONFIG_PREFIX = %q, want %q", envMap["NPM_CONFIG_PREFIX"], "/home/openclaw/.openclaw/.local")
+	}
+}
+
+func TestHasNpmSkills(t *testing.T) {
+	tests := []struct {
+		name   string
+		skills []string
+		want   bool
+	}{
+		{"empty", nil, false},
+		{"clawhub only", []string{"@anthropic/fetch"}, false},
+		{"npm only", []string{"npm:mcporter"}, true},
+		{"mixed", []string{"@anthropic/fetch", "npm:mcporter"}, true},
+		{"pack only", []string{"pack:owner/repo/path"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hasNpmSkills(tt.skills); got != tt.want {
+				t.Errorf("hasNpmSkills(%v) = %v, want %v", tt.skills, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildStatefulSet_NpmOnlySkills_NoMainSkillsMount(t *testing.T) {
+	instance := newTestInstance("npm-only-mount")
+	instance.Spec.Skills = []string{"npm:@openclaw/matrix"}
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	var mainContainer *corev1.Container
+	for i := range sts.Spec.Template.Spec.Containers {
+		if sts.Spec.Template.Spec.Containers[i].Name == "openclaw" {
+			mainContainer = &sts.Spec.Template.Spec.Containers[i]
+			break
+		}
+	}
+	if mainContainer == nil {
+		t.Fatal("main container not found")
+	}
+
+	for _, m := range mainContainer.VolumeMounts {
+		if m.MountPath == "/app/skills" {
+			t.Error("main container should NOT have /app/skills mount when only npm skills")
+		}
 	}
 }
 
@@ -7575,10 +8160,18 @@ func TestBuildConfigMap_ChromiumBrowserConfig(t *testing.T) {
 		t.Errorf("browser.defaultProfile = %v, want %q", browser["defaultProfile"], "default")
 	}
 
-	// attachOnly should NOT be injected — remote mode is triggered automatically
-	// by the non-loopback service DNS address in OPENCLAW_CHROMIUM_CDP.
-	if _, hasAttachOnly := browser["attachOnly"]; hasAttachOnly {
-		t.Errorf("browser.attachOnly should not be injected by operator, got %v", browser["attachOnly"])
+	// attachOnly must be true so OpenClaw skips local browser binary detection
+	// and goes straight to the remote CDP connection.
+	attachOnly, ok := browser["attachOnly"].(bool)
+	if !ok || !attachOnly {
+		t.Errorf("browser.attachOnly = %v, want true", browser["attachOnly"])
+	}
+
+	// remoteCdpTimeoutMs gives the browser service time to become ready,
+	// preventing permanent failure when tool registration fires first.
+	timeout, ok := browser["remoteCdpTimeoutMs"].(float64)
+	if !ok || timeout != 30000 {
+		t.Errorf("browser.remoteCdpTimeoutMs = %v, want 30000", browser["remoteCdpTimeoutMs"])
 	}
 
 	profiles, ok := browser["profiles"].(map[string]interface{})
@@ -7586,14 +8179,14 @@ func TestBuildConfigMap_ChromiumBrowserConfig(t *testing.T) {
 		t.Fatal("expected browser.profiles key")
 	}
 
-	// Both "default" and "chrome" profiles must use the env var reference.
-	// ${OPENCLAW_CHROMIUM_CDP} resolves at runtime to the service DNS CDP URL.
+	// Both "default" and "chrome" profiles must use the resolved CDP Service
+	// DNS URL (not an env var reference).
+	expectedCDP := fmt.Sprintf("http://%s-cdp.test-ns.svc:%d", instance.Name, ChromiumPort)
 	for _, name := range []string{"default", "chrome"} {
 		p, ok := profiles[name].(map[string]interface{})
 		if !ok {
 			t.Fatalf("expected browser.profiles.%s key", name)
 		}
-		expectedCDP := "${OPENCLAW_CHROMIUM_CDP}"
 		if p["cdpUrl"] != expectedCDP {
 			t.Errorf("browser.profiles.%s.cdpUrl = %v, want %q", name, p["cdpUrl"], expectedCDP)
 		}
@@ -7724,6 +8317,30 @@ func TestBuildConfigMap_ChromiumUserOverrideCdpPort(t *testing.T) {
 	}
 }
 
+func TestBuildConfigMap_ChromiumUserOverrideRemoteCdpTimeout(t *testing.T) {
+	instance := newTestInstance("cr-override-timeout")
+	instance.Spec.Chromium.Enabled = true
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{
+			Raw: []byte(`{"browser":{"remoteCdpTimeoutMs":60000}}`),
+		},
+	}
+
+	cm := BuildConfigMap(instance, "", nil)
+	content := cm.Data["openclaw.json"]
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config JSON: %v", err)
+	}
+
+	browser := parsed["browser"].(map[string]interface{})
+	timeout := browser["remoteCdpTimeoutMs"].(float64)
+	if timeout != 60000 {
+		t.Errorf("user-set remoteCdpTimeoutMs should be preserved, got %v", timeout)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Ollama sidecar tests
 // ---------------------------------------------------------------------------
@@ -7735,8 +8352,8 @@ func TestBuildStatefulSet_OllamaEnabled(t *testing.T) {
 	sts := BuildStatefulSet(instance, "", nil)
 	containers := sts.Spec.Template.Spec.Containers
 
-	if len(containers) != 3 {
-		t.Fatalf("expected 3 containers (main + gateway-proxy + ollama), got %d", len(containers))
+	if len(containers) != 4 {
+		t.Fatalf("expected 4 containers (main + gateway-proxy + ollama + otel-collector), got %d", len(containers))
 	}
 
 	var ollama *corev1.Container
@@ -8072,8 +8689,8 @@ func TestBuildStatefulSet_OllamaAndChromiumEnabled(t *testing.T) {
 	containers := sts.Spec.Template.Spec.Containers
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
-	if len(containers) != 3 {
-		t.Fatalf("expected 3 containers (main + gateway-proxy + ollama), got %d", len(containers))
+	if len(containers) != 4 {
+		t.Fatalf("expected 4 containers (main + gateway-proxy + ollama + otel-collector), got %d", len(containers))
 	}
 
 	names := make(map[string]bool)
@@ -8659,12 +9276,14 @@ func TestBuildWorkspaceConfigMap_SelfConfigureDisabledNoFiles(t *testing.T) {
 
 	cm := BuildWorkspaceConfigMap(instance, nil)
 
-	// ENVIRONMENT.md is always injected, so ConfigMap is never nil
+	// Operator files are always injected, so ConfigMap is never nil
 	if cm == nil {
-		t.Fatal("expected non-nil ConfigMap (ENVIRONMENT.md is always injected)")
+		t.Fatal("expected non-nil ConfigMap (operator files are always injected)")
 	}
-	if _, ok := cm.Data["ENVIRONMENT.md"]; !ok {
-		t.Error("expected ENVIRONMENT.md in workspace ConfigMap")
+	for _, f := range []string{"ENVIRONMENT.md", "BOOTSTRAP.md"} {
+		if _, ok := cm.Data[f]; !ok {
+			t.Errorf("expected %s in workspace ConfigMap", f)
+		}
 	}
 	if _, ok := cm.Data["SELFCONFIG.md"]; ok {
 		t.Error("SELFCONFIG.md should not be present when self-configure is disabled")
@@ -9171,19 +9790,25 @@ func TestBuildStatefulSet_MetricsPortEnabled(t *testing.T) {
 	// Metrics enabled by default (nil)
 
 	sts := BuildStatefulSet(instance, "", nil)
-	main := sts.Spec.Template.Spec.Containers[0]
 
-	found := false
+	// Metrics port should be on the otel-collector container, not main
+	main := sts.Spec.Template.Spec.Containers[0]
 	for _, p := range main.Ports {
 		if p.Name == "metrics" {
+			t.Error("main container should not have metrics port (belongs on otel-collector)")
+		}
+	}
+
+	// Find otel-collector and verify metrics port
+	found := false
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		if c.Name == "otel-collector" {
 			found = true
-			if p.ContainerPort != DefaultMetricsPort {
-				t.Errorf("metrics container port = %d, want %d", p.ContainerPort, DefaultMetricsPort)
-			}
+			assertContainerPort(t, c.Ports, "metrics", DefaultMetricsPort)
 		}
 	}
 	if !found {
-		t.Error("main container should include metrics port when metrics is enabled")
+		t.Error("otel-collector container should be present when metrics is enabled")
 	}
 }
 
@@ -9192,13 +9817,14 @@ func TestBuildStatefulSet_MetricsPortDisabled(t *testing.T) {
 	instance.Spec.Observability.Metrics.Enabled = Ptr(false)
 
 	sts := BuildStatefulSet(instance, "", nil)
-	main := sts.Spec.Template.Spec.Containers[0]
 
-	for _, p := range main.Ports {
-		if p.Name == "metrics" {
-			t.Error("main container should not include metrics port when metrics is disabled")
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		if c.Name == "otel-collector" {
+			t.Error("otel-collector should not be present when metrics is disabled")
 		}
 	}
+
+	main := sts.Spec.Template.Spec.Containers[0]
 	if len(main.Ports) != 2 {
 		t.Errorf("expected 2 ports (gateway, canvas) when metrics disabled, got %d", len(main.Ports))
 	}
@@ -9209,9 +9835,14 @@ func TestBuildStatefulSet_MetricsPortCustom(t *testing.T) {
 	instance.Spec.Observability.Metrics.Port = Ptr(int32(8080))
 
 	sts := BuildStatefulSet(instance, "", nil)
-	main := sts.Spec.Template.Spec.Containers[0]
 
-	assertContainerPort(t, main.Ports, "metrics", 8080)
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		if c.Name == "otel-collector" {
+			assertContainerPort(t, c.Ports, "metrics", 8080)
+			return
+		}
+	}
+	t.Error("otel-collector container should be present")
 }
 
 // ---------------------------------------------------------------------------
@@ -9225,8 +9856,8 @@ func TestBuildStatefulSet_WebTerminalEnabled(t *testing.T) {
 	sts := BuildStatefulSet(instance, "", nil)
 	containers := sts.Spec.Template.Spec.Containers
 
-	if len(containers) != 3 {
-		t.Fatalf("expected 3 containers (main + gateway-proxy + web-terminal), got %d", len(containers))
+	if len(containers) != 4 {
+		t.Fatalf("expected 4 containers (main + gateway-proxy + web-terminal + otel-collector), got %d", len(containers))
 	}
 
 	var wt *corev1.Container
@@ -9328,6 +9959,10 @@ func TestBuildStatefulSet_WebTerminalEnabled(t *testing.T) {
 	}
 	if !strings.Contains(wt.Command[2], "exec ttyd") {
 		t.Errorf("web-terminal command should contain 'exec ttyd', got %q", wt.Command[2])
+	}
+	// Default (ReadOnly: false) should include -W flag for writable mode
+	if !strings.Contains(wt.Command[2], "-W") {
+		t.Errorf("web-terminal command should contain '-W' for writable mode by default, got %q", wt.Command[2])
 	}
 
 	// No credential env vars by default
@@ -9436,6 +10071,10 @@ func TestBuildStatefulSet_WebTerminalReadOnly(t *testing.T) {
 	// Command should include -R flag
 	if !strings.Contains(wt.Command[2], "-R") {
 		t.Errorf("web-terminal command should contain '-R' for read-only, got %q", wt.Command[2])
+	}
+	// Should NOT include -W flag
+	if strings.Contains(wt.Command[2], "-W") {
+		t.Errorf("web-terminal command should NOT contain '-W' in read-only mode, got %q", wt.Command[2])
 	}
 
 	// Data mount should be read-only
@@ -9605,14 +10244,14 @@ func TestBuildNetworkPolicy_WebTerminalIngressPort(t *testing.T) {
 
 	np := BuildNetworkPolicy(instance)
 
-	// Default ingress rule should have 3 ports (gateway, canvas, web-terminal)
+	// Default ingress rule should have 4 ports (gateway, canvas, web-terminal, metrics)
 	if len(np.Spec.Ingress) == 0 {
 		t.Fatal("expected at least one ingress rule")
 	}
 
 	ports := np.Spec.Ingress[0].Ports
-	if len(ports) != 3 {
-		t.Fatalf("expected 3 ingress ports with web terminal, got %d", len(ports))
+	if len(ports) != 4 {
+		t.Fatalf("expected 4 ingress ports with web terminal, got %d", len(ports))
 	}
 
 	// Verify web-terminal port is present
@@ -9640,30 +10279,30 @@ func TestBuildNetworkPolicy_ChromiumIngressAndEgress(t *testing.T) {
 	}
 
 	ports := np.Spec.Ingress[0].Ports
-	if len(ports) != 4 {
-		t.Fatalf("expected 4 ingress ports with chromium (gateway, canvas, chromium, chromium-proxy), got %d", len(ports))
+	if len(ports) != 5 {
+		t.Fatalf("expected 5 ingress ports with chromium (gateway, canvas, chromium, browserless, metrics), got %d", len(ports))
 	}
 
 	foundChromiumIngress := false
-	foundChromiumProxyIngress := false
+	foundBrowserlessIngress := false
 	for _, p := range ports {
 		if p.Port != nil && p.Port.IntValue() == ChromiumPort {
 			foundChromiumIngress = true
 		}
-		if p.Port != nil && p.Port.IntValue() == ChromiumProxyPort {
-			foundChromiumProxyIngress = true
+		if p.Port != nil && p.Port.IntValue() == BrowserlessInternalPort {
+			foundBrowserlessIngress = true
 		}
 	}
 	if !foundChromiumIngress {
 		t.Error("chromium port not found in NetworkPolicy ingress ports")
 	}
-	if !foundChromiumProxyIngress {
-		t.Error("chromium proxy port not found in NetworkPolicy ingress ports")
+	if !foundBrowserlessIngress {
+		t.Error("browserless internal port not found in NetworkPolicy ingress ports")
 	}
 
-	// Egress: should have a rule for chromium CDP self-traffic (ports 9222 + 9223)
+	// Egress: should have a rule for chromium CDP self-traffic (ports 9222 + 9224)
 	foundChromiumEgress := false
-	foundChromiumProxyEgress := false
+	foundBrowserlessEgress := false
 	for _, rule := range np.Spec.Egress {
 		for _, p := range rule.Ports {
 			if p.Port != nil && p.Port.IntValue() == ChromiumPort {
@@ -9675,16 +10314,16 @@ func TestBuildNetworkPolicy_ChromiumIngressAndEgress(t *testing.T) {
 					t.Error("chromium egress rule should use podSelector for self-traffic")
 				}
 			}
-			if p.Port != nil && p.Port.IntValue() == ChromiumProxyPort {
-				foundChromiumProxyEgress = true
+			if p.Port != nil && p.Port.IntValue() == BrowserlessInternalPort {
+				foundBrowserlessEgress = true
 			}
 		}
 	}
 	if !foundChromiumEgress {
 		t.Error("chromium egress rule (port 9222) not found in NetworkPolicy")
 	}
-	if !foundChromiumProxyEgress {
-		t.Error("chromium proxy egress rule (port 9223) not found in NetworkPolicy")
+	if !foundBrowserlessEgress {
+		t.Error("browserless internal egress rule (port 9224) not found in NetworkPolicy")
 	}
 }
 
@@ -9903,6 +10542,188 @@ func TestBuildNetworkPolicy_DefaultUsesProxyPorts(t *testing.T) {
 	if !foundCanvas {
 		t.Errorf("NetworkPolicy should allow port %d (canvas proxy)", CanvasProxyPort)
 	}
+}
+
+func TestBuildNetworkPolicy_MetricsPortIncludedByDefault(t *testing.T) {
+	instance := newTestInstance("np-metrics")
+	np := BuildNetworkPolicy(instance)
+
+	ports := np.Spec.Ingress[0].Ports
+	found := false
+	for _, p := range ports {
+		if p.Port != nil && p.Port.IntValue() == int(DefaultMetricsPort) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("NetworkPolicy should allow metrics port %d when metrics are enabled (default)", DefaultMetricsPort)
+	}
+}
+
+func TestBuildNetworkPolicy_MetricsPortExcludedWhenDisabled(t *testing.T) {
+	instance := newTestInstance("np-no-metrics")
+	instance.Spec.Observability.Metrics.Enabled = Ptr(false)
+	np := BuildNetworkPolicy(instance)
+
+	ports := np.Spec.Ingress[0].Ports
+	for _, p := range ports {
+		if p.Port != nil && p.Port.IntValue() == int(DefaultMetricsPort) {
+			t.Errorf("NetworkPolicy should NOT allow metrics port %d when metrics are disabled", DefaultMetricsPort)
+		}
+	}
+}
+
+func TestBuildNetworkPolicy_CustomMetricsPort(t *testing.T) {
+	instance := newTestInstance("np-custom-metrics")
+	instance.Spec.Observability.Metrics.Port = Ptr(int32(8080))
+	np := BuildNetworkPolicy(instance)
+
+	ports := np.Spec.Ingress[0].Ports
+	found := false
+	for _, p := range ports {
+		if p.Port != nil && p.Port.IntValue() == 8080 {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("NetworkPolicy should allow custom metrics port 8080")
+	}
+}
+
+func TestBuildNetworkPolicy_MetricsPortWithCustomServicePorts(t *testing.T) {
+	instance := newTestInstance("np-custom-svc-metrics")
+	instance.Spec.Networking.Service.Ports = []openclawv1alpha1.ServicePortSpec{
+		{Name: "http", Port: 3978},
+	}
+	np := BuildNetworkPolicy(instance)
+
+	ports := np.Spec.Ingress[0].Ports
+	foundCustom := false
+	foundMetrics := false
+	for _, p := range ports {
+		if p.Port != nil {
+			switch p.Port.IntValue() {
+			case 3978:
+				foundCustom = true
+			case int(DefaultMetricsPort):
+				foundMetrics = true
+			}
+		}
+	}
+	if !foundCustom {
+		t.Error("NetworkPolicy should allow custom service port 3978")
+	}
+	if !foundMetrics {
+		t.Errorf("NetworkPolicy should allow metrics port %d even with custom service ports", DefaultMetricsPort)
+	}
+}
+
+func TestBuildNetworkPolicy_MetricsPortOnAllIngressRules(t *testing.T) {
+	instance := newTestInstance("np-metrics-all-rules")
+	instance.Spec.Security.NetworkPolicy.AllowedIngressNamespaces = []string{"monitoring"}
+	np := BuildNetworkPolicy(instance)
+
+	for i, rule := range np.Spec.Ingress {
+		found := false
+		for _, p := range rule.Ports {
+			if p.Port != nil && p.Port.IntValue() == int(DefaultMetricsPort) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("ingress rule %d should include metrics port %d", i, DefaultMetricsPort)
+		}
+	}
+}
+
+func TestBuildNetworkPolicy_GatewayProxyDisabled_UsesDirectPorts(t *testing.T) {
+	instance := newTestInstance("np-no-proxy")
+	instance.Spec.Gateway.Enabled = Ptr(false)
+	np := BuildNetworkPolicy(instance)
+
+	if len(np.Spec.Ingress) == 0 {
+		t.Fatal("expected at least one ingress rule")
+	}
+
+	ports := np.Spec.Ingress[0].Ports
+	foundGW := false
+	foundCanvas := false
+	for _, p := range ports {
+		if p.Port != nil {
+			switch p.Port.IntValue() {
+			case int(GatewayPort):
+				foundGW = true
+			case int(CanvasPort):
+				foundCanvas = true
+			case int(GatewayProxyPort):
+				t.Errorf("NetworkPolicy should not allow proxy port %d when proxy is disabled", GatewayProxyPort)
+			case int(CanvasProxyPort):
+				t.Errorf("NetworkPolicy should not allow proxy port %d when proxy is disabled", CanvasProxyPort)
+			}
+		}
+	}
+	if !foundGW {
+		t.Errorf("NetworkPolicy should allow port %d (direct gateway)", GatewayPort)
+	}
+	if !foundCanvas {
+		t.Errorf("NetworkPolicy should allow port %d (direct canvas)", CanvasPort)
+	}
+}
+
+func TestHasGatewayBindConflict(t *testing.T) {
+	t.Run("no conflict when proxy enabled", func(t *testing.T) {
+		instance := newTestInstance("gw-conflict-enabled")
+		instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+			RawExtension: runtime.RawExtension{Raw: []byte(`{"gateway":{"bind":"loopback"}}`)},
+		}
+		if HasGatewayBindConflict(instance) {
+			t.Error("should not report conflict when proxy is enabled")
+		}
+	})
+
+	t.Run("conflict when proxy disabled and bind is loopback", func(t *testing.T) {
+		instance := newTestInstance("gw-conflict-loopback")
+		instance.Spec.Gateway.Enabled = Ptr(false)
+		instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+			RawExtension: runtime.RawExtension{Raw: []byte(`{"gateway":{"bind":"loopback"}}`)},
+		}
+		if !HasGatewayBindConflict(instance) {
+			t.Error("should report conflict when proxy is disabled and bind is loopback")
+		}
+	})
+
+	t.Run("no conflict when proxy disabled and bind is not set", func(t *testing.T) {
+		instance := newTestInstance("gw-conflict-default")
+		instance.Spec.Gateway.Enabled = Ptr(false)
+		instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+			RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
+		}
+		if HasGatewayBindConflict(instance) {
+			t.Error("should not report conflict when bind is not set")
+		}
+	})
+
+	t.Run("conflict when proxy disabled and bind is raw 127.0.0.1", func(t *testing.T) {
+		instance := newTestInstance("gw-conflict-raw-lo")
+		instance.Spec.Gateway.Enabled = Ptr(false)
+		instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+			RawExtension: runtime.RawExtension{Raw: []byte(`{"gateway":{"bind":"127.0.0.1"}}`)},
+		}
+		if !HasGatewayBindConflict(instance) {
+			t.Error("should report conflict when proxy is disabled and bind is 127.0.0.1")
+		}
+	})
+
+	t.Run("no conflict when proxy disabled and bind is 0.0.0.0", func(t *testing.T) {
+		instance := newTestInstance("gw-conflict-allif")
+		instance.Spec.Gateway.Enabled = Ptr(false)
+		instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+			RawExtension: runtime.RawExtension{Raw: []byte(`{"gateway":{"bind":"0.0.0.0"}}`)},
+		}
+		if HasGatewayBindConflict(instance) {
+			t.Error("should not report conflict when bind is 0.0.0.0")
+		}
+	})
 }
 
 func TestHtpasswdEntry_Format(t *testing.T) {
@@ -10210,6 +11031,9 @@ func TestBuildStatefulSet_NilAvailability(t *testing.T) {
 	if podSpec.TopologySpreadConstraints != nil {
 		t.Error("expected nil TopologySpreadConstraints")
 	}
+	if podSpec.RuntimeClassName != nil {
+		t.Error("expected nil RuntimeClassName")
+	}
 }
 
 func TestBuildConfigMap_EmptyConfig(t *testing.T) {
@@ -10365,15 +11189,17 @@ func TestBuildWorkspaceConfigMap_NilWorkspace(t *testing.T) {
 	instance := newTestInstance("ws-nil")
 	instance.Spec.Workspace = nil
 	cm := BuildWorkspaceConfigMap(instance, nil)
-	// ENVIRONMENT.md is always injected, so the ConfigMap is never nil
+	// Operator files are always injected, so the ConfigMap is never nil
 	if cm == nil {
-		t.Fatal("expected non-nil ConfigMap (ENVIRONMENT.md is always injected)")
+		t.Fatal("expected non-nil ConfigMap (operator files are always injected)")
 	}
-	if _, ok := cm.Data["ENVIRONMENT.md"]; !ok {
-		t.Error("expected ENVIRONMENT.md in workspace ConfigMap")
+	for _, f := range []string{"ENVIRONMENT.md", "BOOTSTRAP.md"} {
+		if _, ok := cm.Data[f]; !ok {
+			t.Errorf("expected %s in workspace ConfigMap", f)
+		}
 	}
-	if len(cm.Data) != 1 {
-		t.Errorf("expected exactly 1 file (ENVIRONMENT.md), got %d", len(cm.Data))
+	if len(cm.Data) != 2 {
+		t.Errorf("expected exactly 2 files (ENVIRONMENT.md + BOOTSTRAP.md), got %d", len(cm.Data))
 	}
 }
 
@@ -10762,16 +11588,16 @@ func TestBuildStatefulSet_ChromiumProxySidecar(t *testing.T) {
 	}
 
 	// Should listen on the proxy port
-	if len(proxy.Ports) != 1 || proxy.Ports[0].ContainerPort != ChromiumProxyPort {
-		t.Errorf("expected port %d, got %v", ChromiumProxyPort, proxy.Ports)
+	if len(proxy.Ports) != 1 || proxy.Ports[0].ContainerPort != ChromiumPort {
+		t.Errorf("expected port %d, got %v", ChromiumPort, proxy.Ports)
 	}
 
 	// Should have startup probe on the proxy port
 	if proxy.StartupProbe == nil {
 		t.Fatal("chromium-proxy should have a startup probe")
 	}
-	if proxy.StartupProbe.HTTPGet.Port.IntValue() != int(ChromiumProxyPort) {
-		t.Errorf("startup probe should check port %d, got %d", ChromiumProxyPort, proxy.StartupProbe.HTTPGet.Port.IntValue())
+	if proxy.StartupProbe.HTTPGet.Port.IntValue() != int(ChromiumPort) {
+		t.Errorf("startup probe should check port %d, got %d", ChromiumPort, proxy.StartupProbe.HTTPGet.Port.IntValue())
 	}
 
 	// Should come AFTER the chromium (browserless) sidecar
@@ -10825,13 +11651,13 @@ func TestBuildConfigMap_ChromiumProxyNginxConfig(t *testing.T) {
 	}
 
 	// Should contain the proxy port
-	if !strings.Contains(proxyConfig, fmt.Sprintf("listen 0.0.0.0:%d", ChromiumProxyPort)) {
-		t.Error("proxy config should listen on ChromiumProxyPort")
+	if !strings.Contains(proxyConfig, fmt.Sprintf("listen 0.0.0.0:%d", ChromiumPort)) {
+		t.Error("proxy config should listen on ChromiumPort (9222)")
 	}
 
-	// Should proxy to the chromium port
-	if !strings.Contains(proxyConfig, fmt.Sprintf("proxy_pass http://127.0.0.1:%d", ChromiumPort)) {
-		t.Error("proxy config should forward to ChromiumPort")
+	// Should proxy to the internal browserless port
+	if !strings.Contains(proxyConfig, fmt.Sprintf("proxy_pass http://127.0.0.1:%d", BrowserlessInternalPort)) {
+		t.Error("proxy config should forward to BrowserlessInternalPort (9224)")
 	}
 
 	// Should contain the default anti-bot flags (URL-encoded)
@@ -10844,9 +11670,86 @@ func TestBuildConfigMap_ChromiumProxyNginxConfig(t *testing.T) {
 		t.Error("proxy config should contain user ExtraArgs")
 	}
 
-	// Should have WebSocket upgrade headers
+	// Should have WebSocket upgrade headers in @chromium_ws location
 	if !strings.Contains(proxyConfig, "proxy_set_header Upgrade") {
 		t.Error("proxy config should handle WebSocket upgrades")
+	}
+
+	// WebSocket connections should rewrite to /chromium with launch args
+	if !strings.Contains(proxyConfig, "rewrite ^ /chromium?launch=") {
+		t.Error("proxy config should rewrite WebSocket requests to /chromium with launch args")
+	}
+
+	// Should use named location for WebSocket routing
+	if !strings.Contains(proxyConfig, "location @chromium_ws") {
+		t.Error("proxy config should have @chromium_ws named location")
+	}
+
+	// Should redirect WebSocket upgrades via error_page
+	if !strings.Contains(proxyConfig, "error_page 418") {
+		t.Error("proxy config should use error_page 418 for WebSocket routing")
+	}
+
+	// Should have static /json/version response to prevent Playwright bypass
+	if !strings.Contains(proxyConfig, "location = /json/version") {
+		t.Error("proxy config should have exact-match /json/version location")
+	}
+	expectedWsURL := fmt.Sprintf(`"webSocketDebuggerUrl":"ws://127.0.0.1:%d"`, ChromiumPort)
+	if !strings.Contains(proxyConfig, expectedWsURL) {
+		t.Errorf("proxy config should return static webSocketDebuggerUrl pointing to proxy port, want %s", expectedWsURL)
+	}
+}
+
+func TestBuildConfigMap_ChromiumProxyJsonVersionRewrite(t *testing.T) {
+	instance := newTestInstance("cdp-json-version")
+	instance.Spec.Chromium.Enabled = true
+
+	cm := BuildConfigMap(instance, "", nil)
+	proxyConfig := cm.Data[ChromiumProxyNginxConfigKey]
+
+	// The static /json/version must point to the proxy port (ChromiumPort)
+	// so Playwright's connectOverCDP() reconnects through the proxy instead
+	// of discovering Chrome's random direct debugging port.
+	expectedWsURL := fmt.Sprintf(`ws://127.0.0.1:%d`, ChromiumPort)
+	if !strings.Contains(proxyConfig, expectedWsURL) {
+		t.Errorf("static /json/version should contain %s", expectedWsURL)
+	}
+
+	// Must use exact-match location to take priority over the prefix location /
+	if !strings.Contains(proxyConfig, "location = /json/version") {
+		t.Error("/json/version should use exact-match location (= prefix)")
+	}
+
+	// Must return 200 with application/json content type
+	if !strings.Contains(proxyConfig, "return 200") {
+		t.Error("/json/version should return 200")
+	}
+	if !strings.Contains(proxyConfig, "default_type application/json") {
+		t.Error("/json/version should set content type to application/json")
+	}
+}
+
+func TestBuildConfigMap_ChromiumProxyDeduplicatesArgs(t *testing.T) {
+	instance := newTestInstance("cdp-dedup")
+	instance.Spec.Chromium.Enabled = true
+	// Include a flag that's already in DefaultChromiumLaunchArgs
+	instance.Spec.Chromium.ExtraArgs = []string{
+		"--no-first-run",
+		"--window-size=1920,1080",
+	}
+
+	cm := BuildConfigMap(instance, "", nil)
+	proxyConfig := cm.Data[ChromiumProxyNginxConfigKey]
+
+	// --no-first-run should appear only once (deduplicated)
+	count := strings.Count(proxyConfig, "no-first-run")
+	if count != 1 {
+		t.Errorf("--no-first-run should appear once (deduplicated), found %d times", count)
+	}
+
+	// --window-size should be present
+	if !strings.Contains(proxyConfig, "window-size") {
+		t.Error("proxy config should contain --window-size from ExtraArgs")
 	}
 }
 
@@ -10857,6 +11760,143 @@ func TestBuildConfigMap_NoChromiumProxyWhenDisabled(t *testing.T) {
 	cm := BuildConfigMap(instance, "", nil)
 	if _, ok := cm.Data[ChromiumProxyNginxConfigKey]; ok {
 		t.Error("ConfigMap should not contain chromium proxy config when chromium is disabled")
+	}
+}
+
+// --- Gateway proxy disabled tests ---
+
+func TestBuildStatefulSet_GatewayProxyDisabled_NoProxyContainer(t *testing.T) {
+	instance := newTestInstance("gw-disabled")
+	instance.Spec.Gateway.Enabled = Ptr(false)
+	sts := BuildStatefulSet(instance, "", nil)
+
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		if c.Name == "gateway-proxy" {
+			t.Fatal("gateway-proxy container should not be present when disabled")
+		}
+	}
+}
+
+func TestBuildStatefulSet_GatewayProxyDisabled_NoProxyTmpVolume(t *testing.T) {
+	instance := newTestInstance("gw-disabled-vol")
+	instance.Spec.Gateway.Enabled = Ptr(false)
+	sts := BuildStatefulSet(instance, "", nil)
+
+	for _, v := range sts.Spec.Template.Spec.Volumes {
+		if v.Name == "gateway-proxy-tmp" {
+			t.Fatal("gateway-proxy-tmp volume should not be present when proxy is disabled")
+		}
+	}
+}
+
+func TestBuildStatefulSet_GatewayProxyDisabled_ProbesTargetGatewayPort(t *testing.T) {
+	instance := newTestInstance("gw-disabled-probes")
+	instance.Spec.Gateway.Enabled = Ptr(false)
+	sts := BuildStatefulSet(instance, "", nil)
+
+	var main *corev1.Container
+	for i := range sts.Spec.Template.Spec.Containers {
+		if sts.Spec.Template.Spec.Containers[i].Name == "openclaw" {
+			main = &sts.Spec.Template.Spec.Containers[i]
+			break
+		}
+	}
+	if main == nil {
+		t.Fatal("openclaw container not found")
+	}
+
+	if main.LivenessProbe == nil || main.LivenessProbe.HTTPGet == nil {
+		t.Fatal("liveness probe should be configured")
+	}
+	if main.LivenessProbe.HTTPGet.Port.IntValue() != int(GatewayPort) {
+		t.Errorf("liveness probe port = %d, want %d (direct gateway port)", main.LivenessProbe.HTTPGet.Port.IntValue(), GatewayPort)
+	}
+
+	if main.ReadinessProbe == nil || main.ReadinessProbe.HTTPGet == nil {
+		t.Fatal("readiness probe should be configured")
+	}
+	if main.ReadinessProbe.HTTPGet.Port.IntValue() != int(GatewayPort) {
+		t.Errorf("readiness probe port = %d, want %d (direct gateway port)", main.ReadinessProbe.HTTPGet.Port.IntValue(), GatewayPort)
+	}
+
+	if main.StartupProbe == nil || main.StartupProbe.HTTPGet == nil {
+		t.Fatal("startup probe should be configured")
+	}
+	if main.StartupProbe.HTTPGet.Port.IntValue() != int(GatewayPort) {
+		t.Errorf("startup probe port = %d, want %d (direct gateway port)", main.StartupProbe.HTTPGet.Port.IntValue(), GatewayPort)
+	}
+}
+
+func TestBuildStatefulSet_GatewayProxyEnabled_ProbesTargetProxyPort(t *testing.T) {
+	instance := newTestInstance("gw-enabled-probes")
+	// Default (nil) means enabled
+	sts := BuildStatefulSet(instance, "", nil)
+
+	var main *corev1.Container
+	for i := range sts.Spec.Template.Spec.Containers {
+		if sts.Spec.Template.Spec.Containers[i].Name == "openclaw" {
+			main = &sts.Spec.Template.Spec.Containers[i]
+			break
+		}
+	}
+	if main == nil {
+		t.Fatal("openclaw container not found")
+	}
+
+	if main.LivenessProbe == nil || main.LivenessProbe.HTTPGet == nil {
+		t.Fatal("liveness probe should be configured")
+	}
+	if main.LivenessProbe.HTTPGet.Port.IntValue() != int(GatewayProxyPort) {
+		t.Errorf("liveness probe port = %d, want %d (proxy port)", main.LivenessProbe.HTTPGet.Port.IntValue(), GatewayProxyPort)
+	}
+}
+
+func TestBuildService_GatewayProxyDisabled_TargetsDirectPorts(t *testing.T) {
+	instance := newTestInstance("svc-no-proxy")
+	instance.Spec.Gateway.Enabled = Ptr(false)
+	svc := BuildService(instance)
+
+	for _, port := range svc.Spec.Ports {
+		switch port.Name {
+		case "gateway":
+			if port.TargetPort.IntValue() != int(GatewayPort) {
+				t.Errorf("gateway targetPort = %d, want %d (direct port)", port.TargetPort.IntValue(), GatewayPort)
+			}
+		case "canvas":
+			if port.TargetPort.IntValue() != int(CanvasPort) {
+				t.Errorf("canvas targetPort = %d, want %d (direct port)", port.TargetPort.IntValue(), CanvasPort)
+			}
+		}
+	}
+}
+
+func TestBuildConfigMap_GatewayProxyDisabled_NoNginxConfig(t *testing.T) {
+	instance := newTestInstance("cm-no-proxy")
+	instance.Spec.Gateway.Enabled = Ptr(false)
+	cm := BuildConfigMap(instance, "", nil)
+
+	if _, ok := cm.Data[NginxConfigKey]; ok {
+		t.Error("ConfigMap should not contain nginx config when gateway proxy is disabled")
+	}
+}
+
+func TestBuildConfigMap_GatewayProxyDisabled_BindsAllInterfaces(t *testing.T) {
+	instance := newTestInstance("cm-no-proxy-bind")
+	instance.Spec.Gateway.Enabled = Ptr(false)
+	cm := BuildConfigMap(instance, "", nil)
+
+	content := cm.Data["openclaw.json"]
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config JSON: %v", err)
+	}
+
+	gw, ok := parsed["gateway"].(map[string]interface{})
+	if !ok {
+		t.Fatal("gateway section not found in config")
+	}
+	if gw["bind"] != GatewayBindAllInterfaces {
+		t.Errorf("gateway.bind = %v, want %q (direct access when proxy disabled)", gw["bind"], GatewayBindAllInterfaces)
 	}
 }
 
@@ -10872,9 +11912,207 @@ func TestBuildChromiumCDPService_TargetsProxyPort(t *testing.T) {
 
 	port := svc.Spec.Ports[0]
 	if port.Port != int32(ChromiumPort) {
-		t.Errorf("service port should be %d (external CDP port), got %d", ChromiumPort, port.Port)
+		t.Errorf("service port should be %d (proxy owns this port directly), got %d", ChromiumPort, port.Port)
 	}
-	if port.TargetPort.IntValue() != int(ChromiumProxyPort) {
-		t.Errorf("target port should be %d (proxy), got %d", ChromiumProxyPort, port.TargetPort.IntValue())
+	if port.TargetPort.IntValue() != int(ChromiumPort) {
+		t.Errorf("target port should be %d (proxy), got %d", ChromiumPort, port.TargetPort.IntValue())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Per-replica PVC (VolumeClaimTemplate) tests
+// ---------------------------------------------------------------------------
+
+func TestBuildStatefulSet_VCT_PersistenceAndHPA(t *testing.T) {
+	instance := newTestInstance("vct-hpa")
+	instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+		Enabled: Ptr(true),
+	}
+	instance.Spec.Storage.Persistence.Size = "20Gi"
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	// VolumeClaimTemplates should be set
+	if len(sts.Spec.VolumeClaimTemplates) != 1 {
+		t.Fatalf("VolumeClaimTemplates length = %d, want 1", len(sts.Spec.VolumeClaimTemplates))
+	}
+
+	vct := sts.Spec.VolumeClaimTemplates[0]
+	if vct.Name != "data" {
+		t.Errorf("VCT name = %q, want %q", vct.Name, "data")
+	}
+
+	// Access modes default to RWO
+	if len(vct.Spec.AccessModes) != 1 || vct.Spec.AccessModes[0] != corev1.ReadWriteOnce {
+		t.Errorf("VCT access modes = %v, want [ReadWriteOnce]", vct.Spec.AccessModes)
+	}
+
+	// Size should match
+	size := vct.Spec.Resources.Requests[corev1.ResourceStorage]
+	if size.String() != "20Gi" {
+		t.Errorf("VCT storage size = %q, want %q", size.String(), "20Gi")
+	}
+
+	// No static "data" volume in pod spec
+	dataVol := findVolume(sts.Spec.Template.Spec.Volumes, "data")
+	if dataVol != nil {
+		t.Error("static data volume should not be present when VCTs are used")
+	}
+}
+
+func TestBuildStatefulSet_VCT_CustomAccessModes(t *testing.T) {
+	instance := newTestInstance("vct-rwx")
+	instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+		Enabled: Ptr(true),
+	}
+	instance.Spec.Storage.Persistence.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany}
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	if len(sts.Spec.VolumeClaimTemplates) != 1 {
+		t.Fatalf("VolumeClaimTemplates length = %d, want 1", len(sts.Spec.VolumeClaimTemplates))
+	}
+	if sts.Spec.VolumeClaimTemplates[0].Spec.AccessModes[0] != corev1.ReadWriteMany {
+		t.Errorf("VCT access mode = %v, want ReadWriteMany", sts.Spec.VolumeClaimTemplates[0].Spec.AccessModes)
+	}
+}
+
+func TestBuildStatefulSet_VCT_StorageClass(t *testing.T) {
+	instance := newTestInstance("vct-sc")
+	instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+		Enabled: Ptr(true),
+	}
+	sc := "fast-ssd"
+	instance.Spec.Storage.Persistence.StorageClass = &sc
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	if len(sts.Spec.VolumeClaimTemplates) != 1 {
+		t.Fatalf("VolumeClaimTemplates length = %d, want 1", len(sts.Spec.VolumeClaimTemplates))
+	}
+	vct := sts.Spec.VolumeClaimTemplates[0]
+	if vct.Spec.StorageClassName == nil || *vct.Spec.StorageClassName != "fast-ssd" {
+		t.Errorf("VCT storage class = %v, want %q", vct.Spec.StorageClassName, "fast-ssd")
+	}
+}
+
+func TestBuildStatefulSet_VCT_NoStorageClass(t *testing.T) {
+	instance := newTestInstance("vct-no-sc")
+	instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+		Enabled: Ptr(true),
+	}
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	if len(sts.Spec.VolumeClaimTemplates) != 1 {
+		t.Fatalf("VolumeClaimTemplates length = %d, want 1", len(sts.Spec.VolumeClaimTemplates))
+	}
+	if sts.Spec.VolumeClaimTemplates[0].Spec.StorageClassName != nil {
+		t.Errorf("VCT storage class should be nil, got %q", *sts.Spec.VolumeClaimTemplates[0].Spec.StorageClassName)
+	}
+}
+
+func TestBuildStatefulSet_NoVCT_HPADisabled(t *testing.T) {
+	instance := newTestInstance("no-vct")
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	// No VCTs when HPA is disabled
+	if len(sts.Spec.VolumeClaimTemplates) != 0 {
+		t.Errorf("VolumeClaimTemplates should be empty when HPA is disabled, got %d", len(sts.Spec.VolumeClaimTemplates))
+	}
+
+	// Static PVC volume should be present
+	dataVol := findVolume(sts.Spec.Template.Spec.Volumes, "data")
+	if dataVol == nil {
+		t.Fatal("data volume not found")
+	}
+	if dataVol.PersistentVolumeClaim == nil {
+		t.Error("data volume should use static PVC when HPA is disabled")
+	}
+}
+
+func TestBuildStatefulSet_NoVCT_PersistenceDisabledWithHPA(t *testing.T) {
+	instance := newTestInstance("no-vct-no-pvc")
+	instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+		Enabled: Ptr(true),
+	}
+	instance.Spec.Storage.Persistence.Enabled = Ptr(false)
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	// No VCTs when persistence is disabled
+	if len(sts.Spec.VolumeClaimTemplates) != 0 {
+		t.Errorf("VolumeClaimTemplates should be empty when persistence is disabled, got %d", len(sts.Spec.VolumeClaimTemplates))
+	}
+
+	// Data volume should be emptyDir
+	dataVol := findVolume(sts.Spec.Template.Spec.Volumes, "data")
+	if dataVol == nil {
+		t.Fatal("data volume not found")
+	}
+	if dataVol.EmptyDir == nil {
+		t.Error("data volume should be emptyDir when persistence is disabled")
+	}
+}
+
+func TestBuildStatefulSet_VCT_DefaultSize(t *testing.T) {
+	instance := newTestInstance("vct-default-size")
+	instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+		Enabled: Ptr(true),
+	}
+	// Don't set size - should default to 10Gi
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	if len(sts.Spec.VolumeClaimTemplates) != 1 {
+		t.Fatalf("VolumeClaimTemplates length = %d, want 1", len(sts.Spec.VolumeClaimTemplates))
+	}
+	size := sts.Spec.VolumeClaimTemplates[0].Spec.Resources.Requests[corev1.ResourceStorage]
+	if size.String() != "10Gi" {
+		t.Errorf("VCT default storage size = %q, want %q", size.String(), "10Gi")
+	}
+}
+
+func TestBuildStatefulSet_VCT_HasLabels(t *testing.T) {
+	instance := newTestInstance("vct-labels")
+	instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+		Enabled: Ptr(true),
+	}
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	if len(sts.Spec.VolumeClaimTemplates) != 1 {
+		t.Fatalf("VolumeClaimTemplates length = %d, want 1", len(sts.Spec.VolumeClaimTemplates))
+	}
+	labels := sts.Spec.VolumeClaimTemplates[0].Labels
+	if labels["app.kubernetes.io/name"] != "openclaw" {
+		t.Errorf("VCT missing expected label app.kubernetes.io/name=openclaw, got %v", labels)
+	}
+}
+
+func TestBuildStatefulSet_Idempotent_WithHPAAndPersistence(t *testing.T) {
+	instance := newTestInstance("idem-hpa")
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{Raw: []byte(`{"key":"val"}`)},
+	}
+	instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+		Enabled:              Ptr(true),
+		MinReplicas:          Ptr(int32(1)),
+		MaxReplicas:          Ptr(int32(5)),
+		TargetCPUUtilization: Ptr(int32(80)),
+	}
+	instance.Spec.Storage.Persistence.Size = "20Gi"
+	sc := "fast-ssd"
+	instance.Spec.Storage.Persistence.StorageClass = &sc
+
+	sts1 := BuildStatefulSet(instance, "", nil)
+	sts2 := BuildStatefulSet(instance, "", nil)
+
+	b1, _ := json.Marshal(sts1.Spec)
+	b2, _ := json.Marshal(sts2.Spec)
+
+	if !bytes.Equal(b1, b2) {
+		t.Error("BuildStatefulSet with HPA and persistence is not idempotent - two calls with the same input produce different specs")
 	}
 }

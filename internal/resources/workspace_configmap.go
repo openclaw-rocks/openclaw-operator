@@ -37,8 +37,9 @@ func BuildWorkspaceConfigMap(instance *openclawv1alpha1.OpenClawInstance, skillP
 		}
 	}
 
-	// Operator-injected environment documentation (always present)
+	// Operator-injected files (always present)
 	files["ENVIRONMENT.md"] = EnvironmentSkillContent
+	files["BOOTSTRAP.md"] = BootstrapContent
 
 	// Operator-injected self-configure files
 	if instance.Spec.SelfConfigure.Enabled {
