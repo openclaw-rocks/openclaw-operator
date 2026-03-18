@@ -74,6 +74,7 @@ Every request is validated against the instance's allowlist policy. Protected co
 | **Flexible** | Provider-agnostic config | Use any AI provider (Anthropic, OpenAI, or others) via environment variables and inline or external config |
 | **Config Modes** | Merge or overwrite | `overwrite` replaces config on restart; `merge` deep-merges with PVC config, preserving runtime changes. Config is restored on every container restart via init container. |
 | **Skills** | Declarative install | Install ClawHub skills, npm packages, or GitHub-hosted skill packs via `spec.skills` - supports `npm:` and `pack:` prefixes |
+| **Plugins** | Declarative install | Install OpenClaw plugins via `spec.plugins` - npm packages installed in a secure init container |
 | **Runtime Deps** | pnpm & Python/uv | Built-in init containers install pnpm (via corepack) or Python 3.12 + uv for MCP servers and skills |
 | **Auto-Update** | OCI registry polling | Opt-in version tracking: checks the registry for new semver releases, backs up first, rolls out, and auto-rolls back if the new version fails health checks |
 | **Scalable** | Auto-scaling | HPA integration with CPU and memory metrics, min/max replica bounds, automatic StatefulSet replica management |
@@ -447,6 +448,19 @@ Each pack directory must contain a `skillpack.json` manifest:
 ```
 
 The operator resolves packs via the GitHub Contents API (cached for 5 minutes), seeds files into the workspace via the init container, and injects config entries into `config.raw.skills.entries` (user overrides take precedence). Set `GITHUB_TOKEN` on the operator deployment for private repo access.
+
+### Plugin installation
+
+Install plugins declaratively. The operator runs a dedicated init container that installs each plugin via `npm install` before the agent starts:
+
+```yaml
+spec:
+  plugins:
+    - "@martian-engineering/lossless-claw"
+    - "some-other-plugin"
+```
+
+npm lifecycle scripts are disabled globally on the init container (`NPM_CONFIG_IGNORE_SCRIPTS=true`) to mitigate supply chain attacks. Plugins are installed into the PVC-backed `~/.openclaw/node_modules` directory and persist across pod restarts.
 
 ### Self-configure
 

@@ -95,6 +95,21 @@ spec:
 
 **Skill packs** (`pack:owner/repo/path[@ref]`) are resolved from GitHub repos containing a `skillpack.json` manifest. The manifest declares files to seed into the workspace, directories to create, and config entries to inject into `config.raw.skills.entries`. User-defined config entries take precedence over pack defaults. The operator caches resolved packs for 5 minutes. Set `GITHUB_TOKEN` on the operator for private repo access.
 
+### spec.plugins
+
+| Field     | Type       | Default | Description                                                                                       |
+|-----------|------------|---------|---------------------------------------------------------------------------------------------------|
+| `plugins` | `[]string` | --      | Plugins to install. Entries are npm package names (e.g., `@martian-engineering/lossless-claw`). An optional `npm:` prefix is accepted and stripped before installation. npm lifecycle scripts are disabled for security. Max 20 items. |
+
+```yaml
+spec:
+  plugins:
+    - "@martian-engineering/lossless-claw"
+    - "some-other-plugin"
+```
+
+Plugins are installed via `npm install` in a dedicated `init-plugins` init container. They are stored in the PVC-backed `~/.openclaw/node_modules` directory and persist across pod restarts.
+
 ### spec.envFrom
 
 | Field     | Type                  | Default | Description                                                                       |
@@ -374,7 +389,7 @@ spec:
 |------------------|-----------------|---------|--------------------------------------------------------------------------|
 | `initContainers` | `[]Container`   | --      | Additional init containers to run before the main container. They run after the operator-managed init containers. Max 10 items. |
 
-Standard Kubernetes `Container` spec. The following names are reserved by the operator and rejected by the webhook: `init-config`, `init-pnpm`, `init-python`, `init-skills`, `init-ollama`.
+Standard Kubernetes `Container` spec. The following names are reserved by the operator and rejected by the webhook: `init-config`, `init-pnpm`, `init-python`, `init-skills`, `init-plugins`, `init-ollama`.
 
 ```yaml
 spec:

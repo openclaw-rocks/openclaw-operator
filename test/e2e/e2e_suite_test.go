@@ -1718,6 +1718,79 @@ var _ = Describe("OpenClawInstance Controller", func() {
 		})
 	})
 
+	Context("When creating an instance with plugins (issue #372)", func() {
+		var namespace string
+
+		BeforeEach(func() {
+			namespace = "test-plugins-" + time.Now().Format("20060102150405")
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+			Expect(k8sClient.Create(ctx, ns)).Should(Succeed())
+		})
+
+		AfterEach(func() {
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+			_ = k8sClient.Delete(ctx, ns)
+		})
+
+		It("Should produce an init-plugins container with npm install for plugins", func() {
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instanceName := "plugins-test"
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					Plugins: []string{"@martian-engineering/lossless-claw"},
+				},
+			}
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			statefulSet := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.StatefulSetName(instance),
+					Namespace: namespace,
+				}, statefulSet)
+			}, 60*time.Second, 2*time.Second).Should(Succeed())
+
+			var pluginsContainer *corev1.Container
+			for i := range statefulSet.Spec.Template.Spec.InitContainers {
+				if statefulSet.Spec.Template.Spec.InitContainers[i].Name == "init-plugins" {
+					pluginsContainer = &statefulSet.Spec.Template.Spec.InitContainers[i]
+					break
+				}
+			}
+			Expect(pluginsContainer).NotTo(BeNil(), "init-plugins container should exist")
+
+			// Script should contain npm install for plugin
+			script := pluginsContainer.Command[2]
+			Expect(script).To(ContainSubstring("npm install '@martian-engineering/lossless-claw'"),
+				"plugin should use npm install")
+
+			// NPM_CONFIG_IGNORE_SCRIPTS should be set
+			envMap := map[string]string{}
+			for _, e := range pluginsContainer.Env {
+				envMap[e.Name] = e.Value
+			}
+			Expect(envMap["NPM_CONFIG_IGNORE_SCRIPTS"]).To(Equal("true"),
+				"NPM_CONFIG_IGNORE_SCRIPTS should be true for supply chain security")
+
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+	})
+
 	Context("When validating postStart config restoration (issue #125)", func() {
 		var namespace string
 

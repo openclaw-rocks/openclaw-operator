@@ -229,6 +229,13 @@ func (v *OpenClawInstanceValidator) validate(instance *openclawv1alpha1.OpenClaw
 		}
 	}
 
+	// 15b. Validate plugin names
+	for i, plugin := range instance.Spec.Plugins {
+		if err := validatePluginName(plugin); err != nil {
+			return nil, fmt.Errorf("plugins[%d] %q: %w", i, plugin, err)
+		}
+	}
+
 	// 16. Validate CA bundle spec
 	if cab := instance.Spec.Security.CABundle; cab != nil {
 		if cab.ConfigMapName != "" && cab.SecretName != "" {
@@ -471,6 +478,33 @@ func validateSkillName(name string) error {
 	return nil
 }
 
+// validatePluginName checks a single plugin identifier.
+// Plugin entries are npm package names. An optional "npm:" prefix is accepted
+// and stripped before character-set validation.
+func validatePluginName(name string) error {
+	if name == "" {
+		return fmt.Errorf("plugin name must not be empty")
+	}
+	if len(name) > 128 {
+		return fmt.Errorf("plugin name must be at most 128 characters")
+	}
+	// Strip optional npm: prefix before character validation
+	check := name
+	if after, ok := strings.CutPrefix(name, "npm:"); ok {
+		if after == "" {
+			return fmt.Errorf("npm: prefix requires a package name")
+		}
+		check = after
+	}
+	for _, c := range check {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+			c == '-' || c == '_' || c == '/' || c == '.' || c == '@') {
+			return fmt.Errorf("plugin name contains invalid character %q", string(c))
+		}
+	}
+	return nil
+}
+
 // validateProviderKeys checks whether any known AI provider API keys are configured.
 func validateProviderKeys(instance *openclawv1alpha1.OpenClawInstance) admission.Warnings {
 	// If envFrom has entries, assume secrets contain provider keys (we can't introspect)
@@ -516,11 +550,12 @@ func validateConfigSchema(instance *openclawv1alpha1.OpenClawInstance) admission
 
 // reservedInitContainerNames are names used by operator-managed init containers.
 var reservedInitContainerNames = map[string]bool{
-	"init-config": true,
-	"init-pnpm":   true,
-	"init-python": true,
-	"init-skills": true,
-	"init-ollama": true,
+	"init-config":  true,
+	"init-pnpm":    true,
+	"init-python":  true,
+	"init-skills":  true,
+	"init-plugins": true,
+	"init-ollama":  true,
 }
 
 // validateInitContainers checks custom init container names.

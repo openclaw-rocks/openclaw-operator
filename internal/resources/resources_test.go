@@ -5077,6 +5077,321 @@ func TestBuildStatefulSet_SkillsOnly_HasBothInitContainers(t *testing.T) {
 	}
 }
 
+// Feature: Declarative plugin installation tests (issue #372)
+// ---------------------------------------------------------------------------
+
+func TestParsePluginEntry_Basic(t *testing.T) {
+	got := parsePluginEntry("@martian-engineering/lossless-claw")
+	want := "cd /home/openclaw/.openclaw && npm install '@martian-engineering/lossless-claw'"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestParsePluginEntry_WithNpmPrefix(t *testing.T) {
+	got := parsePluginEntry("npm:@openclaw/some-plugin")
+	want := "cd /home/openclaw/.openclaw && npm install '@openclaw/some-plugin'"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestParsePluginEntry_Unscoped(t *testing.T) {
+	got := parsePluginEntry("some-plugin")
+	want := "cd /home/openclaw/.openclaw && npm install 'some-plugin'"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestBuildPluginsScript_NoPlugins(t *testing.T) {
+	instance := newTestInstance("no-plugins")
+	script := BuildPluginsScript(instance)
+	if script != "" {
+		t.Errorf("expected empty script, got: %q", script)
+	}
+}
+
+func TestBuildPluginsScript_WithPlugins(t *testing.T) {
+	instance := newTestInstance("with-plugins")
+	instance.Spec.Plugins = []string{"@martian-engineering/lossless-claw", "another-plugin"}
+
+	script := BuildPluginsScript(instance)
+
+	if !strings.HasPrefix(script, "set -e\n") {
+		t.Error("script should start with set -e")
+	}
+	if !strings.Contains(script, "npm install '@martian-engineering/lossless-claw'") {
+		t.Error("script should contain npm install for lossless-claw")
+	}
+	if !strings.Contains(script, "npm install 'another-plugin'") {
+		t.Error("script should contain npm install for another-plugin")
+	}
+}
+
+func TestBuildPluginsScript_Deterministic(t *testing.T) {
+	instance := newTestInstance("deterministic-plugins")
+	instance.Spec.Plugins = []string{"z-plugin", "a-plugin"}
+
+	script := BuildPluginsScript(instance)
+	lines := strings.Split(script, "\n")
+
+	// After "set -e", entries should be sorted alphabetically
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 lines, got %d: %v", len(lines), lines)
+	}
+	if !strings.Contains(lines[1], "a-plugin") {
+		t.Errorf("expected a-plugin first, got %q", lines[1])
+	}
+	if !strings.Contains(lines[2], "z-plugin") {
+		t.Errorf("expected z-plugin second, got %q", lines[2])
+	}
+}
+
+func TestBuildStatefulSet_NoPlugins_NoInitPluginsContainer(t *testing.T) {
+	instance := newTestInstance("no-plugins-sts")
+
+	sts := BuildStatefulSet(instance, "", nil)
+	for _, c := range sts.Spec.Template.Spec.InitContainers {
+		if c.Name == "init-plugins" {
+			t.Error("init-plugins container should not exist without plugins")
+		}
+	}
+}
+
+func TestBuildStatefulSet_WithPlugins_InitPluginsContainer(t *testing.T) {
+	instance := newTestInstance("plugins-sts")
+	instance.Spec.Plugins = []string{"@martian-engineering/lossless-claw"}
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	var pluginsContainer *corev1.Container
+	for i := range sts.Spec.Template.Spec.InitContainers {
+		if sts.Spec.Template.Spec.InitContainers[i].Name == "init-plugins" {
+			pluginsContainer = &sts.Spec.Template.Spec.InitContainers[i]
+			break
+		}
+	}
+	if pluginsContainer == nil {
+		t.Fatal("init-plugins container not found")
+	}
+
+	// Should use same image as main container
+	expectedImage := GetImage(instance)
+	if pluginsContainer.Image != expectedImage {
+		t.Errorf("init-plugins image = %q, want %q", pluginsContainer.Image, expectedImage)
+	}
+
+	// Should have HOME and NPM_CONFIG_CACHE env vars
+	envMap := map[string]string{}
+	for _, e := range pluginsContainer.Env {
+		envMap[e.Name] = e.Value
+	}
+	if envMap["HOME"] != "/tmp" {
+		t.Errorf("init-plugins HOME = %q, want /tmp", envMap["HOME"])
+	}
+	if envMap["NPM_CONFIG_CACHE"] != "/tmp/.npm" {
+		t.Errorf("init-plugins NPM_CONFIG_CACHE = %q, want /tmp/.npm", envMap["NPM_CONFIG_CACHE"])
+	}
+
+	// Should have data and plugins-tmp mounts
+	assertVolumeMount(t, pluginsContainer.VolumeMounts, "data", "/home/openclaw/.openclaw")
+	assertVolumeMount(t, pluginsContainer.VolumeMounts, "plugins-tmp", "/tmp")
+
+	// Security context should be restricted
+	sc := pluginsContainer.SecurityContext
+	if sc == nil {
+		t.Fatal("init-plugins security context is nil")
+	}
+	if sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation {
+		t.Error("init-plugins: allowPrivilegeEscalation should be false")
+	}
+	if sc.RunAsNonRoot == nil || !*sc.RunAsNonRoot {
+		t.Error("init-plugins: runAsNonRoot should be true")
+	}
+	if sc.ReadOnlyRootFilesystem == nil || *sc.ReadOnlyRootFilesystem {
+		t.Error("init-plugins: readOnlyRootFilesystem should be false (npm needs writable node_modules)")
+	}
+
+	// NPM_CONFIG_IGNORE_SCRIPTS must be set
+	if envMap["NPM_CONFIG_IGNORE_SCRIPTS"] != "true" {
+		t.Errorf("init-plugins NPM_CONFIG_IGNORE_SCRIPTS = %q, want \"true\"", envMap["NPM_CONFIG_IGNORE_SCRIPTS"])
+	}
+
+	// Script should contain npm install
+	script := pluginsContainer.Command[2]
+	if !strings.Contains(script, "npm install") {
+		t.Errorf("expected npm install in script, got: %q", script)
+	}
+}
+
+func TestBuildStatefulSet_WithPlugins_EnvAndEnvFromPropagated(t *testing.T) {
+	instance := newTestInstance("plugins-env")
+	instance.Spec.Plugins = []string{"some-plugin"}
+	instance.Spec.Env = []corev1.EnvVar{
+		{Name: "NPM_TOKEN", Value: "secret-token"},
+	}
+	instance.Spec.EnvFrom = []corev1.EnvFromSource{
+		{
+			SecretRef: &corev1.SecretEnvSource{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "vault-secrets"},
+			},
+		},
+	}
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	var pluginsContainer *corev1.Container
+	for i := range sts.Spec.Template.Spec.InitContainers {
+		if sts.Spec.Template.Spec.InitContainers[i].Name == "init-plugins" {
+			pluginsContainer = &sts.Spec.Template.Spec.InitContainers[i]
+			break
+		}
+	}
+	if pluginsContainer == nil {
+		t.Fatal("init-plugins container not found")
+	}
+
+	// Hardcoded env vars should come first (take precedence)
+	names := envNames(pluginsContainer.Env)
+	if len(names) < 4 {
+		t.Fatalf("expected at least 4 env vars, got %d: %v", len(names), names)
+	}
+	if names[0] != "HOME" || names[1] != "NPM_CONFIG_CACHE" || names[2] != "NPM_CONFIG_IGNORE_SCRIPTS" {
+		t.Errorf("hardcoded env vars should come first, got %v", names[:3])
+	}
+
+	// User-defined env var should be appended after hardcoded ones
+	if names[len(names)-1] != "NPM_TOKEN" {
+		t.Errorf("user-defined NPM_TOKEN should be last, got %v", names)
+	}
+
+	// EnvFrom should be propagated
+	if len(pluginsContainer.EnvFrom) != 1 {
+		t.Fatalf("expected 1 envFrom source, got %d", len(pluginsContainer.EnvFrom))
+	}
+	if pluginsContainer.EnvFrom[0].SecretRef.Name != "vault-secrets" {
+		t.Errorf("envFrom secretRef = %q, want vault-secrets", pluginsContainer.EnvFrom[0].SecretRef.Name)
+	}
+}
+
+func TestBuildStatefulSet_WithPlugins_PluginsTmpVolume(t *testing.T) {
+	instance := newTestInstance("plugins-vol")
+	instance.Spec.Plugins = []string{"some-plugin"}
+
+	sts := BuildStatefulSet(instance, "", nil)
+	pluginsTmpVol := findVolume(sts.Spec.Template.Spec.Volumes, "plugins-tmp")
+	if pluginsTmpVol == nil {
+		t.Fatal("plugins-tmp volume not found")
+	}
+	if pluginsTmpVol.EmptyDir == nil {
+		t.Error("plugins-tmp volume should be emptyDir")
+	}
+}
+
+func TestBuildStatefulSet_NoPlugins_NoPluginsTmpVolume(t *testing.T) {
+	instance := newTestInstance("no-plugins-vol")
+
+	sts := BuildStatefulSet(instance, "", nil)
+	pluginsTmpVol := findVolume(sts.Spec.Template.Spec.Volumes, "plugins-tmp")
+	if pluginsTmpVol != nil {
+		t.Error("plugins-tmp volume should not exist without plugins")
+	}
+}
+
+func TestConfigHash_ChangesWithPlugins(t *testing.T) {
+	instance := newTestInstance("hash-plugins")
+
+	dep1 := BuildStatefulSet(instance, "", nil)
+	hash1 := dep1.Spec.Template.Annotations["openclaw.rocks/config-hash"]
+
+	instance.Spec.Plugins = []string{"some-plugin"}
+
+	dep2 := BuildStatefulSet(instance, "", nil)
+	hash2 := dep2.Spec.Template.Annotations["openclaw.rocks/config-hash"]
+
+	if hash1 == hash2 {
+		t.Error("config hash should change when plugins are added")
+	}
+}
+
+func TestBuildStatefulSet_InitContainerOrdering_SkillsThenPlugins(t *testing.T) {
+	instance := newTestInstance("ordering-plugins")
+	instance.Spec.Skills = []string{"some-skill"}
+	instance.Spec.Plugins = []string{"some-plugin"}
+	instance.Spec.InitContainers = []corev1.Container{
+		{Name: "user-init", Image: "busybox:1.37"},
+	}
+
+	sts := BuildStatefulSet(instance, "", nil)
+	initContainers := sts.Spec.Template.Spec.InitContainers
+
+	// Find indices
+	skillsIdx, pluginsIdx, userIdx := -1, -1, -1
+	for i, c := range initContainers {
+		switch c.Name {
+		case "init-skills":
+			skillsIdx = i
+		case "init-plugins":
+			pluginsIdx = i
+		case "user-init":
+			userIdx = i
+		}
+	}
+
+	if skillsIdx < 0 || pluginsIdx < 0 || userIdx < 0 {
+		names := make([]string, len(initContainers))
+		for i, c := range initContainers {
+			names[i] = c.Name
+		}
+		t.Fatalf("expected init-skills, init-plugins, and user-init containers, got %v", names)
+	}
+	if skillsIdx >= pluginsIdx {
+		t.Error("init-skills should come before init-plugins")
+	}
+	if pluginsIdx >= userIdx {
+		t.Error("init-plugins should come before user-init")
+	}
+}
+
+func TestBuildStatefulSet_CABundle_InitPlugins(t *testing.T) {
+	instance := newTestInstance("ca-plugins")
+	instance.Spec.Plugins = []string{"some-plugin"}
+	instance.Spec.Security.CABundle = &openclawv1alpha1.CABundleSpec{
+		ConfigMapName: "my-ca",
+		Key:           "ca.crt",
+	}
+
+	sts := BuildStatefulSet(instance, "", nil)
+
+	// Find init-plugins container
+	var initPlugins *corev1.Container
+	for i := range sts.Spec.Template.Spec.InitContainers {
+		if sts.Spec.Template.Spec.InitContainers[i].Name == "init-plugins" {
+			initPlugins = &sts.Spec.Template.Spec.InitContainers[i]
+			break
+		}
+	}
+	if initPlugins == nil {
+		t.Fatal("init-plugins container not found")
+	}
+
+	// Check mount
+	assertVolumeMount(t, initPlugins.VolumeMounts, "ca-bundle", "/etc/ssl/certs/custom-ca-bundle.crt")
+
+	// Check env
+	foundEnv := false
+	for _, env := range initPlugins.Env {
+		if env.Name == "NODE_EXTRA_CA_CERTS" {
+			foundEnv = true
+		}
+	}
+	if !foundEnv {
+		t.Error("NODE_EXTRA_CA_CERTS env var not found on init-plugins container")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // secret.go tests — gateway token Secret
 // ---------------------------------------------------------------------------
 

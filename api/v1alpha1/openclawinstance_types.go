@@ -31,6 +31,14 @@ type OpenClawInstanceSpec struct {
 	// +optional
 	Skills []string `json:"skills,omitempty"`
 
+	// Plugins is a list of plugins to install via init container.
+	// Each entry is an npm package name (e.g., "@martian-engineering/lossless-claw").
+	// An optional "npm:" prefix is accepted and stripped before installation.
+	// npm lifecycle scripts are disabled for security.
+	// +kubebuilder:validation:MaxItems=20
+	// +optional
+	Plugins []string `json:"plugins,omitempty"`
+
 	// EnvFrom is a list of sources to populate environment variables from
 	// Use this for API keys and other secrets (e.g., ANTHROPIC_API_KEY, OPENAI_API_KEY)
 	// +optional

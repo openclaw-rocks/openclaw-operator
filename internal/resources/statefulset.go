@@ -556,6 +556,11 @@ func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance, skillPacks
 		initContainers = append(initContainers, *skillsContainer)
 	}
 
+	// Plugins init container (only if plugins are defined)
+	if pluginsContainer := buildPluginsInitContainer(instance); pluginsContainer != nil {
+		initContainers = append(initContainers, *pluginsContainer)
+	}
+
 	// Ollama model-pulling init container (only if enabled and models are specified)
 	if instance.Spec.Ollama.Enabled && len(instance.Spec.Ollama.Models) > 0 {
 		initContainers = append(initContainers, buildOllamaModelPullInitContainer(instance))
@@ -816,6 +821,105 @@ func buildSkillsInitContainer(instance *openclawv1alpha1.OpenClawInstance) *core
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: Ptr(false),
 			ReadOnlyRootFilesystem:   Ptr(false), // npx needs to write to node_modules
+			RunAsNonRoot:             Ptr(podRunAsNonRoot(instance)),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+		},
+		VolumeMounts: mounts,
+	}
+}
+
+// parsePluginEntry returns the shell command to install a single plugin entry.
+// Entries are npm package names. An optional "npm:" prefix is stripped.
+// Installs into the PVC-backed ~/.openclaw/ node_modules via `npm install`.
+func parsePluginEntry(entry string) string {
+	pkg := entry
+	if after, ok := strings.CutPrefix(entry, "npm:"); ok {
+		pkg = after
+	}
+	return fmt.Sprintf("cd /home/openclaw/.openclaw && npm install %s", shellQuote(pkg))
+}
+
+// BuildPluginsScript generates the shell script for the plugins init container.
+// Each entry produces an `npm install` command.
+// Entries are sorted for determinism. Returns "" if no plugins are defined.
+func BuildPluginsScript(instance *openclawv1alpha1.OpenClawInstance) string {
+	plugins := instance.Spec.Plugins
+	if len(plugins) == 0 {
+		return ""
+	}
+
+	sorted := make([]string, len(plugins))
+	copy(sorted, plugins)
+	sort.Strings(sorted)
+
+	var lines []string
+	lines = append(lines, "set -e")
+	for _, plugin := range sorted {
+		lines = append(lines, parsePluginEntry(plugin))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// buildPluginsInitContainer creates the init container that installs plugins.
+// npm lifecycle scripts are disabled globally via NPM_CONFIG_IGNORE_SCRIPTS.
+func buildPluginsInitContainer(instance *openclawv1alpha1.OpenClawInstance) *corev1.Container {
+	script := BuildPluginsScript(instance)
+	if script == "" {
+		return nil
+	}
+
+	mounts := []corev1.VolumeMount{
+		{Name: "data", MountPath: "/home/openclaw/.openclaw"},
+		{Name: "plugins-tmp", MountPath: "/tmp"},
+	}
+
+	env := []corev1.EnvVar{
+		{Name: "HOME", Value: "/tmp"},
+		{Name: "NPM_CONFIG_CACHE", Value: "/tmp/.npm"},
+		// Disable npm lifecycle scripts for all npm operations in this
+		// container. This mitigates supply chain attacks via malicious
+		// preinstall/postinstall scripts.
+		{Name: "NPM_CONFIG_IGNORE_SCRIPTS", Value: "true"},
+	}
+
+	// CA bundle for plugin install (makes network calls)
+	if cab := instance.Spec.Security.CABundle; cab != nil {
+		key := cab.Key
+		if key == "" {
+			key = DefaultCABundleKey
+		}
+		mounts = append(mounts, corev1.VolumeMount{
+			Name:      "ca-bundle",
+			MountPath: "/etc/ssl/certs/custom-ca-bundle.crt",
+			SubPath:   key,
+			ReadOnly:  true,
+		})
+		env = append(env, corev1.EnvVar{
+			Name:  "NODE_EXTRA_CA_CERTS",
+			Value: "/etc/ssl/certs/custom-ca-bundle.crt",
+		})
+	}
+
+	// Append user-supplied env vars after hardcoded defaults so that
+	// credentials are available during plugin installation.
+	// Hardcoded vars (HOME, NPM_CONFIG_CACHE, NPM_CONFIG_IGNORE_SCRIPTS)
+	// take precedence because they appear first.
+	env = append(env, instance.Spec.Env...)
+
+	return &corev1.Container{
+		Name:                     "init-plugins",
+		Image:                    GetImage(instance),
+		Command:                  []string{"sh", "-c", script},
+		ImagePullPolicy:          getPullPolicy(instance),
+		Env:                      env,
+		EnvFrom:                  instance.Spec.EnvFrom,
+		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
+		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: Ptr(false),
+			ReadOnlyRootFilesystem:   Ptr(false), // npm needs to write to node_modules
 			RunAsNonRoot:             Ptr(podRunAsNonRoot(instance)),
 			Capabilities: &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
@@ -1743,6 +1847,16 @@ func buildVolumes(instance *openclawv1alpha1.OpenClawInstance, skillPacks *Resol
 		})
 	}
 
+	// Plugins-tmp volume for plugins init container
+	if len(instance.Spec.Plugins) > 0 {
+		volumes = append(volumes, corev1.Volume{
+			Name: "plugins-tmp",
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		})
+	}
+
 	// Runtime dep tmp volumes
 	if instance.Spec.RuntimeDeps.Pnpm {
 		volumes = append(volumes, corev1.Volume{
@@ -2155,6 +2269,10 @@ func calculateConfigHash(instance *openclawv1alpha1.OpenClawInstance) string {
 	if len(instance.Spec.Skills) > 0 {
 		skillsData, _ := json.Marshal(instance.Spec.Skills)
 		h.Write(skillsData)
+	}
+	if len(instance.Spec.Plugins) > 0 {
+		pluginsData, _ := json.Marshal(instance.Spec.Plugins)
+		h.Write(pluginsData)
 	}
 	if len(instance.Spec.InitContainers) > 0 {
 		icData, _ := json.Marshal(instance.Spec.InitContainers)

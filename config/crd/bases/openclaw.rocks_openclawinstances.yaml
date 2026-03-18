@@ -5435,6 +5435,16 @@ spec:
                         type: string
                     type: object
                 type: object
+              plugins:
+                description: |-
+                  Plugins is a list of plugins to install via init container.
+                  Each entry is an npm package name (e.g., "@martian-engineering/lossless-claw").
+                  An optional "npm:" prefix is accepted and stripped before installation.
+                  npm lifecycle scripts are disabled for security.
+                items:
+                  type: string
+                maxItems: 20
+                type: array
               probes:
                 description: Probes configures health probes for the OpenClaw container
                 nullable: true
