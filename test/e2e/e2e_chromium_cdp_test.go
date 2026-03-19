@@ -794,10 +794,10 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 					GinkgoWriter.Println("Browser probe succeeded - device pairing complete")
 				} else {
 					logMsg := string(probeRaw)
-				if len(logMsg) > 200 {
-					logMsg = logMsg[:200] + "..."
-				}
-				GinkgoWriter.Printf("Browser probe returned error (expected if pairing just completed): %s\n", logMsg)
+					if len(logMsg) > 200 {
+						logMsg = logMsg[:200] + "..."
+					}
+					GinkgoWriter.Printf("Browser probe returned error (expected if pairing just completed): %s\n", logMsg)
 				}
 				break
 			}
