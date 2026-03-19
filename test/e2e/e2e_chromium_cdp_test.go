@@ -691,14 +691,18 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 		Expect(ws.WriteJSON(connectReq)).To(Succeed())
 
 		By("Waiting for connect response")
-		var connectResp gwMessage
 		Expect(ws.SetReadDeadline(time.Now().Add(15 * time.Second))).To(Succeed())
-		err = ws.ReadJSON(&connectResp)
+		_, connectRaw, err := ws.ReadMessage()
 		Expect(err).NotTo(HaveOccurred(), "should receive connect response")
+		GinkgoWriter.Printf("Connect response: %s\n", string(connectRaw))
+
+		var connectResp gwMessage
+		Expect(json.Unmarshal(connectRaw, &connectResp)).To(Succeed())
 		Expect(connectResp.Type).To(Equal("res"))
 		Expect(connectResp.ID).To(Equal(connectID))
 		Expect(connectResp.OK).NotTo(BeNil())
-		Expect(*connectResp.OK).To(BeTrue(), "connect response should be ok=true")
+		Expect(*connectResp.OK).To(BeTrue(),
+			"connect response should be ok=true, got: %s", string(connectRaw))
 		GinkgoWriter.Println("Gateway connection established")
 
 		By("Sending message to take a screenshot of openclaw.rocks")
