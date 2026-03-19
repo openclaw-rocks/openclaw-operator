@@ -373,6 +373,28 @@ var _ = Describe("Chromium CDP Functional Tests", Ordered, func() {
 		// Use a unique pod name to avoid conflicts
 		testPodName := fmt.Sprintf("cdp-test-%d", time.Now().UnixNano()%100000)
 
+		// Verify the headless CDP Service has endpoints pointing to the pod,
+		// then use curl from a temporary pod to confirm CDP responds via
+		// the Service DNS name.
+		By("Verifying CDP headless Service has endpoints")
+		endpoints := &corev1.Endpoints{}
+		Eventually(func() bool {
+			err := k8sClient.Get(ctx, types.NamespacedName{
+				Name:      cdpServiceName,
+				Namespace: namespace,
+			}, endpoints)
+			if err != nil {
+				return false
+			}
+			for _, subset := range endpoints.Subsets {
+				if len(subset.Addresses) > 0 {
+					return true
+				}
+			}
+			return false
+		}, 30*time.Second, 2*time.Second).Should(BeTrue(),
+			"CDP headless Service should have at least one endpoint address")
+
 		By(fmt.Sprintf("Running curl from a temporary pod to %s", cdpURL))
 		cmd := exec.Command("kubectl", "run", testPodName,
 			"--rm", "-i",
@@ -380,7 +402,7 @@ var _ = Describe("Chromium CDP Functional Tests", Ordered, func() {
 			"--timeout=60s",
 			"--namespace", namespace,
 			"--image=curlimages/curl",
-			"--", "curl", "-sf", "--max-time", "10", cdpURL,
+			"--", "curl", "-v", "--fail", "--max-time", "10", cdpURL,
 		)
 
 		output, err := cmd.CombinedOutput()
