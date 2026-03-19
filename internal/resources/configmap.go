@@ -75,7 +75,7 @@ func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseCo
 		}
 	}
 	if instance.Spec.Chromium.Enabled {
-		if enriched, err := enrichConfigWithBrowser(configBytes, instance); err == nil {
+		if enriched, err := enrichConfigWithBrowser(configBytes); err == nil {
 			configBytes = enriched
 		}
 	}
@@ -359,7 +359,7 @@ func BuildTailscaleServeConfig(instance *openclawv1alpha1.OpenClawInstance) stri
 // Without this override the built-in "chrome" profile falls back to the
 // extension relay which does not work in a headless container.
 // Does not override user-set values.
-func enrichConfigWithBrowser(configJSON []byte, instance *openclawv1alpha1.OpenClawInstance) ([]byte, error) {
+func enrichConfigWithBrowser(configJSON []byte) ([]byte, error) {
 	var config map[string]interface{}
 	if err := json.Unmarshal(configJSON, &config); err != nil {
 		return configJSON, nil // not a JSON object, return unchanged
