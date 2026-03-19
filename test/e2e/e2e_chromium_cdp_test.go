@@ -436,6 +436,15 @@ type gwMessage struct {
 	Payload json.RawMessage `json:"payload,omitempty"`
 }
 
+// gwConnectPayload is used to extract session defaults from the connect response.
+type gwConnectPayload struct {
+	Snapshot struct {
+		SessionDefaults struct {
+			MainSessionKey string `json:"mainSessionKey"`
+		} `json:"sessionDefaults"`
+	} `json:"snapshot"`
+}
+
 // gwChatPayload represents the payload of a chat event from the gateway.
 type gwChatPayload struct {
 	State      string `json:"state"`
@@ -658,7 +667,10 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 			HandshakeTimeout: 10 * time.Second,
 		}
 		wsURL := fmt.Sprintf("ws://localhost:%d", localPort)
-		ws, _, err := dialer.Dial(wsURL, nil)
+		// Origin header is required for control-ui client identity to pass origin check
+		wsHeaders := http.Header{}
+		wsHeaders.Set("Origin", fmt.Sprintf("http://localhost:%d", localPort))
+		ws, _, err := dialer.Dial(wsURL, wsHeaders)
 		Expect(err).NotTo(HaveOccurred(), "should connect to gateway WebSocket")
 		defer ws.Close()
 
@@ -681,13 +693,22 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 				"minProtocol": 3,
 				"maxProtocol": 3,
 				"client": map[string]interface{}{
-					"id":       "cli",
+					// Use control-ui identity with dangerouslyDisableDeviceAuth to
+					// preserve operator scopes without requiring device key pairing.
+					"id":       "openclaw-control-ui",
 					"version":  "1.0.0",
 					"platform": "linux",
-					"mode":     "cli",
+					"mode":     "ui",
 				},
 				"auth": map[string]interface{}{
 					"token": gatewayToken,
+				},
+				"scopes": []string{
+					"operator.admin",
+					"operator.read",
+					"operator.write",
+					"operator.approvals",
+					"operator.pairing",
 				},
 			},
 		}
@@ -708,14 +729,24 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 			"connect response should be ok=true, got: %s", string(connectRaw))
 		GinkgoWriter.Println("Gateway connection established")
 
+		// Extract session key from connect response for chat.send
+		var gwPayload gwConnectPayload
+		Expect(json.Unmarshal(connectResp.Payload, &gwPayload)).To(Succeed())
+		sessionKey := gwPayload.Snapshot.SessionDefaults.MainSessionKey
+		Expect(sessionKey).NotTo(BeEmpty(), "connect response should contain mainSessionKey")
+		GinkgoWriter.Printf("Session key: %s\n", sessionKey)
+
 		By("Sending message to take a screenshot of openclaw.rocks")
 		sendID := randomHex()
+		idempotencyKey := randomHex()
 		sendReq := map[string]interface{}{
 			"type":   "req",
 			"id":     sendID,
 			"method": "chat.send",
 			"params": map[string]interface{}{
-				"message": "Navigate to https://openclaw.rocks and take a screenshot. Use the browser tool with the default profile.",
+				"message":        "Navigate to https://openclaw.rocks and take a screenshot. Use the browser tool with the default profile.",
+				"sessionKey":     sessionKey,
+				"idempotencyKey": idempotencyKey,
 			},
 		}
 		Expect(ws.WriteJSON(sendReq)).To(Succeed())
