@@ -742,40 +742,42 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 		Expect(sessionKey).NotTo(BeEmpty(), "connect response should contain mainSessionKey")
 		GinkgoWriter.Printf("Session key: %s\n", sessionKey)
 
-		By("Pre-approving device pairing via browser.request probe")
-		// Trigger a browser.request to force any pending device pairing flow.
+		By("Triggering device pairing via warm-up chat.send")
 		// OpenClaw emits device.pair.requested when a control-ui client first
-		// invokes a browser operation. Auto-approve it so the LLM does not see
-		// a pairing gate when we send the actual chat message.
-		probeID := randomHex()
-		probeReq := map[string]interface{}{
+		// triggers the browser tool via the agent pipeline. Send a warm-up
+		// message to trigger the pairing flow, auto-approve it, and let the
+		// chat finish. The device stays paired for subsequent requests.
+		warmupID := randomHex()
+		warmupKey := randomHex()
+		warmupReq := map[string]interface{}{
 			"type":   "req",
-			"id":     probeID,
-			"method": "browser.request",
+			"id":     warmupID,
+			"method": "chat.send",
 			"params": map[string]interface{}{
-				"method": "GET",
-				"path":   "/json/version",
+				"message":        "Use the browser tool to navigate to https://example.com and take a screenshot.",
+				"sessionKey":     sessionKey,
+				"idempotencyKey": warmupKey,
 			},
 		}
-		Expect(ws.WriteJSON(probeReq)).To(Succeed())
+		Expect(ws.WriteJSON(warmupReq)).To(Succeed())
+		GinkgoWriter.Println("Warm-up chat.send dispatched for device pairing")
 
-		// Read events until the probe response comes back, auto-approving any
-		// device pairing requests along the way.
-		probeDeadline := time.Now().Add(30 * time.Second)
-		for time.Now().Before(probeDeadline) {
-			Expect(ws.SetReadDeadline(probeDeadline)).To(Succeed())
-			_, probeRaw, probeErr := ws.ReadMessage()
-			if probeErr != nil {
-				GinkgoWriter.Printf("Probe read error: %v\n", probeErr)
+		// Read events: auto-approve pairing, then wait for chat to finish.
+		warmupDeadline := time.Now().Add(90 * time.Second)
+		for time.Now().Before(warmupDeadline) {
+			Expect(ws.SetReadDeadline(warmupDeadline)).To(Succeed())
+			_, warmupRaw, warmupErr := ws.ReadMessage()
+			if warmupErr != nil {
+				GinkgoWriter.Printf("Warm-up read error: %v\n", warmupErr)
 				break
 			}
-			var probeMsg gwMessage
-			if jsonErr := json.Unmarshal(probeRaw, &probeMsg); jsonErr != nil {
+			var warmupMsg gwMessage
+			if jsonErr := json.Unmarshal(warmupRaw, &warmupMsg); jsonErr != nil {
 				continue
 			}
-			if probeMsg.Type == "event" && probeMsg.Event == "device.pair.requested" {
+			if warmupMsg.Type == "event" && warmupMsg.Event == "device.pair.requested" {
 				var pairReq gwDevicePairRequestPayload
-				if jsonErr := json.Unmarshal(probeMsg.Payload, &pairReq); jsonErr == nil && pairReq.RequestID != "" {
+				if jsonErr := json.Unmarshal(warmupMsg.Payload, &pairReq); jsonErr == nil && pairReq.RequestID != "" {
 					GinkgoWriter.Printf("Auto-approving device pair: %s\n", pairReq.RequestID)
 					approveReq := map[string]interface{}{
 						"type":   "req",
@@ -789,17 +791,14 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 				}
 				continue
 			}
-			if probeMsg.Type == "res" && probeMsg.ID == probeID {
-				if probeMsg.OK != nil && *probeMsg.OK {
-					GinkgoWriter.Println("Browser probe succeeded - device pairing complete")
-				} else {
-					logMsg := string(probeRaw)
-					if len(logMsg) > 200 {
-						logMsg = logMsg[:200] + "..."
+			if warmupMsg.Type == "event" && warmupMsg.Event == "chat" {
+				var chatPayload gwChatPayload
+				if jsonErr := json.Unmarshal(warmupMsg.Payload, &chatPayload); jsonErr == nil {
+					if chatPayload.State == "final" {
+						GinkgoWriter.Println("Warm-up chat completed, device should now be paired")
+						break
 					}
-					GinkgoWriter.Printf("Browser probe returned error (expected if pairing just completed): %s\n", logMsg)
 				}
-				break
 			}
 		}
 
