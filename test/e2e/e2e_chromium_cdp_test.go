@@ -17,6 +17,8 @@ limitations under the License.
 package e2e
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -33,6 +35,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -419,6 +422,367 @@ var _ = Describe("Chromium CDP Functional Tests", Ordered, func() {
 			"curl to CDP service should succeed, output: %s", outputStr)
 		Expect(outputStr).To(ContainSubstring("webSocketDebuggerUrl"),
 			"response from CDP headless Service should contain webSocketDebuggerUrl")
+	})
+})
+
+// gwMessage represents a message in the OpenClaw gateway WebSocket protocol.
+type gwMessage struct {
+	Type    string          `json:"type"`
+	ID      string          `json:"id,omitempty"`
+	Event   string          `json:"event,omitempty"`
+	Method  string          `json:"method,omitempty"`
+	OK      *bool           `json:"ok,omitempty"`
+	Params  json.RawMessage `json:"params,omitempty"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+}
+
+// gwChatPayload represents the payload of a chat event from the gateway.
+type gwChatPayload struct {
+	State      string `json:"state"`
+	StopReason string `json:"stopReason,omitempty"`
+}
+
+// gwToolResultPayload represents the payload of a tool.result event.
+type gwToolResultPayload struct {
+	Tool   string                 `json:"tool"`
+	Result map[string]interface{} `json:"result,omitempty"`
+}
+
+// randomHex generates a random hex string suitable for use as a request ID.
+func randomHex() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return fmt.Sprintf("%x", b)
+}
+
+var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
+	var (
+		namespace    string
+		instanceName string
+		localPort    int
+		portFwdCmd   *exec.Cmd
+		podName      string
+	)
+
+	BeforeAll(func() {
+		apiKey := os.Getenv("OPENROUTER_API_KEY")
+		if apiKey == "" {
+			Skip("Skipping full integration tests (OPENROUTER_API_KEY not set)")
+		}
+
+		instanceName = "cdp-integration"
+		namespace = "test-cdp-int-" + time.Now().Format("20060102150405")
+
+		By("Creating test namespace")
+		ns := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: namespace},
+		}
+		Expect(k8sClient.Create(ctx, ns)).Should(Succeed())
+
+		By("Creating OpenClawInstance with chromium and OpenRouter config")
+		instance := &openclawv1alpha1.OpenClawInstance{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      instanceName,
+				Namespace: namespace,
+				Annotations: map[string]string{
+					"openclaw.rocks/skip-backup": "true",
+				},
+			},
+			Spec: openclawv1alpha1.OpenClawInstanceSpec{
+				Image: openclawv1alpha1.ImageSpec{
+					Repository: "ghcr.io/openclaw/openclaw",
+					Tag:        "latest",
+				},
+				Chromium: openclawv1alpha1.ChromiumSpec{
+					Enabled: true,
+				},
+				Env: []corev1.EnvVar{
+					{
+						Name:  "OPENROUTER_API_KEY",
+						Value: apiKey,
+					},
+				},
+			},
+		}
+		instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+			RawExtension: runtime.RawExtension{Raw: []byte(`{
+				"models": {
+					"providers": {
+						"openrouter": {
+							"baseUrl": "https://openrouter.ai/api/v1",
+							"apiKey": "${OPENROUTER_API_KEY}",
+							"api": "openai-completions",
+							"models": [
+								{
+									"id": "deepseek/deepseek-chat",
+									"name": "DeepSeek V3",
+									"contextWindow": 163840
+								}
+							]
+						}
+					}
+				},
+				"agents": {
+					"defaults": {
+						"model": {
+							"primary": "openrouter/deepseek/deepseek-chat"
+						}
+					}
+				}
+			}`)},
+		}
+		Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+		By("Waiting for StatefulSet to be created")
+		sts := &appsv1.StatefulSet{}
+		Eventually(func() error {
+			return k8sClient.Get(ctx, types.NamespacedName{
+				Name:      resources.StatefulSetName(instance),
+				Namespace: namespace,
+			}, sts)
+		}, 60*time.Second, 2*time.Second).Should(Succeed())
+
+		By("Waiting for pod to exist")
+		Eventually(func() string {
+			podList := &corev1.PodList{}
+			err := k8sClient.List(ctx, podList,
+				client.InNamespace(namespace),
+				client.MatchingLabels{
+					"app.kubernetes.io/instance": instanceName,
+					"app.kubernetes.io/name":     "openclaw",
+				},
+			)
+			if err != nil || len(podList.Items) == 0 {
+				return ""
+			}
+			podName = podList.Items[0].Name
+			return podName
+		}, 120*time.Second, 3*time.Second).ShouldNot(BeEmpty())
+
+		By("Waiting for all containers to be ready")
+		Eventually(func() bool {
+			pod := &corev1.Pod{}
+			err := k8sClient.Get(ctx, types.NamespacedName{
+				Name:      podName,
+				Namespace: namespace,
+			}, pod)
+			if err != nil {
+				return false
+			}
+			if pod.Status.Phase != corev1.PodRunning {
+				GinkgoWriter.Printf("Pod phase: %s (waiting for Running)\n", pod.Status.Phase)
+				return false
+			}
+			// Check all regular containers are ready
+			for _, cs := range pod.Status.ContainerStatuses {
+				if !cs.Ready {
+					GinkgoWriter.Printf("Container %s not ready\n", cs.Name)
+					return false
+				}
+			}
+			// Check init containers (chromium runs as a restartable init container)
+			for _, cs := range pod.Status.InitContainerStatuses {
+				if !cs.Ready {
+					GinkgoWriter.Printf("Init container %s not ready\n", cs.Name)
+					return false
+				}
+			}
+			return true
+		}, 10*time.Minute, 5*time.Second).Should(BeTrue())
+
+		By("Finding a free local port for port-forward")
+		listener, err := net.Listen("tcp", ":0")
+		Expect(err).NotTo(HaveOccurred())
+		localPort = listener.Addr().(*net.TCPAddr).Port
+		listener.Close()
+
+		By(fmt.Sprintf("Starting port-forward to pod %s gateway on local port %d", podName, localPort))
+		portFwdCmd = exec.Command("kubectl", "port-forward",
+			fmt.Sprintf("pod/%s", podName),
+			fmt.Sprintf("%d:%d", localPort, resources.GatewayPort),
+			"-n", namespace,
+		)
+		portFwdCmd.Stdout = GinkgoWriter
+		portFwdCmd.Stderr = GinkgoWriter
+		Expect(portFwdCmd.Start()).To(Succeed())
+
+		By("Waiting for port-forward to be ready")
+		Eventually(func() error {
+			if portFwdCmd.ProcessState != nil {
+				return fmt.Errorf("port-forward process exited: %s", portFwdCmd.ProcessState)
+			}
+			resp, err := http.Get(fmt.Sprintf("http://localhost:%d", localPort))
+			if err != nil {
+				return err
+			}
+			resp.Body.Close()
+			return nil
+		}, 60*time.Second, 2*time.Second).Should(Succeed())
+
+		GinkgoWriter.Printf("Gateway port-forward ready on localhost:%d\n", localPort)
+	})
+
+	AfterAll(func() {
+		if portFwdCmd != nil && portFwdCmd.Process != nil {
+			By("Killing port-forward process")
+			_ = portFwdCmd.Process.Kill()
+			_ = portFwdCmd.Wait()
+		}
+
+		if namespace != "" {
+			By("Deleting test namespace")
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{Name: namespace},
+			}
+			_ = k8sClient.Delete(ctx, ns)
+		}
+	})
+
+	It("Should take a screenshot of openclaw.rocks via the agent pipeline", func() {
+		By("Reading the gateway token from the auto-generated Secret")
+		tokenSecret := &corev1.Secret{}
+		secretName := resources.GatewayTokenSecretName(&openclawv1alpha1.OpenClawInstance{
+			ObjectMeta: metav1.ObjectMeta{Name: instanceName},
+		})
+		Expect(k8sClient.Get(ctx, types.NamespacedName{
+			Name:      secretName,
+			Namespace: namespace,
+		}, tokenSecret)).To(Succeed())
+
+		gatewayToken := string(tokenSecret.Data["token"])
+		Expect(gatewayToken).NotTo(BeEmpty(), "gateway token should not be empty")
+		GinkgoWriter.Printf("Gateway token retrieved (length=%d)\n", len(gatewayToken))
+
+		By("Connecting WebSocket to gateway")
+		dialer := websocket.Dialer{
+			HandshakeTimeout: 10 * time.Second,
+		}
+		wsURL := fmt.Sprintf("ws://localhost:%d", localPort)
+		ws, _, err := dialer.Dial(wsURL, nil)
+		Expect(err).NotTo(HaveOccurred(), "should connect to gateway WebSocket")
+		defer ws.Close()
+
+		By("Waiting for connect.challenge event")
+		var challengeMsg gwMessage
+		Expect(ws.SetReadDeadline(time.Now().Add(15 * time.Second))).To(Succeed())
+		err = ws.ReadJSON(&challengeMsg)
+		Expect(err).NotTo(HaveOccurred(), "should receive challenge event")
+		Expect(challengeMsg.Type).To(Equal("event"))
+		Expect(challengeMsg.Event).To(Equal("connect.challenge"))
+		GinkgoWriter.Printf("Received connect.challenge: %s\n", string(challengeMsg.Payload))
+
+		By("Sending connect request with gateway token")
+		connectID := randomHex()
+		connectReq := map[string]interface{}{
+			"type":   "req",
+			"id":     connectID,
+			"method": "connect",
+			"params": map[string]interface{}{
+				"protocolVersion": 2,
+				"clientName":      "E2ETest",
+				"clientVersion":   "1.0",
+				"platform":        "cli",
+				"mode":            "CLI",
+				"role":            "operator",
+				"scopes":          []string{"operator.admin"},
+				"token":           gatewayToken,
+			},
+		}
+		Expect(ws.WriteJSON(connectReq)).To(Succeed())
+
+		By("Waiting for connect response")
+		var connectResp gwMessage
+		Expect(ws.SetReadDeadline(time.Now().Add(15 * time.Second))).To(Succeed())
+		err = ws.ReadJSON(&connectResp)
+		Expect(err).NotTo(HaveOccurred(), "should receive connect response")
+		Expect(connectResp.Type).To(Equal("res"))
+		Expect(connectResp.ID).To(Equal(connectID))
+		Expect(connectResp.OK).NotTo(BeNil())
+		Expect(*connectResp.OK).To(BeTrue(), "connect response should be ok=true")
+		GinkgoWriter.Println("Gateway connection established")
+
+		By("Sending message to take a screenshot of openclaw.rocks")
+		sendID := randomHex()
+		sendReq := map[string]interface{}{
+			"type":   "req",
+			"id":     sendID,
+			"method": "sessions.send",
+			"params": map[string]interface{}{
+				"key":     "main",
+				"message": "Navigate to https://openclaw.rocks and take a screenshot. Use the browser tool with the default profile.",
+			},
+		}
+		Expect(ws.WriteJSON(sendReq)).To(Succeed())
+		GinkgoWriter.Println("Message sent, waiting for agent response...")
+
+		By("Reading events until screenshot data or completion")
+		var screenshotData string
+		agentCompleted := false
+		deadline := time.Now().Add(2 * time.Minute)
+
+		for time.Now().Before(deadline) && !agentCompleted {
+			Expect(ws.SetReadDeadline(deadline)).To(Succeed())
+
+			_, rawMsg, readErr := ws.ReadMessage()
+			if readErr != nil {
+				GinkgoWriter.Printf("WebSocket read error: %v\n", readErr)
+				break
+			}
+
+			var msg gwMessage
+			if jsonErr := json.Unmarshal(rawMsg, &msg); jsonErr != nil {
+				GinkgoWriter.Printf("Failed to unmarshal message: %v\n", jsonErr)
+				continue
+			}
+
+			switch {
+			case msg.Type == "event" && msg.Event == "tool.result":
+				var toolPayload gwToolResultPayload
+				if jsonErr := json.Unmarshal(msg.Payload, &toolPayload); jsonErr == nil {
+					GinkgoWriter.Printf("Tool result: tool=%s\n", toolPayload.Tool)
+					if toolPayload.Result != nil {
+						if data, ok := toolPayload.Result["data"].(string); ok && data != "" {
+							GinkgoWriter.Printf("Screenshot data received: %d bytes\n", len(data))
+							screenshotData = data
+						}
+					}
+				}
+
+			case msg.Type == "event" && msg.Event == "chat":
+				var chatPayload gwChatPayload
+				if jsonErr := json.Unmarshal(msg.Payload, &chatPayload); jsonErr == nil {
+					if chatPayload.State == "final" {
+						GinkgoWriter.Printf("Chat completed: stopReason=%s\n", chatPayload.StopReason)
+						agentCompleted = true
+					}
+				}
+
+			case msg.Type == "res" && msg.ID == sendID:
+				GinkgoWriter.Printf("Received response for send request: %s\n", string(rawMsg))
+
+			default:
+				// Log other messages for debugging (truncate long payloads)
+				logMsg := string(rawMsg)
+				if len(logMsg) > 200 {
+					logMsg = logMsg[:200] + "..."
+				}
+				GinkgoWriter.Printf("Event: type=%s event=%s - %s\n", msg.Type, msg.Event, logMsg)
+			}
+		}
+
+		By("Verifying screenshot data was received")
+		Expect(screenshotData).NotTo(BeEmpty(),
+			"should have received screenshot data from the agent pipeline")
+
+		// Verify the data is valid base64
+		decoded, decodeErr := base64.StdEncoding.DecodeString(screenshotData)
+		Expect(decodeErr).NotTo(HaveOccurred(),
+			"screenshot data should be valid base64")
+		Expect(len(decoded)).To(BeNumerically(">", 100),
+			"decoded screenshot should be a non-trivial image (got %d bytes)", len(decoded))
+
+		GinkgoWriter.Printf("Screenshot verified: %d bytes base64, %d bytes decoded PNG\n",
+			len(screenshotData), len(decoded))
 	})
 })
 

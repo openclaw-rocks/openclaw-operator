@@ -221,6 +221,8 @@ jobs:
 
       - name: Run E2E tests
         run: make test-e2e
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 
       - name: Install operator-sdk
         run: |
