@@ -8151,9 +8151,9 @@ func TestBuildConfigMap_ChromiumBrowserConfig(t *testing.T) {
 		t.Fatal("expected browser.profiles key")
 	}
 
-	// Both "default" and "chrome" profiles must use the resolved CDP Service
-	// DNS URL (not an env var reference).
-	expectedCDP := fmt.Sprintf("http://%s-cdp.test-ns.svc:%d", instance.Name, ChromiumPort)
+	// Both "default" and "chrome" profiles must use the env var reference
+	// which resolves to the Chromium sidecar's localhost address at runtime.
+	expectedCDP := "${OPENCLAW_CHROMIUM_CDP}"
 	for _, name := range []string{"default", "chrome"} {
 		p, ok := profiles[name].(map[string]interface{})
 		if !ok {

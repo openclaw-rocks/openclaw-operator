@@ -395,11 +395,12 @@ func enrichConfigWithBrowser(configJSON []byte, instance *openclawv1alpha1.OpenC
 		profiles = make(map[string]interface{})
 	}
 
-	// Build the resolved CDP URL at config generation time using the headless
-	// CDP Service DNS name. Previous versions used ${OPENCLAW_CHROMIUM_CDP}
-	// env var interpolation, but this proved unreliable across OpenClaw versions.
-	cdpURL := fmt.Sprintf("http://%s.%s.svc:%d",
-		ChromiumCDPServiceName(instance), instance.Namespace, ChromiumPort)
+	// Use ${OPENCLAW_CHROMIUM_CDP} env var (resolved at runtime by OpenClaw)
+	// which points to the Chromium sidecar via localhost (127.0.0.1:9222).
+	// Using a localhost address is required because OpenClaw's browser control
+	// service treats non-localhost CDP URLs as remote browsers that require
+	// device pairing, which is not available in a headless container.
+	cdpURL := "${OPENCLAW_CHROMIUM_CDP}"
 
 	// Configure both "default" and "chrome" profiles to point at the sidecar.
 	// LLMs often explicitly pass profile="chrome", so we redirect it to the
