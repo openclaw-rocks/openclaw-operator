@@ -55,13 +55,12 @@ type cdpResponse struct {
 	Method string                 `json:"method,omitempty"`
 }
 
-// cdpTarget represents a Chrome DevTools Protocol target (tab/page).
-type cdpTarget struct {
-	ID                   string `json:"id"`
-	Type                 string `json:"type"`
-	Title                string `json:"title"`
-	URL                  string `json:"url"`
-	WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
+// cdpSessionCommand represents a CDP command sent to a specific target session.
+type cdpSessionCommand struct {
+	ID        int                    `json:"id"`
+	Method    string                 `json:"method"`
+	Params    map[string]interface{} `json:"params,omitempty"`
+	SessionID string                 `json:"sessionId"`
 }
 
 var _ = Describe("Chromium CDP Functional Tests", Ordered, func() {
@@ -239,84 +238,109 @@ var _ = Describe("Chromium CDP Functional Tests", Ordered, func() {
 	})
 
 	It("Tier 2: navigates to a page and captures screenshot via CDP WebSocket", func() {
-		By("Creating a new tab via /json/new")
-		resp, err := http.Get(fmt.Sprintf("http://localhost:%d/json/new?about:blank", localPort))
+		By("Getting browser debugger WebSocket URL from /json/version")
+		resp, err := http.Get(fmt.Sprintf("http://localhost:%d/json/version", localPort))
 		Expect(err).NotTo(HaveOccurred())
-		defer resp.Body.Close()
-
-		Expect(resp.StatusCode).To(Equal(http.StatusOK))
-
 		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
 		Expect(err).NotTo(HaveOccurred())
 
-		var target cdpTarget
-		Expect(json.Unmarshal(body, &target)).To(Succeed())
-		Expect(target.ID).NotTo(BeEmpty(), "target ID should not be empty")
+		var versionInfo map[string]interface{}
+		Expect(json.Unmarshal(body, &versionInfo)).To(Succeed())
 
-		GinkgoWriter.Printf("Created new tab: id=%s, wsUrl=%s\n", target.ID, target.WebSocketDebuggerURL)
+		browserWSURL, ok := versionInfo["webSocketDebuggerUrl"].(string)
+		Expect(ok).To(BeTrue(), "response should have webSocketDebuggerUrl")
 
 		// Rewrite the WebSocket URL to use our local port-forward port.
-		// Chrome returns ws://localhost:9222/... but we need ws://localhost:<localPort>/...
-		wsURL := target.WebSocketDebuggerURL
-		wsURL = strings.Replace(wsURL,
-			fmt.Sprintf("localhost:%d", resources.ChromiumPort),
-			fmt.Sprintf("localhost:%d", localPort),
-			1,
-		)
-		// Also handle 0.0.0.0 in the URL
-		wsURL = strings.Replace(wsURL,
-			fmt.Sprintf("0.0.0.0:%d", resources.ChromiumPort),
-			fmt.Sprintf("localhost:%d", localPort),
-			1,
-		)
+		// Chrome returns ws://127.0.0.1:9222/... but we need ws://localhost:<localPort>/...
+		browserWSURL = rewriteCDPWebSocketURL(browserWSURL, localPort)
 
-		By(fmt.Sprintf("Connecting to CDP WebSocket at %s", wsURL))
+		By(fmt.Sprintf("Connecting to browser CDP WebSocket at %s", browserWSURL))
 		dialer := websocket.Dialer{
 			HandshakeTimeout: 10 * time.Second,
 		}
-		ws, _, err := dialer.Dial(wsURL, nil)
+		browserWS, _, err := dialer.Dial(browserWSURL, nil)
 		Expect(err).NotTo(HaveOccurred())
-		defer ws.Close()
+		defer browserWS.Close()
 
-		By("Sending Page.enable command")
-		enableCmd := cdpCommand{ID: 1, Method: "Page.enable"}
-		Expect(ws.WriteJSON(enableCmd)).To(Succeed())
+		By("Creating a new target via Target.createTarget")
+		createCmd := cdpCommand{
+			ID:     1,
+			Method: "Target.createTarget",
+			Params: map[string]interface{}{
+				"url": "about:blank",
+			},
+		}
+		Expect(browserWS.WriteJSON(createCmd)).To(Succeed())
 
-		// Read response for Page.enable
-		enableResp := readCDPResponse(ws, 1, 10*time.Second)
+		createResp := readCDPResponse(browserWS, 1, 10*time.Second)
+		Expect(createResp).NotTo(BeNil(), "should receive response for Target.createTarget")
+		Expect(createResp.Error).To(BeNil(), "Target.createTarget should not return an error")
+
+		targetID, ok := createResp.Result["targetId"].(string)
+		Expect(ok).To(BeTrue(), "createTarget result should have targetId")
+		GinkgoWriter.Printf("Created target: %s\n", targetID)
+
+		By("Attaching to target via Target.attachToTarget")
+		attachCmd := cdpCommand{
+			ID:     2,
+			Method: "Target.attachToTarget",
+			Params: map[string]interface{}{
+				"targetId": targetID,
+				"flatten":  true,
+			},
+		}
+		Expect(browserWS.WriteJSON(attachCmd)).To(Succeed())
+
+		attachResp := readCDPResponse(browserWS, 2, 10*time.Second)
+		Expect(attachResp).NotTo(BeNil(), "should receive response for Target.attachToTarget")
+		Expect(attachResp.Error).To(BeNil(), "Target.attachToTarget should not return an error")
+
+		sessionID, ok := attachResp.Result["sessionId"].(string)
+		Expect(ok).To(BeTrue(), "attachToTarget result should have sessionId")
+		GinkgoWriter.Printf("Attached to session: %s\n", sessionID)
+
+		By("Enabling Page domain")
+		enableCmd := cdpSessionCommand{
+			ID:        3,
+			Method:    "Page.enable",
+			SessionID: sessionID,
+		}
+		Expect(browserWS.WriteJSON(enableCmd)).To(Succeed())
+
+		enableResp := readCDPResponse(browserWS, 3, 10*time.Second)
 		Expect(enableResp).NotTo(BeNil(), "should receive response for Page.enable")
-		Expect(enableResp.Error).To(BeNil(), "Page.enable should not return an error")
 
 		By("Navigating to https://example.com")
-		navigateCmd := cdpCommand{
-			ID:     2,
+		navigateCmd := cdpSessionCommand{
+			ID:     4,
 			Method: "Page.navigate",
 			Params: map[string]interface{}{
 				"url": "https://example.com",
 			},
+			SessionID: sessionID,
 		}
-		Expect(ws.WriteJSON(navigateCmd)).To(Succeed())
+		Expect(browserWS.WriteJSON(navigateCmd)).To(Succeed())
 
-		// Read responses/events until we get the navigate response (id=2)
-		navigateResp := readCDPResponse(ws, 2, 30*time.Second)
+		navigateResp := readCDPResponse(browserWS, 4, 30*time.Second)
 		Expect(navigateResp).NotTo(BeNil(), "should receive response for Page.navigate")
 		Expect(navigateResp.Error).To(BeNil(), "Page.navigate should not return an error")
 
 		By("Waiting for page load")
-		// Wait for Page.loadEventFired or use a fixed delay
-		waitForLoadEvent(ws, 10*time.Second)
+		waitForLoadEvent(browserWS, 15*time.Second)
 
 		By("Capturing screenshot via Page.captureScreenshot")
-		screenshotCmd := cdpCommand{
-			ID:     3,
+		screenshotCmd := cdpSessionCommand{
+			ID:     5,
 			Method: "Page.captureScreenshot",
 			Params: map[string]interface{}{
 				"format": "png",
 			},
+			SessionID: sessionID,
 		}
-		Expect(ws.WriteJSON(screenshotCmd)).To(Succeed())
+		Expect(browserWS.WriteJSON(screenshotCmd)).To(Succeed())
 
-		screenshotResp := readCDPResponse(ws, 3, 15*time.Second)
+		screenshotResp := readCDPResponse(browserWS, 5, 15*time.Second)
 		Expect(screenshotResp).NotTo(BeNil(), "should receive response for Page.captureScreenshot")
 		Expect(screenshotResp.Error).To(BeNil(), "Page.captureScreenshot should not return an error")
 
@@ -326,10 +350,16 @@ var _ = Describe("Chromium CDP Functional Tests", Ordered, func() {
 
 		GinkgoWriter.Printf("Screenshot captured: %d bytes of base64 PNG data\n", len(data))
 
-		By("Closing the tab")
-		closeResp, err := http.Get(fmt.Sprintf("http://localhost:%d/json/close/%s", localPort, target.ID))
-		Expect(err).NotTo(HaveOccurred())
-		closeResp.Body.Close()
+		By("Closing the target")
+		closeCmd := cdpCommand{
+			ID:     6,
+			Method: "Target.closeTarget",
+			Params: map[string]interface{}{
+				"targetId": targetID,
+			},
+		}
+		Expect(browserWS.WriteJSON(closeCmd)).To(Succeed())
+		readCDPResponse(browserWS, 6, 5*time.Second)
 	})
 
 	It("Tier 3: CDP is reachable via headless Service DNS from within cluster", func() {
@@ -431,4 +461,19 @@ func waitForLoadEvent(ws *websocket.Conn, timeout time.Duration) {
 		}
 	}
 	GinkgoWriter.Println("waitForLoadEvent: timed out waiting for Page.loadEventFired, continuing anyway")
+}
+
+// rewriteCDPWebSocketURL replaces the host:port in a Chrome DevTools WebSocket
+// URL with localhost:<localPort> so it works through kubectl port-forward.
+func rewriteCDPWebSocketURL(wsURL string, localPort int) string {
+	wsURL = strings.Replace(wsURL,
+		fmt.Sprintf("localhost:%d", resources.ChromiumPort),
+		fmt.Sprintf("localhost:%d", localPort), 1)
+	wsURL = strings.Replace(wsURL,
+		fmt.Sprintf("127.0.0.1:%d", resources.ChromiumPort),
+		fmt.Sprintf("localhost:%d", localPort), 1)
+	wsURL = strings.Replace(wsURL,
+		fmt.Sprintf("0.0.0.0:%d", resources.ChromiumPort),
+		fmt.Sprintf("localhost:%d", localPort), 1)
+	return wsURL
 }
