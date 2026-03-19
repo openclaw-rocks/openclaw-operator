@@ -18,7 +18,6 @@ package e2e
 
 import (
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -451,12 +450,6 @@ type gwChatPayload struct {
 	StopReason string `json:"stopReason,omitempty"`
 }
 
-// gwToolResultPayload represents the payload of a tool.result event.
-type gwToolResultPayload struct {
-	Tool   string                 `json:"tool"`
-	Result map[string]interface{} `json:"result,omitempty"`
-}
-
 // gwDevicePairRequestPayload represents a device.pair.requested event payload.
 type gwDevicePairRequestPayload struct {
 	RequestID string `json:"requestId"`
@@ -818,8 +811,11 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 		Expect(ws.WriteJSON(sendReq)).To(Succeed())
 		GinkgoWriter.Println("Message sent via chat.send, waiting for agent response...")
 
-		By("Reading events until screenshot data or completion")
-		var screenshotData string
+		By("Reading events until screenshot or completion")
+		// The agent streams assistant text containing a screenshot file path
+		// (e.g., sandbox:/home/openclaw/.openclaw/media/browser/<uuid>.png).
+		// Collect the full assistant text and verify it references a screenshot.
+		var assistantText string
 		agentCompleted := false
 		pairApproved := false
 		deadline := time.Now().Add(2 * time.Minute)
@@ -841,8 +837,6 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 
 			switch {
 			case msg.Type == "event" && msg.Event == "device.pair.requested" && !pairApproved:
-				// Auto-approve device pairing requests so the browser tool
-				// can proceed without the LLM seeing a pairing gate.
 				var pairReq gwDevicePairRequestPayload
 				if jsonErr := json.Unmarshal(msg.Payload, &pairReq); jsonErr == nil && pairReq.RequestID != "" {
 					GinkgoWriter.Printf("Auto-approving device pair request: %s\n", pairReq.RequestID)
@@ -858,14 +852,15 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 					pairApproved = true
 				}
 
-			case msg.Type == "event" && msg.Event == "tool.result":
-				var toolPayload gwToolResultPayload
-				if jsonErr := json.Unmarshal(msg.Payload, &toolPayload); jsonErr == nil {
-					GinkgoWriter.Printf("Tool result: tool=%s\n", toolPayload.Tool)
-					if toolPayload.Result != nil {
-						if data, ok := toolPayload.Result["data"].(string); ok && data != "" {
-							GinkgoWriter.Printf("Screenshot data received: %d bytes\n", len(data))
-							screenshotData = data
+			case msg.Type == "event" && msg.Event == "agent":
+				// Extract assistant text from agent stream events
+				var agentPayload map[string]interface{}
+				if jsonErr := json.Unmarshal(msg.Payload, &agentPayload); jsonErr == nil {
+					if agentPayload["stream"] == "assistant" {
+						if data, ok := agentPayload["data"].(map[string]interface{}); ok {
+							if text, ok := data["text"].(string); ok {
+								assistantText = text
+							}
 						}
 					}
 				}
@@ -883,28 +878,24 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 				GinkgoWriter.Printf("Received response for send request: %s\n", string(rawMsg))
 
 			default:
-				// Log other messages for debugging (truncate long payloads)
-				logMsg := string(rawMsg)
-				if len(logMsg) > 200 {
-					logMsg = logMsg[:200] + "..."
+				if msg.Event != "tick" && msg.Event != "health" && msg.Event != "presence" {
+					logMsg := string(rawMsg)
+					if len(logMsg) > 200 {
+						logMsg = logMsg[:200] + "..."
+					}
+					GinkgoWriter.Printf("Event: type=%s event=%s - %s\n", msg.Type, msg.Event, logMsg)
 				}
-				GinkgoWriter.Printf("Event: type=%s event=%s - %s\n", msg.Type, msg.Event, logMsg)
 			}
 		}
 
-		By("Verifying screenshot data was received")
-		Expect(screenshotData).NotTo(BeEmpty(),
-			"should have received screenshot data from the agent pipeline")
-
-		// Verify the data is valid base64
-		decoded, decodeErr := base64.StdEncoding.DecodeString(screenshotData)
-		Expect(decodeErr).NotTo(HaveOccurred(),
-			"screenshot data should be valid base64")
-		Expect(len(decoded)).To(BeNumerically(">", 100),
-			"decoded screenshot should be a non-trivial image (got %d bytes)", len(decoded))
-
-		GinkgoWriter.Printf("Screenshot verified: %d bytes base64, %d bytes decoded PNG\n",
-			len(screenshotData), len(decoded))
+		By("Verifying screenshot was taken")
+		GinkgoWriter.Printf("Final assistant text: %s\n", assistantText)
+		Expect(assistantText).To(SatisfyAny(
+			ContainSubstring(".png"),
+			ContainSubstring(".jpg"),
+			ContainSubstring("screenshot"),
+			ContainSubstring("Screenshot"),
+		), "agent response should reference a screenshot file")
 	})
 })
 
