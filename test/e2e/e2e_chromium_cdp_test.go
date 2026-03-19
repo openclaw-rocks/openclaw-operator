@@ -686,6 +686,7 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 					"platform": "linux",
 					"mode":     "test",
 				},
+				"role":   "operator",
 				"scopes": []string{"operator.admin"},
 				"auth": map[string]interface{}{
 					"token": gatewayToken,
@@ -714,14 +715,13 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 		sendReq := map[string]interface{}{
 			"type":   "req",
 			"id":     sendID,
-			"method": "sessions.send",
+			"method": "chat.send",
 			"params": map[string]interface{}{
-				"key":     "main",
 				"message": "Navigate to https://openclaw.rocks and take a screenshot. Use the browser tool with the default profile.",
 			},
 		}
 		Expect(ws.WriteJSON(sendReq)).To(Succeed())
-		GinkgoWriter.Println("Message sent, waiting for agent response...")
+		GinkgoWriter.Println("Message sent via chat.send, waiting for agent response...")
 
 		By("Reading events until screenshot data or completion")
 		var screenshotData string
