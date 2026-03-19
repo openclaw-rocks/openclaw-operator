@@ -687,7 +687,7 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 					"mode":     "test",
 				},
 				"role":   "operator",
-				"scopes": []string{"operator.admin"},
+				"scopes": []string{"operator.admin", "operator.write", "operator.read"},
 				"auth": map[string]interface{}{
 					"token": gatewayToken,
 				},
