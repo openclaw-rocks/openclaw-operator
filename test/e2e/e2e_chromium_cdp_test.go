@@ -457,6 +457,11 @@ type gwToolResultPayload struct {
 	Result map[string]interface{} `json:"result,omitempty"`
 }
 
+// gwDevicePairRequestPayload represents a device.pair.requested event payload.
+type gwDevicePairRequestPayload struct {
+	RequestID string `json:"requestId"`
+}
+
 // randomHex generates a random hex string suitable for use as a request ID.
 func randomHex() string {
 	b := make([]byte, 16)
@@ -756,6 +761,7 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 		By("Reading events until screenshot data or completion")
 		var screenshotData string
 		agentCompleted := false
+		pairApproved := false
 		deadline := time.Now().Add(2 * time.Minute)
 
 		for time.Now().Before(deadline) && !agentCompleted {
@@ -774,6 +780,24 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 			}
 
 			switch {
+			case msg.Type == "event" && msg.Event == "device.pair.requested" && !pairApproved:
+				// Auto-approve device pairing requests so the browser tool
+				// can proceed without the LLM seeing a pairing gate.
+				var pairReq gwDevicePairRequestPayload
+				if jsonErr := json.Unmarshal(msg.Payload, &pairReq); jsonErr == nil && pairReq.RequestID != "" {
+					GinkgoWriter.Printf("Auto-approving device pair request: %s\n", pairReq.RequestID)
+					approveReq := map[string]interface{}{
+						"type":   "req",
+						"id":     randomHex(),
+						"method": "device.pair.approve",
+						"params": map[string]interface{}{
+							"requestId": pairReq.RequestID,
+						},
+					}
+					_ = ws.WriteJSON(approveReq)
+					pairApproved = true
+				}
+
 			case msg.Type == "event" && msg.Event == "tool.result":
 				var toolPayload gwToolResultPayload
 				if jsonErr := json.Unmarshal(msg.Payload, &toolPayload); jsonErr == nil {
