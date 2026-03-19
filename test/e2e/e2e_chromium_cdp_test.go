@@ -678,14 +678,17 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 			"id":     connectID,
 			"method": "connect",
 			"params": map[string]interface{}{
-				"protocolVersion": 2,
-				"clientName":      "E2ETest",
-				"clientVersion":   "1.0",
-				"platform":        "cli",
-				"mode":            "CLI",
-				"role":            "operator",
-				"scopes":          []string{"operator.admin"},
-				"token":           gatewayToken,
+				"minProtocol": 3,
+				"maxProtocol": 3,
+				"client": map[string]interface{}{
+					"id":       "test",
+					"version":  "1.0.0",
+					"platform": "linux",
+					"mode":     "test",
+				},
+				"auth": map[string]interface{}{
+					"token": gatewayToken,
+				},
 			},
 		}
 		Expect(ws.WriteJSON(connectReq)).To(Succeed())
