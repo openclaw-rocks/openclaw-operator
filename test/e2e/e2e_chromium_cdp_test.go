@@ -137,7 +137,7 @@ var _ = Describe("Chromium CDP Functional Tests", Ordered, func() {
 			return podName
 		}, 120*time.Second, 3*time.Second).ShouldNot(BeEmpty())
 
-		By("Waiting for chromium init container to be ready")
+		By("Waiting for pod to be in Running phase with chromium init container ready")
 		Eventually(func() bool {
 			pod := &corev1.Pod{}
 			err := k8sClient.Get(ctx, types.NamespacedName{
@@ -145,6 +145,10 @@ var _ = Describe("Chromium CDP Functional Tests", Ordered, func() {
 				Namespace: namespace,
 			}, pod)
 			if err != nil {
+				return false
+			}
+			if pod.Status.Phase != corev1.PodRunning {
+				GinkgoWriter.Printf("Pod phase: %s (waiting for Running)\n", pod.Status.Phase)
 				return false
 			}
 			for _, cs := range pod.Status.InitContainerStatuses {
@@ -173,6 +177,10 @@ var _ = Describe("Chromium CDP Functional Tests", Ordered, func() {
 
 		By("Waiting for port-forward to be ready")
 		Eventually(func() error {
+			// Check if port-forward process exited unexpectedly
+			if portFwdCmd.ProcessState != nil {
+				return fmt.Errorf("port-forward process exited: %s", portFwdCmd.ProcessState)
+			}
 			resp, err := http.Get(fmt.Sprintf("http://localhost:%d/json/version", localPort))
 			if err != nil {
 				return err
@@ -182,7 +190,7 @@ var _ = Describe("Chromium CDP Functional Tests", Ordered, func() {
 				return fmt.Errorf("unexpected status: %d", resp.StatusCode)
 			}
 			return nil
-		}, 30*time.Second, 1*time.Second).Should(Succeed())
+		}, 60*time.Second, 2*time.Second).Should(Succeed())
 
 		GinkgoWriter.Printf("CDP port-forward ready on localhost:%d\n", localPort)
 	})
