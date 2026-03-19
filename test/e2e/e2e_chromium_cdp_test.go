@@ -742,6 +742,67 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 		Expect(sessionKey).NotTo(BeEmpty(), "connect response should contain mainSessionKey")
 		GinkgoWriter.Printf("Session key: %s\n", sessionKey)
 
+		By("Pre-approving device pairing via browser.request probe")
+		// Trigger a browser.request to force any pending device pairing flow.
+		// OpenClaw emits device.pair.requested when a control-ui client first
+		// invokes a browser operation. Auto-approve it so the LLM does not see
+		// a pairing gate when we send the actual chat message.
+		probeID := randomHex()
+		probeReq := map[string]interface{}{
+			"type":   "req",
+			"id":     probeID,
+			"method": "browser.request",
+			"params": map[string]interface{}{
+				"method": "GET",
+				"path":   "/json/version",
+			},
+		}
+		Expect(ws.WriteJSON(probeReq)).To(Succeed())
+
+		// Read events until the probe response comes back, auto-approving any
+		// device pairing requests along the way.
+		probeDeadline := time.Now().Add(30 * time.Second)
+		for time.Now().Before(probeDeadline) {
+			Expect(ws.SetReadDeadline(probeDeadline)).To(Succeed())
+			_, probeRaw, probeErr := ws.ReadMessage()
+			if probeErr != nil {
+				GinkgoWriter.Printf("Probe read error: %v\n", probeErr)
+				break
+			}
+			var probeMsg gwMessage
+			if jsonErr := json.Unmarshal(probeRaw, &probeMsg); jsonErr != nil {
+				continue
+			}
+			if probeMsg.Type == "event" && probeMsg.Event == "device.pair.requested" {
+				var pairReq gwDevicePairRequestPayload
+				if jsonErr := json.Unmarshal(probeMsg.Payload, &pairReq); jsonErr == nil && pairReq.RequestID != "" {
+					GinkgoWriter.Printf("Auto-approving device pair: %s\n", pairReq.RequestID)
+					approveReq := map[string]interface{}{
+						"type":   "req",
+						"id":     randomHex(),
+						"method": "device.pair.approve",
+						"params": map[string]interface{}{
+							"requestId": pairReq.RequestID,
+						},
+					}
+					_ = ws.WriteJSON(approveReq)
+				}
+				continue
+			}
+			if probeMsg.Type == "res" && probeMsg.ID == probeID {
+				if probeMsg.OK != nil && *probeMsg.OK {
+					GinkgoWriter.Println("Browser probe succeeded - device pairing complete")
+				} else {
+					logMsg := string(probeRaw)
+				if len(logMsg) > 200 {
+					logMsg = logMsg[:200] + "..."
+				}
+				GinkgoWriter.Printf("Browser probe returned error (expected if pairing just completed): %s\n", logMsg)
+				}
+				break
+			}
+		}
+
 		By("Sending message to take a screenshot of openclaw.rocks")
 		sendID := randomHex()
 		idempotencyKey := randomHex()
