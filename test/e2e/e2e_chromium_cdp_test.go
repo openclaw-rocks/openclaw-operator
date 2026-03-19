@@ -681,13 +681,11 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 				"minProtocol": 3,
 				"maxProtocol": 3,
 				"client": map[string]interface{}{
-					"id":       "test",
+					"id":       "cli",
 					"version":  "1.0.0",
 					"platform": "linux",
-					"mode":     "test",
+					"mode":     "cli",
 				},
-				"role":   "operator",
-				"scopes": []string{"operator.admin", "operator.write", "operator.read"},
 				"auth": map[string]interface{}{
 					"token": gatewayToken,
 				},
