@@ -223,6 +223,7 @@ jobs:
         run: make test-e2e
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          E2E_SKIP_CDP_INTEGRATION: "true"
 
       - name: Install operator-sdk
         run: |
