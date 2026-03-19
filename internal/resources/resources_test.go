@@ -455,13 +455,13 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 		t.Errorf("chromium RestartPolicy = %v, want Always (native sidecar)", chromium.RestartPolicy)
 	}
 
-	// Main container should have OPENCLAW_CHROMIUM_CDP using CDP service DNS name
+	// Main container should have OPENCLAW_CHROMIUM_CDP using localhost (sidecar shares pod network)
 	mainContainer := containers[0]
 	foundChromiumCDP := false
 	for _, env := range mainContainer.Env {
 		if env.Name == "OPENCLAW_CHROMIUM_CDP" {
 			foundChromiumCDP = true
-			expected := fmt.Sprintf("http://%s-cdp.%s.svc:%d", instance.Name, instance.Namespace, ChromiumPort)
+			expected := fmt.Sprintf("http://127.0.0.1:%d", ChromiumPort)
 			if env.Value != expected {
 				t.Errorf("OPENCLAW_CHROMIUM_CDP = %q, want %q", env.Value, expected)
 			}
