@@ -478,9 +478,6 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 		if apiKey == "" {
 			Skip("Skipping full integration tests (OPENROUTER_API_KEY not set)")
 		}
-		if os.Getenv("E2E_SKIP_CDP_INTEGRATION") == "true" {
-			Skip("Skipping CDP integration test (E2E_SKIP_CDP_INTEGRATION=true)")
-		}
 
 		instanceName = "cdp-integration"
 		namespace = "test-cdp-int-" + time.Now().Format("20060102150405")
