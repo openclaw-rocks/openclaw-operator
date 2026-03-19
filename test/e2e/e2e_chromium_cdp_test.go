@@ -667,9 +667,10 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 			HandshakeTimeout: 10 * time.Second,
 		}
 		wsURL := fmt.Sprintf("ws://localhost:%d", localPort)
-		// Origin header is required for control-ui client identity to pass origin check
+		// Origin header must match the gateway's allowedOrigins config (which uses
+		// the gateway's own port, not our random port-forward port).
 		wsHeaders := http.Header{}
-		wsHeaders.Set("Origin", fmt.Sprintf("http://localhost:%d", localPort))
+		wsHeaders.Set("Origin", fmt.Sprintf("http://localhost:%d", resources.GatewayPort))
 		ws, _, err := dialer.Dial(wsURL, wsHeaders)
 		Expect(err).NotTo(HaveOccurred(), "should connect to gateway WebSocket")
 		defer ws.Close()
