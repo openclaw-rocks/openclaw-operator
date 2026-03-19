@@ -373,14 +373,14 @@ var _ = Describe("Chromium CDP Functional Tests", Ordered, func() {
 		// Use a unique pod name to avoid conflicts
 		testPodName := fmt.Sprintf("cdp-test-%d", time.Now().UnixNano()%100000)
 
-		By(fmt.Sprintf("Running wget from a busybox pod to %s", cdpURL))
+		By(fmt.Sprintf("Running curl from a temporary pod to %s", cdpURL))
 		cmd := exec.Command("kubectl", "run", testPodName,
 			"--rm", "-i",
 			"--restart=Never",
-			"--timeout=30s",
+			"--timeout=60s",
 			"--namespace", namespace,
-			"--image=busybox",
-			"--", "wget", "-q", "-O-", cdpURL,
+			"--image=curlimages/curl",
+			"--", "curl", "-sf", "--max-time", "10", cdpURL,
 		)
 
 		output, err := cmd.CombinedOutput()
@@ -389,7 +389,7 @@ var _ = Describe("Chromium CDP Functional Tests", Ordered, func() {
 		GinkgoWriter.Printf("kubectl run output: %s\n", outputStr)
 
 		Expect(err).NotTo(HaveOccurred(),
-			"wget to CDP service should succeed, output: %s", outputStr)
+			"curl to CDP service should succeed, output: %s", outputStr)
 		Expect(outputStr).To(ContainSubstring("webSocketDebuggerUrl"),
 			"response from CDP headless Service should contain webSocketDebuggerUrl")
 	})
