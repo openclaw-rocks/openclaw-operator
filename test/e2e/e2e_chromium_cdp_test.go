@@ -396,13 +396,18 @@ var _ = Describe("Chromium CDP Functional Tests", Ordered, func() {
 			"CDP headless Service should have at least one endpoint address")
 
 		By(fmt.Sprintf("Running curl from a temporary pod to %s", cdpURL))
+		// Chrome's DevTools HTTP server returns 500 for requests with long
+		// Host headers (like Kubernetes service DNS names). Override the
+		// Host header to localhost so Chrome handles the request correctly.
 		cmd := exec.Command("kubectl", "run", testPodName,
 			"--rm", "-i",
 			"--restart=Never",
 			"--timeout=60s",
 			"--namespace", namespace,
 			"--image=curlimages/curl",
-			"--", "curl", "-v", "--fail", "--max-time", "10", cdpURL,
+			"--", "curl", "-sf", "--max-time", "10",
+			"-H", "Host: localhost",
+			cdpURL,
 		)
 
 		output, err := cmd.CombinedOutput()
