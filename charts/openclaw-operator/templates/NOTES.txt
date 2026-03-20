@@ -53,9 +53,9 @@ on every `helm upgrade`.
 ## Documentation
 
 For more information, visit:
-https://github.com/OpenClaw-rocks/k8s-operator
+https://github.com/OpenClaw-rocks/openclaw-operator
 
 ## Getting Help
 
 If you encounter any issues, please file an issue at:
-https://github.com/OpenClaw-rocks/k8s-operator/issues
+https://github.com/OpenClaw-rocks/openclaw-operator/issues

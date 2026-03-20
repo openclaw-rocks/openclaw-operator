@@ -467,8 +467,8 @@ helm install openclaw-operator \
 
 ```bash
 # Clone the repository
-git clone https://github.com/OpenClaw-rocks/k8s-operator.git
-cd k8s-operator
+git clone https://github.com/OpenClaw-rocks/openclaw-operator.git
+cd openclaw-operator
 
 # Install CRDs
 make install
