@@ -230,7 +230,7 @@ func TestPtr(t *testing.T) {
 
 func TestBuildStatefulSet_Defaults(t *testing.T) {
 	instance := newTestInstance("test-deploy")
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// ObjectMeta
 	if sts.Name != "test-deploy" {
@@ -430,7 +430,7 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 	instance := newTestInstance("chromium-test")
 	instance.Spec.Chromium.Enabled = true
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	containers := sts.Spec.Template.Spec.Containers
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
@@ -589,7 +589,7 @@ func TestBuildStatefulSet_ChromiumExtraArgs(t *testing.T) {
 		"--user-agent=CustomAgent/1.0",
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var chromium *corev1.Container
 	for i := range sts.Spec.Template.Spec.InitContainers {
@@ -623,7 +623,7 @@ func TestBuildStatefulSet_ChromiumExtraEnv(t *testing.T) {
 		{Name: "CUSTOM_VAR", Value: "hello"},
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var chromium *corev1.Container
 	for i := range sts.Spec.Template.Spec.InitContainers {
@@ -660,7 +660,7 @@ func TestBuildStatefulSet_ChromiumNoExtraArgs(t *testing.T) {
 	instance.Spec.Chromium.Enabled = true
 	// No ExtraArgs - should still have default launch args
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var chromium *corev1.Container
 	for i := range sts.Spec.Template.Spec.InitContainers {
@@ -696,7 +696,7 @@ func TestBuildStatefulSet_CustomResources(t *testing.T) {
 		},
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	main := sts.Spec.Template.Spec.Containers[0]
 
 	cpuReq := main.Resources.Requests[corev1.ResourceCPU]
@@ -725,7 +725,7 @@ func TestBuildStatefulSet_ImageDigest(t *testing.T) {
 		Digest:     "sha256:abcdef1234567890",
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	main := sts.Spec.Template.Spec.Containers[0]
 
 	expected := "my-registry.io/openclaw@sha256:abcdef1234567890"
@@ -748,7 +748,7 @@ func TestBuildStatefulSet_ProbesDisabled(t *testing.T) {
 		},
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	main := sts.Spec.Template.Spec.Containers[0]
 
 	if main.LivenessProbe != nil {
@@ -773,7 +773,7 @@ func TestBuildStatefulSet_CustomProbeValues(t *testing.T) {
 		},
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	probe := sts.Spec.Template.Spec.Containers[0].LivenessProbe
 
 	if probe == nil {
@@ -797,7 +797,7 @@ func TestBuildStatefulSet_PersistenceDisabled(t *testing.T) {
 	instance := newTestInstance("no-pvc")
 	instance.Spec.Storage.Persistence.Enabled = Ptr(false)
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	volumes := sts.Spec.Template.Spec.Volumes
 
 	dataVol := findVolume(volumes, "data")
@@ -816,7 +816,7 @@ func TestBuildStatefulSet_ExistingClaim(t *testing.T) {
 	instance := newTestInstance("existing-pvc")
 	instance.Spec.Storage.Persistence.ExistingClaim = "my-existing-pvc"
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	volumes := sts.Spec.Template.Spec.Volumes
 
 	dataVol := findVolume(volumes, "data")
@@ -839,7 +839,7 @@ func TestBuildStatefulSet_ConfigVolume_RawConfig(t *testing.T) {
 		},
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	main := sts.Spec.Template.Spec.Containers[0]
 
 	// Main container should have config volume mounted read-only at /operator-config
@@ -892,7 +892,7 @@ func TestBuildStatefulSet_ConfigVolume_ConfigMapRef(t *testing.T) {
 		Key:  "my-config.json",
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// Init container should copy openclaw.json (operator-managed key) from ConfigMap to data volume.
 	// The controller reads the external CM and writes enriched content into the
@@ -929,7 +929,7 @@ func TestBuildStatefulSet_ConfigMapRef_DefaultKey(t *testing.T) {
 		// Key not set - operator-managed CM always uses "openclaw.json"
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// Init container should use "openclaw.json" (operator-managed key)
 	initContainers := sts.Spec.Template.Spec.InitContainers
@@ -955,7 +955,7 @@ func TestBuildStatefulSet_VanillaDeployment_HasInitContainer(t *testing.T) {
 	instance := newTestInstance("no-config")
 	// No config set at all — vanilla deployment
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// Vanilla deployments get init-config + init-uv + init-pip
 	if len(sts.Spec.Template.Spec.InitContainers) != 3 {
@@ -988,7 +988,7 @@ func TestBuildStatefulSet_PostStart_OverwriteMode(t *testing.T) {
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	main := sts.Spec.Template.Spec.Containers[0]
 
 	if main.Lifecycle == nil || main.Lifecycle.PostStart == nil {
@@ -1012,7 +1012,7 @@ func TestBuildStatefulSet_PostStart_MergeMode(t *testing.T) {
 	}
 	instance.Spec.Config.MergeMode = ConfigMergeModeMerge
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	main := sts.Spec.Template.Spec.Containers[0]
 
 	if main.Lifecycle == nil || main.Lifecycle.PostStart == nil {
@@ -1045,7 +1045,7 @@ func TestBuildStatefulSet_PostStart_JSON5Mode_NoHook(t *testing.T) {
 	}
 	instance.Spec.Config.Format = ConfigFormatJSON5
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	main := sts.Spec.Template.Spec.Containers[0]
 
 	// JSON5 mode can't use postStart (needs npx, too slow)
@@ -1061,7 +1061,7 @@ func TestBuildStatefulSet_PostStart_ConfigMapRef(t *testing.T) {
 		Key:  "my-config.json",
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	main := sts.Spec.Template.Spec.Containers[0]
 
 	if main.Lifecycle == nil || main.Lifecycle.PostStart == nil {
@@ -1083,7 +1083,7 @@ func TestBuildStatefulSet_PostStart_VanillaDeployment(t *testing.T) {
 	// No config set at all - vanilla deployment still gets postStart
 	// because operator always creates a ConfigMap with gateway.bind=lan
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	main := sts.Spec.Template.Spec.Containers[0]
 
 	if main.Lifecycle == nil || main.Lifecycle.PostStart == nil {
@@ -1098,7 +1098,7 @@ func TestBuildStatefulSet_PostStart_VanillaDeployment(t *testing.T) {
 
 func TestBuildStatefulSet_ServiceAccountName(t *testing.T) {
 	instance := newTestInstance("sa-test")
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	if sts.Spec.Template.Spec.ServiceAccountName != "sa-test" {
 		t.Errorf("serviceAccountName = %q, want %q", sts.Spec.Template.Spec.ServiceAccountName, "sa-test")
 	}
@@ -1106,7 +1106,7 @@ func TestBuildStatefulSet_ServiceAccountName(t *testing.T) {
 
 func TestBuildStatefulSet_AutomountServiceAccountTokenDisabled(t *testing.T) {
 	instance := newTestInstance("automount-test")
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	token := sts.Spec.Template.Spec.AutomountServiceAccountToken
 	if token == nil || *token != false {
 		t.Errorf("AutomountServiceAccountToken = %v, want false", token)
@@ -1120,7 +1120,7 @@ func TestBuildStatefulSet_ImagePullSecrets(t *testing.T) {
 		{Name: "other-secret"},
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	secrets := sts.Spec.Template.Spec.ImagePullSecrets
 	if len(secrets) != 2 {
 		t.Fatalf("expected 2 pull secrets, got %d", len(secrets))
@@ -1141,7 +1141,7 @@ func TestBuildStatefulSet_ChromiumCustomImage(t *testing.T) {
 		Tag:        "v120",
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	var chromium *corev1.Container
 	for i := range sts.Spec.Template.Spec.InitContainers {
 		if sts.Spec.Template.Spec.InitContainers[i].Name == "chromium" {
@@ -1166,7 +1166,7 @@ func TestBuildStatefulSet_ChromiumDigest(t *testing.T) {
 		Digest:     "sha256:chromiumhash",
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	var chromium *corev1.Container
 	for i := range sts.Spec.Template.Spec.InitContainers {
 		if sts.Spec.Template.Spec.InitContainers[i].Name == "chromium" {
@@ -1197,7 +1197,7 @@ func TestBuildStatefulSet_NodeSelectorAndTolerations(t *testing.T) {
 		},
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	podSpec := sts.Spec.Template.Spec
 
 	if podSpec.NodeSelector["node-type"] != "gpu" {
@@ -1223,7 +1223,7 @@ func TestBuildStatefulSet_TopologySpreadConstraints(t *testing.T) {
 		},
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	podSpec := sts.Spec.Template.Spec
 
 	if len(podSpec.TopologySpreadConstraints) != 1 {
@@ -1244,7 +1244,7 @@ func TestBuildStatefulSet_TopologySpreadConstraints(t *testing.T) {
 func TestBuildStatefulSet_TopologySpreadConstraints_Empty(t *testing.T) {
 	instance := newTestInstance("tsc-empty")
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	podSpec := sts.Spec.Template.Spec
 
 	if podSpec.TopologySpreadConstraints != nil {
@@ -1256,7 +1256,7 @@ func TestBuildStatefulSet_RuntimeClassName(t *testing.T) {
 	instance := newTestInstance("rtc-test")
 	instance.Spec.Availability.RuntimeClassName = Ptr("kata-fc")
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	podSpec := sts.Spec.Template.Spec
 
 	if podSpec.RuntimeClassName == nil {
@@ -1270,7 +1270,7 @@ func TestBuildStatefulSet_RuntimeClassName(t *testing.T) {
 func TestBuildStatefulSet_RuntimeClassName_Unset(t *testing.T) {
 	instance := newTestInstance("rtc-unset")
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	podSpec := sts.Spec.Template.Spec
 
 	if podSpec.RuntimeClassName != nil {
@@ -1285,7 +1285,7 @@ func TestBuildStatefulSet_PodAnnotations_UserAnnotationsPresent(t *testing.T) {
 		"custom.io/label": "value",
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	ann := sts.Spec.Template.Annotations
 
 	if ann["cluster-autoscaler.kubernetes.io/safe-to-evict"] != "false" {
@@ -1302,7 +1302,7 @@ func TestBuildStatefulSet_PodAnnotations_OperatorKeyWins(t *testing.T) {
 		"openclaw.rocks/config-hash": "user-supplied-value",
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	ann := sts.Spec.Template.Annotations
 
 	if ann["openclaw.rocks/config-hash"] == "user-supplied-value" {
@@ -1316,7 +1316,7 @@ func TestBuildStatefulSet_PodAnnotations_OperatorKeyWins(t *testing.T) {
 func TestBuildStatefulSet_PodAnnotations_NilStillHasConfigHash(t *testing.T) {
 	instance := newTestInstance("pod-ann-nil")
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	ann := sts.Spec.Template.Annotations
 
 	if _, ok := ann["openclaw.rocks/config-hash"]; !ok {
@@ -1337,7 +1337,7 @@ func TestBuildStatefulSet_EnvAndEnvFrom(t *testing.T) {
 		},
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	main := sts.Spec.Template.Spec.Containers[0]
 
 	names := envNames(main.Env)
@@ -2375,7 +2375,7 @@ func TestBuildConfigMap_MetricsDisabled_NoOTelConfig(t *testing.T) {
 
 func TestBuildStatefulSet_OTelCollectorContainer(t *testing.T) {
 	instance := newTestInstance("sts-otel-collector")
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var found bool
 	for _, c := range sts.Spec.Template.Spec.Containers {
@@ -2412,7 +2412,7 @@ func TestBuildStatefulSet_MetricsDisabled_NoOTelCollector(t *testing.T) {
 	instance := newTestInstance("sts-no-otel-collector")
 	disabled := false
 	instance.Spec.Observability.Metrics.Enabled = &disabled
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	for _, c := range sts.Spec.Template.Spec.Containers {
 		if c.Name == "otel-collector" {
@@ -2423,7 +2423,7 @@ func TestBuildStatefulSet_MetricsDisabled_NoOTelCollector(t *testing.T) {
 
 func TestBuildStatefulSet_MainContainerNoMetricsPort(t *testing.T) {
 	instance := newTestInstance("sts-main-no-metrics")
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	main := sts.Spec.Template.Spec.Containers[0]
 	for _, p := range main.Ports {
@@ -2635,7 +2635,7 @@ func TestHandshakeTimeoutEnvVar_UserOverrideWins(t *testing.T) {
 	instance.Spec.Env = []corev1.EnvVar{
 		{Name: "OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS", Value: "5000"},
 	}
-	sts := BuildStatefulSet(instance, "test-token-secret", nil)
+	sts := BuildStatefulSet(instance, "test-token-secret", nil, nil, nil)
 	mainContainer := sts.Spec.Template.Spec.Containers[0]
 
 	var count int
@@ -3976,7 +3976,7 @@ func TestAllBuilders_ConsistentLabels(t *testing.T) {
 		name   string
 		labels map[string]string
 	}{
-		{"Deployment", BuildStatefulSet(instance, "", nil).Labels},
+		{"Deployment", BuildStatefulSet(instance, "", nil, nil, nil).Labels},
 		{"Service", BuildService(instance).Labels},
 		{"NetworkPolicy", BuildNetworkPolicy(instance).Labels},
 		{"ServiceAccount", BuildServiceAccount(instance).Labels},
@@ -4016,7 +4016,7 @@ func TestAllBuilders_ConsistentNamespace(t *testing.T) {
 		name      string
 		namespace string
 	}{
-		{"Deployment", BuildStatefulSet(instance, "", nil).Namespace},
+		{"Deployment", BuildStatefulSet(instance, "", nil, nil, nil).Namespace},
 		{"Service", BuildService(instance).Namespace},
 		{"NetworkPolicy", BuildNetworkPolicy(instance).Namespace},
 		{"ServiceAccount", BuildServiceAccount(instance).Namespace},
@@ -4051,7 +4051,7 @@ func TestBuildStatefulSet_ChromiumCustomResources(t *testing.T) {
 		},
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	var chromium *corev1.Container
 	for i := range sts.Spec.Template.Spec.InitContainers {
 		if sts.Spec.Template.Spec.InitContainers[i].Name == "chromium" {
@@ -4089,7 +4089,7 @@ func TestBuildStatefulSet_CustomPodSecurityContext(t *testing.T) {
 		FSGroup:    Ptr(int64(4000)),
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	psc := sts.Spec.Template.Spec.SecurityContext
 
 	if *psc.RunAsUser != 2000 {
@@ -4111,7 +4111,7 @@ func TestBuildStatefulSet_CustomPullPolicy(t *testing.T) {
 	instance := newTestInstance("pull-policy")
 	instance.Spec.Image.PullPolicy = corev1.PullAlways
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	main := sts.Spec.Template.Spec.Containers[0]
 
 	if main.ImagePullPolicy != corev1.PullAlways {
@@ -4227,7 +4227,7 @@ func findVolume(volumes []corev1.Volume, name string) *corev1.Volume {
 // every reconcile, causing an endless update loop.
 func TestBuildStatefulSet_KubernetesDefaults(t *testing.T) {
 	instance := newTestInstance("k8s-defaults")
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// StatefulSetSpec defaults
 	if sts.Spec.RevisionHistoryLimit == nil || *sts.Spec.RevisionHistoryLimit != 10 {
@@ -4287,7 +4287,7 @@ func TestBuildStatefulSet_InitContainerDefaults(t *testing.T) {
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	if len(sts.Spec.Template.Spec.InitContainers) == 0 {
 		t.Fatal("expected init container when raw config is set")
 	}
@@ -4310,7 +4310,7 @@ func TestBuildStatefulSet_ChromiumContainerDefaults(t *testing.T) {
 	instance := newTestInstance("chromium-defaults")
 	instance.Spec.Chromium.Enabled = true
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var chromium *corev1.Container
 	for i := range sts.Spec.Template.Spec.InitContainers {
@@ -4336,7 +4336,7 @@ func TestBuildStatefulSet_ChromiumPersistenceEnabled(t *testing.T) {
 	instance.Spec.Chromium.Enabled = true
 	instance.Spec.Chromium.Persistence.Enabled = true
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// chromium-data volume should be a PVC
 	dataVol := findVolume(sts.Spec.Template.Spec.Volumes, "chromium-data")
@@ -4377,7 +4377,7 @@ func TestBuildStatefulSet_ChromiumPersistenceExistingClaim(t *testing.T) {
 	instance.Spec.Chromium.Persistence.Enabled = true
 	instance.Spec.Chromium.Persistence.ExistingClaim = "my-chromium-pvc"
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	dataVol := findVolume(sts.Spec.Template.Spec.Volumes, "chromium-data")
 	if dataVol == nil {
@@ -4396,7 +4396,7 @@ func TestBuildStatefulSet_ChromiumPersistenceDisabled(t *testing.T) {
 	instance.Spec.Chromium.Enabled = true
 	instance.Spec.Chromium.Persistence.Enabled = false
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	dataVol := findVolume(sts.Spec.Template.Spec.Volumes, "chromium-data")
 	if dataVol == nil {
@@ -4418,7 +4418,7 @@ func TestBuildStatefulSet_ConfigMapDefaultMode(t *testing.T) {
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	configVol := findVolume(sts.Spec.Template.Spec.Volumes, "config")
 	if configVol == nil {
 		t.Fatal("config volume not found")
@@ -4452,8 +4452,8 @@ func TestBuildStatefulSet_Idempotent(t *testing.T) {
 	}
 	instance.Spec.Chromium.Enabled = true
 
-	dep1 := BuildStatefulSet(instance, "", nil)
-	dep2 := BuildStatefulSet(instance, "", nil)
+	dep1 := BuildStatefulSet(instance, "", nil, nil, nil)
+	dep2 := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	b1, _ := json.Marshal(dep1.Spec)
 	b2, _ := json.Marshal(dep2.Spec)
@@ -4471,7 +4471,7 @@ func TestBuildWorkspaceConfigMap_Nil(t *testing.T) {
 	instance := newTestInstance("ws-nil")
 	instance.Spec.Workspace = nil
 
-	cm := BuildWorkspaceConfigMap(instance, nil)
+	cm := BuildWorkspaceConfigMap(instance, nil, nil, nil)
 	// Operator files are always injected
 	if cm == nil {
 		t.Fatal("expected non-nil ConfigMap (operator files are always injected)")
@@ -4489,7 +4489,7 @@ func TestBuildWorkspaceConfigMap_EmptyFiles(t *testing.T) {
 		InitialDirectories: []string{"memory"},
 	}
 
-	cm := BuildWorkspaceConfigMap(instance, nil)
+	cm := BuildWorkspaceConfigMap(instance, nil, nil, nil)
 	// Operator files are always injected
 	if cm == nil {
 		t.Fatal("expected non-nil ConfigMap (operator files are always injected)")
@@ -4510,7 +4510,7 @@ func TestBuildWorkspaceConfigMap_WithFiles(t *testing.T) {
 		},
 	}
 
-	cm := BuildWorkspaceConfigMap(instance, nil)
+	cm := BuildWorkspaceConfigMap(instance, nil, nil, nil)
 	if cm == nil {
 		t.Fatal("expected non-nil ConfigMap when files are set")
 	}
@@ -4534,6 +4534,140 @@ func TestBuildWorkspaceConfigMap_WithFiles(t *testing.T) {
 		if _, ok := cm.Data[f]; !ok {
 			t.Errorf("expected %s in workspace ConfigMap", f)
 		}
+	}
+}
+
+func TestBuildWorkspaceConfigMap_WithExternalFiles(t *testing.T) {
+	instance := newTestInstance("ws-ext")
+	externalFiles := map[string]string{
+		"AGENT.md": "# External agent file",
+		"SOUL.md":  "# External soul",
+	}
+
+	cm := BuildWorkspaceConfigMap(instance, externalFiles, nil, nil)
+	if cm == nil {
+		t.Fatal("expected non-nil ConfigMap")
+	}
+	// 2 external + ENVIRONMENT.md + BOOTSTRAP.md = 4
+	if len(cm.Data) != 4 {
+		t.Fatalf("expected 4 data entries, got %d", len(cm.Data))
+	}
+	if cm.Data["AGENT.md"] != "# External agent file" {
+		t.Errorf("AGENT.md content mismatch: got %q", cm.Data["AGENT.md"])
+	}
+	if cm.Data["SOUL.md"] != "# External soul" {
+		t.Errorf("SOUL.md content mismatch: got %q", cm.Data["SOUL.md"])
+	}
+}
+
+func TestBuildWorkspaceConfigMap_MergePriority(t *testing.T) {
+	instance := newTestInstance("ws-merge")
+	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+		InitialFiles: map[string]string{
+			"SOUL.md":  "# Inline soul wins",
+			"EXTRA.md": "# Only inline",
+		},
+	}
+	externalFiles := map[string]string{
+		"SOUL.md":   "# External soul loses",
+		"REMOTE.md": "# Only external",
+	}
+	skillPacks := &ResolvedSkillPacks{
+		Files: map[string]string{
+			"SOUL.md":  "# Skill pack soul loses",
+			"SKILL.md": "# Only skill pack",
+		},
+	}
+
+	cm := BuildWorkspaceConfigMap(instance, externalFiles, nil, skillPacks)
+	if cm == nil {
+		t.Fatal("expected non-nil ConfigMap")
+	}
+
+	// Inline should override external and skill pack
+	if cm.Data["SOUL.md"] != "# Inline soul wins" {
+		t.Errorf("SOUL.md should be inline value, got %q", cm.Data["SOUL.md"])
+	}
+	// External-only file should be present
+	if cm.Data["REMOTE.md"] != "# Only external" {
+		t.Errorf("REMOTE.md should be from external, got %q", cm.Data["REMOTE.md"])
+	}
+	// Skill pack-only file should be present
+	if cm.Data["SKILL.md"] != "# Only skill pack" {
+		t.Errorf("SKILL.md should be from skill pack, got %q", cm.Data["SKILL.md"])
+	}
+	// Inline-only file should be present
+	if cm.Data["EXTRA.md"] != "# Only inline" {
+		t.Errorf("EXTRA.md should be from inline, got %q", cm.Data["EXTRA.md"])
+	}
+	// Operator files always present and override everything
+	if cm.Data["ENVIRONMENT.md"] != EnvironmentSkillContent {
+		t.Error("ENVIRONMENT.md should be operator-injected content")
+	}
+}
+
+func TestBuildWorkspaceConfigMap_ExternalOnly(t *testing.T) {
+	instance := newTestInstance("ws-ext-only")
+	// No workspace spec set, but external files provided
+	externalFiles := map[string]string{
+		"AGENT.md": "# External agent",
+	}
+
+	cm := BuildWorkspaceConfigMap(instance, externalFiles, nil, nil)
+	if cm == nil {
+		t.Fatal("expected non-nil ConfigMap")
+	}
+	// 1 external + ENVIRONMENT.md + BOOTSTRAP.md = 3
+	if len(cm.Data) != 3 {
+		t.Fatalf("expected 3 data entries, got %d", len(cm.Data))
+	}
+	if cm.Data["AGENT.md"] != "# External agent" {
+		t.Errorf("AGENT.md content mismatch")
+	}
+}
+
+func TestBuildInitScript_WithExternalFiles(t *testing.T) {
+	instance := newTestInstance("init-ext")
+	externalFiles := map[string]string{
+		"AGENT.md": "# External agent",
+		"SOUL.md":  "# External soul",
+	}
+
+	script := BuildInitScript(instance, externalFiles, nil, nil)
+	// Should have copy commands for external files
+	if !strings.Contains(script, "AGENT.md") {
+		t.Error("expected init script to reference AGENT.md from external files")
+	}
+	if !strings.Contains(script, "SOUL.md") {
+		t.Error("expected init script to reference SOUL.md from external files")
+	}
+}
+
+func TestConfigHash_ChangesWithExternalWorkspace(t *testing.T) {
+	instance := newTestInstance("hash-ext")
+
+	sts1 := BuildStatefulSet(instance, "", nil, nil, nil)
+	hash1 := sts1.Spec.Template.Annotations["openclaw.rocks/config-hash"]
+
+	externalFiles := map[string]string{
+		"AGENT.md": "# External agent content",
+	}
+	sts2 := BuildStatefulSet(instance, "", nil, externalFiles, nil)
+	hash2 := sts2.Spec.Template.Annotations["openclaw.rocks/config-hash"]
+
+	if hash1 == hash2 {
+		t.Error("config hash should change when external workspace files are added")
+	}
+
+	// Changing content should also change hash
+	externalFiles2 := map[string]string{
+		"AGENT.md": "# Modified agent content",
+	}
+	sts3 := BuildStatefulSet(instance, "", nil, externalFiles2, nil)
+	hash3 := sts3.Spec.Template.Annotations["openclaw.rocks/config-hash"]
+
+	if hash2 == hash3 {
+		t.Error("config hash should change when external workspace file content changes")
 	}
 }
 
@@ -4575,7 +4709,7 @@ func TestBuildInitScript_ConfigOnly(t *testing.T) {
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
 	}
 
-	script := BuildInitScript(instance, nil)
+	script := BuildInitScript(instance, nil, nil, nil)
 	expected := "cp /config/'openclaw.json' /data/openclaw.json\n" + operatorSeedLines
 	if script != expected {
 		t.Errorf("unexpected script:\ngot:  %q\nwant: %q", script, expected)
@@ -4591,7 +4725,7 @@ func TestBuildInitScript_WorkspaceOnly(t *testing.T) {
 		InitialDirectories: []string{"memory"},
 	}
 
-	script := BuildInitScript(instance, nil)
+	script := BuildInitScript(instance, nil, nil, nil)
 	expected := "cp /config/'openclaw.json' /data/openclaw.json\nmkdir -p /data/workspace/'memory'\nmkdir -p /data/workspace\n[ -f /data/workspace/'BOOTSTRAP.md' ] || cp /workspace-init/'BOOTSTRAP.md' /data/workspace/'BOOTSTRAP.md'\n[ -f /data/workspace/'ENVIRONMENT.md' ] || cp /workspace-init/'ENVIRONMENT.md' /data/workspace/'ENVIRONMENT.md'\n[ -f /data/workspace/'SOUL.md' ] || cp /workspace-init/'SOUL.md' /data/workspace/'SOUL.md'"
 	if script != expected {
 		t.Errorf("unexpected script:\ngot:  %q\nwant: %q", script, expected)
@@ -4611,7 +4745,7 @@ func TestBuildInitScript_Both(t *testing.T) {
 		InitialDirectories: []string{"memory", "tools"},
 	}
 
-	script := BuildInitScript(instance, nil)
+	script := BuildInitScript(instance, nil, nil, nil)
 
 	// Verify all expected lines are present (sorted order, operator files included)
 	lines := strings.Split(script, "\n")
@@ -4650,7 +4784,7 @@ func TestBuildInitScript_DirsOnly(t *testing.T) {
 		InitialDirectories: []string{"memory", "tools/scripts"},
 	}
 
-	script := BuildInitScript(instance, nil)
+	script := BuildInitScript(instance, nil, nil, nil)
 	expected := "cp /config/'openclaw.json' /data/openclaw.json\nmkdir -p /data/workspace/'memory'\nmkdir -p /data/workspace/'tools/scripts'\n" + operatorSeedLines
 	if script != expected {
 		t.Errorf("unexpected script:\ngot:  %q\nwant: %q", script, expected)
@@ -4665,7 +4799,7 @@ func TestBuildInitScript_ShellQuotesSpecialChars(t *testing.T) {
 		},
 	}
 
-	script := BuildInitScript(instance, nil)
+	script := BuildInitScript(instance, nil, nil, nil)
 	expected := "cp /config/'openclaw.json' /data/openclaw.json\nmkdir -p /data/workspace\n[ -f /data/workspace/'BOOTSTRAP.md' ] || cp /workspace-init/'BOOTSTRAP.md' /data/workspace/'BOOTSTRAP.md'\n[ -f /data/workspace/'ENVIRONMENT.md' ] || cp /workspace-init/'ENVIRONMENT.md' /data/workspace/'ENVIRONMENT.md'\n[ -f /data/workspace/'it'\\''s a file.md' ] || cp /workspace-init/'it'\\''s a file.md' /data/workspace/'it'\\''s a file.md'"
 	if script != expected {
 		t.Errorf("unexpected script:\ngot:  %q\nwant: %q", script, expected)
@@ -4682,7 +4816,7 @@ func TestBuildInitScript_FilesOnly_MkdirWorkspace(t *testing.T) {
 		},
 	}
 
-	script := BuildInitScript(instance, nil)
+	script := BuildInitScript(instance, nil, nil, nil)
 	if !strings.Contains(script, "mkdir -p /data/workspace\n") {
 		t.Errorf("script should contain mkdir -p /data/workspace, got:\n%s", script)
 	}
@@ -4690,7 +4824,7 @@ func TestBuildInitScript_FilesOnly_MkdirWorkspace(t *testing.T) {
 
 func TestBuildInitScript_VanillaDeployment(t *testing.T) {
 	instance := newTestInstance("init-empty")
-	script := BuildInitScript(instance, nil)
+	script := BuildInitScript(instance, nil, nil, nil)
 	// Vanilla deployments get config copy + ENVIRONMENT.md seeding
 	expected := "cp /config/'openclaw.json' /data/openclaw.json\n" + operatorSeedLines
 	if script != expected {
@@ -4708,14 +4842,14 @@ func TestConfigHash_ChangesWithWorkspace(t *testing.T) {
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
 	}
 
-	dep1 := BuildStatefulSet(instance, "", nil)
+	dep1 := BuildStatefulSet(instance, "", nil, nil, nil)
 	hash1 := dep1.Spec.Template.Annotations["openclaw.rocks/config-hash"]
 
 	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
 		InitialFiles: map[string]string{"SOUL.md": "hello"},
 	}
 
-	dep2 := BuildStatefulSet(instance, "", nil)
+	dep2 := BuildStatefulSet(instance, "", nil, nil, nil)
 	hash2 := dep2.Spec.Template.Annotations["openclaw.rocks/config-hash"]
 
 	if hash1 == hash2 {
@@ -4729,12 +4863,12 @@ func TestConfigHash_ChangesWithFileContent(t *testing.T) {
 		InitialFiles: map[string]string{"SOUL.md": "v1"},
 	}
 
-	dep1 := BuildStatefulSet(instance, "", nil)
+	dep1 := BuildStatefulSet(instance, "", nil, nil, nil)
 	hash1 := dep1.Spec.Template.Annotations["openclaw.rocks/config-hash"]
 
 	instance.Spec.Workspace.InitialFiles["SOUL.md"] = "v2"
 
-	dep2 := BuildStatefulSet(instance, "", nil)
+	dep2 := BuildStatefulSet(instance, "", nil, nil, nil)
 	hash2 := dep2.Spec.Template.Annotations["openclaw.rocks/config-hash"]
 
 	if hash1 == hash2 {
@@ -4755,7 +4889,7 @@ func TestBuildStatefulSet_WorkspaceVolume(t *testing.T) {
 		InitialFiles: map[string]string{"SOUL.md": "hello"},
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// Verify workspace-init volume exists
 	wsVol := findVolume(sts.Spec.Template.Spec.Volumes, "workspace-init")
@@ -4780,7 +4914,7 @@ func TestBuildStatefulSet_AlwaysHasWorkspaceVolume(t *testing.T) {
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// workspace-init volume always exists because ENVIRONMENT.md is always injected
 	wsVol := findVolume(sts.Spec.Template.Spec.Volumes, "workspace-init")
@@ -4798,7 +4932,7 @@ func TestBuildStatefulSet_WorkspaceDirsOnly_StillHasVolume(t *testing.T) {
 		InitialDirectories: []string{"memory"},
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// workspace-init volume always exists because ENVIRONMENT.md is always injected
 	wsVol := findVolume(sts.Spec.Template.Spec.Volumes, "workspace-init")
@@ -4822,8 +4956,8 @@ func TestBuildStatefulSet_Idempotent_WithWorkspace(t *testing.T) {
 		InitialDirectories: []string{"memory", "tools"},
 	}
 
-	dep1 := BuildStatefulSet(instance, "", nil)
-	dep2 := BuildStatefulSet(instance, "", nil)
+	dep1 := BuildStatefulSet(instance, "", nil, nil, nil)
+	dep2 := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	b1, _ := json.Marshal(dep1.Spec)
 	b2, _ := json.Marshal(dep2.Spec)
@@ -4839,7 +4973,7 @@ func TestBuildStatefulSet_Idempotent_WithWorkspace(t *testing.T) {
 
 func TestBuildStatefulSet_ReadOnlyRootFilesystem_Default(t *testing.T) {
 	instance := newTestInstance("rorfs-default")
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	main := sts.Spec.Template.Spec.Containers[0]
 
 	csc := main.SecurityContext
@@ -4854,7 +4988,7 @@ func TestBuildStatefulSet_ReadOnlyRootFilesystem_ExplicitFalse(t *testing.T) {
 		ReadOnlyRootFilesystem: Ptr(false),
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	main := sts.Spec.Template.Spec.Containers[0]
 
 	if main.SecurityContext.ReadOnlyRootFilesystem == nil || *main.SecurityContext.ReadOnlyRootFilesystem {
@@ -4864,7 +4998,7 @@ func TestBuildStatefulSet_ReadOnlyRootFilesystem_ExplicitFalse(t *testing.T) {
 
 func TestBuildStatefulSet_WritablePVCSubPaths(t *testing.T) {
 	instance := newTestInstance("writable-subpaths")
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	main := sts.Spec.Template.Spec.Containers[0]
 
 	// Verify ~/.local and ~/.cache are mounted as PVC subPaths for pip/package installs
@@ -4894,7 +5028,7 @@ func TestBuildStatefulSet_WritablePVCSubPaths(t *testing.T) {
 
 func TestBuildStatefulSet_TmpVolumeAndMount(t *testing.T) {
 	instance := newTestInstance("tmp-vol")
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// Check /tmp volume mount on main container
 	main := sts.Spec.Template.Spec.Containers[0]
@@ -4921,7 +5055,7 @@ func TestBuildInitScript_OverwriteMode(t *testing.T) {
 	}
 	instance.Spec.Config.MergeMode = "overwrite"
 
-	script := BuildInitScript(instance, nil)
+	script := BuildInitScript(instance, nil, nil, nil)
 	if !strings.Contains(script, "cp /config/") {
 		t.Errorf("overwrite mode should use cp, got: %q", script)
 	}
@@ -4937,7 +5071,7 @@ func TestBuildInitScript_MergeMode(t *testing.T) {
 	}
 	instance.Spec.Config.MergeMode = ConfigMergeModeMerge
 
-	script := BuildInitScript(instance, nil)
+	script := BuildInitScript(instance, nil, nil, nil)
 	// Merge now uses Node.js deep merge instead of jq (jq image is distroless, no shell)
 	if !strings.Contains(script, "node -e") {
 		t.Errorf("merge mode should use node deep merge, got: %q", script)
@@ -4969,7 +5103,7 @@ func TestBuildStatefulSet_MergeMode_OpenClawImage(t *testing.T) {
 	}
 	instance.Spec.Config.MergeMode = ConfigMergeModeMerge
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	initContainers := sts.Spec.Template.Spec.InitContainers
 	if len(initContainers) == 0 {
 		t.Fatal("expected init container for merge mode")
@@ -5014,7 +5148,7 @@ func TestBuildStatefulSet_OverwriteMode_BusyboxImage(t *testing.T) {
 	}
 	instance.Spec.Config.MergeMode = "overwrite"
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	initContainers := sts.Spec.Template.Spec.InitContainers
 	if len(initContainers) == 0 {
 		t.Fatal("expected init container for overwrite mode")
@@ -5033,7 +5167,7 @@ func TestBuildStatefulSet_MergeMode_InitTmpVolume(t *testing.T) {
 	}
 	instance.Spec.Config.MergeMode = ConfigMergeModeMerge
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	initTmpVol := findVolume(sts.Spec.Template.Spec.Volumes, "init-tmp")
 	if initTmpVol == nil {
 		t.Fatal("init-tmp volume not found in merge mode")
@@ -5050,7 +5184,7 @@ func TestBuildStatefulSet_OverwriteMode_NoInitTmpVolume(t *testing.T) {
 	}
 	instance.Spec.Config.MergeMode = "overwrite"
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	initTmpVol := findVolume(sts.Spec.Template.Spec.Volumes, "init-tmp")
 	if initTmpVol != nil {
 		t.Error("init-tmp volume should not exist in overwrite mode")
@@ -5062,7 +5196,7 @@ func TestBuildInitScript_MergeMode_NoConfig(t *testing.T) {
 	instance.Spec.Config.MergeMode = ConfigMergeModeMerge
 	// No raw config set — but operator always creates a ConfigMap (gateway.bind)
 
-	script := BuildInitScript(instance, nil)
+	script := BuildInitScript(instance, nil, nil, nil)
 	// Should produce a merge script since configMapKey() now always returns "openclaw.json"
 	if !strings.Contains(script, "node -e") {
 		t.Errorf("merge mode should produce node deep merge script, got: %q", script)
@@ -5257,7 +5391,7 @@ func TestBuildSkillsScript_WrapperOrdering(t *testing.T) {
 func TestBuildStatefulSet_NoSkills_NoInitSkillsContainer(t *testing.T) {
 	instance := newTestInstance("no-skills-sts")
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	for _, c := range sts.Spec.Template.Spec.InitContainers {
 		if c.Name == "init-skills" {
 			t.Error("init-skills container should not exist without skills")
@@ -5269,7 +5403,7 @@ func TestBuildStatefulSet_WithSkills_InitSkillsContainer(t *testing.T) {
 	instance := newTestInstance("skills-sts")
 	instance.Spec.Skills = []string{"@anthropic/mcp-server-fetch"}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var skillsContainer *corev1.Container
 	for i := range sts.Spec.Template.Spec.InitContainers {
@@ -5326,7 +5460,7 @@ func TestBuildStatefulSet_WithNpmSkill_InitSkillsScript(t *testing.T) {
 	instance := newTestInstance("npm-skill-sts")
 	instance.Spec.Skills = []string{"npm:@openclaw/matrix"}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var skillsContainer *corev1.Container
 	for i := range sts.Spec.Template.Spec.InitContainers {
@@ -5363,7 +5497,7 @@ func TestBuildStatefulSet_WithSkills_EnvAndEnvFromPropagated(t *testing.T) {
 		},
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var skillsContainer *corev1.Container
 	for i := range sts.Spec.Template.Spec.InitContainers {
@@ -5403,7 +5537,7 @@ func TestBuildStatefulSet_WithSkills_SkillsTmpVolume(t *testing.T) {
 	instance := newTestInstance("skills-vol")
 	instance.Spec.Skills = []string{"some-skill"}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	skillsTmpVol := findVolume(sts.Spec.Template.Spec.Volumes, "skills-tmp")
 	if skillsTmpVol == nil {
 		t.Fatal("skills-tmp volume not found")
@@ -5416,7 +5550,7 @@ func TestBuildStatefulSet_WithSkills_SkillsTmpVolume(t *testing.T) {
 func TestBuildStatefulSet_NoSkills_NoSkillsTmpVolume(t *testing.T) {
 	instance := newTestInstance("no-skills-vol")
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	skillsTmpVol := findVolume(sts.Spec.Template.Spec.Volumes, "skills-tmp")
 	if skillsTmpVol != nil {
 		t.Error("skills-tmp volume should not exist without skills")
@@ -5427,7 +5561,7 @@ func TestBuildStatefulSet_ClawHubSkills_MainContainerSkillsMount(t *testing.T) {
 	instance := newTestInstance("clawhub-skills-mount")
 	instance.Spec.Skills = []string{"@anthropic/mcp-server-fetch"}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var mainContainer *corev1.Container
 	for i := range sts.Spec.Template.Spec.Containers {
@@ -5463,7 +5597,7 @@ func TestBuildStatefulSet_NpmSkills_PathIncludesLocalBin(t *testing.T) {
 	instance := newTestInstance("npm-path")
 	instance.Spec.Skills = []string{"npm:mcporter"}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	main := sts.Spec.Template.Spec.Containers[0]
 
 	var pathVar *corev1.EnvVar
@@ -5485,7 +5619,7 @@ func TestBuildStatefulSet_ClawHubOnlySkills_NoPathOverride(t *testing.T) {
 	instance := newTestInstance("clawhub-no-path")
 	instance.Spec.Skills = []string{"@anthropic/mcp-server-fetch"}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	main := sts.Spec.Template.Spec.Containers[0]
 
 	for i := range main.Env {
@@ -5500,7 +5634,7 @@ func TestBuildStatefulSet_MixedSkills_PathIncludesLocalBin(t *testing.T) {
 	instance := newTestInstance("mixed-skills-path")
 	instance.Spec.Skills = []string{"@anthropic/mcp-server-fetch", "npm:mcporter"}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	main := sts.Spec.Template.Spec.Containers[0]
 
 	var pathVar *corev1.EnvVar
@@ -5522,7 +5656,7 @@ func TestBuildStatefulSet_NpmSkills_InitContainerUsesGlobalInstall(t *testing.T)
 	instance := newTestInstance("npm-global")
 	instance.Spec.Skills = []string{"npm:mcporter"}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var skillsContainer *corev1.Container
 	for i := range sts.Spec.Template.Spec.InitContainers {
@@ -5576,7 +5710,7 @@ func TestBuildStatefulSet_NpmOnlySkills_NoMainSkillsMount(t *testing.T) {
 	instance := newTestInstance("npm-only-mount")
 	instance.Spec.Skills = []string{"npm:@openclaw/matrix"}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var mainContainer *corev1.Container
 	for i := range sts.Spec.Template.Spec.Containers {
@@ -5599,12 +5733,12 @@ func TestBuildStatefulSet_NpmOnlySkills_NoMainSkillsMount(t *testing.T) {
 func TestConfigHash_ChangesWithSkills(t *testing.T) {
 	instance := newTestInstance("hash-skills")
 
-	dep1 := BuildStatefulSet(instance, "", nil)
+	dep1 := BuildStatefulSet(instance, "", nil, nil, nil)
 	hash1 := dep1.Spec.Template.Annotations["openclaw.rocks/config-hash"]
 
 	instance.Spec.Skills = []string{"new-skill"}
 
-	dep2 := BuildStatefulSet(instance, "", nil)
+	dep2 := BuildStatefulSet(instance, "", nil, nil, nil)
 	hash2 := dep2.Spec.Template.Annotations["openclaw.rocks/config-hash"]
 
 	if hash1 == hash2 {
@@ -5617,7 +5751,7 @@ func TestBuildStatefulSet_SkillsOnly_HasBothInitContainers(t *testing.T) {
 	instance.Spec.Skills = []string{"some-skill"}
 	// No raw config set — but operator always creates config (gateway.bind)
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// Should have init-config container (gateway.bind=lan config)
 	foundConfig := false
@@ -5712,7 +5846,7 @@ func TestBuildPluginsScript_Deterministic(t *testing.T) {
 func TestBuildStatefulSet_NoPlugins_NoInitPluginsContainer(t *testing.T) {
 	instance := newTestInstance("no-plugins-sts")
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	for _, c := range sts.Spec.Template.Spec.InitContainers {
 		if c.Name == "init-plugins" {
 			t.Error("init-plugins container should not exist without plugins")
@@ -5724,7 +5858,7 @@ func TestBuildStatefulSet_WithPlugins_InitPluginsContainer(t *testing.T) {
 	instance := newTestInstance("plugins-sts")
 	instance.Spec.Plugins = []string{"@martian-engineering/lossless-claw"}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var pluginsContainer *corev1.Container
 	for i := range sts.Spec.Template.Spec.InitContainers {
@@ -5800,7 +5934,7 @@ func TestBuildStatefulSet_WithPlugins_EnvAndEnvFromPropagated(t *testing.T) {
 		},
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var pluginsContainer *corev1.Container
 	for i := range sts.Spec.Template.Spec.InitContainers {
@@ -5840,7 +5974,7 @@ func TestBuildStatefulSet_WithPlugins_PluginsTmpVolume(t *testing.T) {
 	instance := newTestInstance("plugins-vol")
 	instance.Spec.Plugins = []string{"some-plugin"}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	pluginsTmpVol := findVolume(sts.Spec.Template.Spec.Volumes, "plugins-tmp")
 	if pluginsTmpVol == nil {
 		t.Fatal("plugins-tmp volume not found")
@@ -5853,7 +5987,7 @@ func TestBuildStatefulSet_WithPlugins_PluginsTmpVolume(t *testing.T) {
 func TestBuildStatefulSet_NoPlugins_NoPluginsTmpVolume(t *testing.T) {
 	instance := newTestInstance("no-plugins-vol")
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	pluginsTmpVol := findVolume(sts.Spec.Template.Spec.Volumes, "plugins-tmp")
 	if pluginsTmpVol != nil {
 		t.Error("plugins-tmp volume should not exist without plugins")
@@ -5863,12 +5997,12 @@ func TestBuildStatefulSet_NoPlugins_NoPluginsTmpVolume(t *testing.T) {
 func TestConfigHash_ChangesWithPlugins(t *testing.T) {
 	instance := newTestInstance("hash-plugins")
 
-	dep1 := BuildStatefulSet(instance, "", nil)
+	dep1 := BuildStatefulSet(instance, "", nil, nil, nil)
 	hash1 := dep1.Spec.Template.Annotations["openclaw.rocks/config-hash"]
 
 	instance.Spec.Plugins = []string{"some-plugin"}
 
-	dep2 := BuildStatefulSet(instance, "", nil)
+	dep2 := BuildStatefulSet(instance, "", nil, nil, nil)
 	hash2 := dep2.Spec.Template.Annotations["openclaw.rocks/config-hash"]
 
 	if hash1 == hash2 {
@@ -5884,7 +6018,7 @@ func TestBuildStatefulSet_InitContainerOrdering_SkillsThenPlugins(t *testing.T) 
 		{Name: "user-init", Image: "busybox:1.37"},
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
 	// Find indices
@@ -5923,7 +6057,7 @@ func TestBuildStatefulSet_CABundle_InitPlugins(t *testing.T) {
 		Key:           "ca.crt",
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// Find init-plugins container
 	var initPlugins *corev1.Container
@@ -6174,7 +6308,7 @@ func TestBuildConfigMap_EmptyGatewayToken(t *testing.T) {
 
 func TestBuildStatefulSet_DisableBonjour(t *testing.T) {
 	instance := newTestInstance("bonjour-test")
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	main := sts.Spec.Template.Spec.Containers[0]
 	found := false
@@ -6196,7 +6330,7 @@ func TestBuildStatefulSet_GatewayTokenEnv(t *testing.T) {
 	instance := newTestInstance("gw-env-test")
 	secretName := "gw-env-test-gateway-token"
 
-	sts := BuildStatefulSet(instance, secretName, nil)
+	sts := BuildStatefulSet(instance, secretName, nil, nil, nil)
 
 	main := sts.Spec.Template.Spec.Containers[0]
 	var gwEnv *corev1.EnvVar
@@ -6228,7 +6362,7 @@ func TestBuildStatefulSet_GatewayTokenEnv_UserOverride(t *testing.T) {
 	}
 	secretName := "gw-override-gateway-token"
 
-	sts := BuildStatefulSet(instance, secretName, nil)
+	sts := BuildStatefulSet(instance, secretName, nil, nil, nil)
 
 	main := sts.Spec.Template.Spec.Containers[0]
 	// Count occurrences of OPENCLAW_GATEWAY_TOKEN
@@ -6255,7 +6389,7 @@ func TestBuildStatefulSet_ExistingSecret(t *testing.T) {
 	instance.Spec.Gateway.ExistingSecret = "my-custom-secret"
 	existingSecretName := "my-custom-secret"
 
-	sts := BuildStatefulSet(instance, existingSecretName, nil)
+	sts := BuildStatefulSet(instance, existingSecretName, nil, nil, nil)
 
 	main := sts.Spec.Template.Spec.Containers[0]
 	var gwEnv *corev1.EnvVar
@@ -6287,7 +6421,7 @@ func TestBuildStatefulSet_ExistingSecret_UserOverride(t *testing.T) {
 		{Name: "OPENCLAW_GATEWAY_TOKEN", Value: "user-provided-token"},
 	}
 
-	sts := BuildStatefulSet(instance, "my-custom-secret", nil)
+	sts := BuildStatefulSet(instance, "my-custom-secret", nil, nil, nil)
 
 	main := sts.Spec.Template.Spec.Containers[0]
 	count := 0
@@ -6310,7 +6444,7 @@ func TestBuildStatefulSet_ExistingSecret_UserOverride(t *testing.T) {
 func TestBuildStatefulSet_NoGatewayTokenSecretName(t *testing.T) {
 	instance := newTestInstance("no-gw")
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	main := sts.Spec.Template.Spec.Containers[0]
 	for _, env := range main.Env {
@@ -6326,7 +6460,7 @@ func TestBuildStatefulSet_NoGatewayTokenSecretName(t *testing.T) {
 
 func TestBuildStatefulSet_FSGroupChangePolicy_Default(t *testing.T) {
 	instance := newTestInstance("fsgcp-default")
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	psc := sts.Spec.Template.Spec.SecurityContext
 	if psc.FSGroupChangePolicy != nil {
 		t.Errorf("FSGroupChangePolicy should be nil by default, got %v", *psc.FSGroupChangePolicy)
@@ -6340,7 +6474,7 @@ func TestBuildStatefulSet_FSGroupChangePolicy_OnRootMismatch(t *testing.T) {
 		FSGroupChangePolicy: &policy,
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	psc := sts.Spec.Template.Spec.SecurityContext
 	if psc.FSGroupChangePolicy == nil {
 		t.Fatal("FSGroupChangePolicy should not be nil")
@@ -6357,7 +6491,7 @@ func TestBuildStatefulSet_FSGroupChangePolicy_Always(t *testing.T) {
 		FSGroupChangePolicy: &policy,
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	psc := sts.Spec.Template.Spec.SecurityContext
 	if psc.FSGroupChangePolicy == nil {
 		t.Fatal("FSGroupChangePolicy should not be nil")
@@ -6416,7 +6550,7 @@ func TestBuildServiceAccount_AnnotationsDoNotAffectLabels(t *testing.T) {
 
 func TestBuildStatefulSet_ExtraVolumes_None(t *testing.T) {
 	instance := newTestInstance("no-extras")
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	for _, v := range sts.Spec.Template.Spec.Volumes {
 		if v.Name == "my-extra" {
 			t.Error("should not have extra volumes when none configured")
@@ -6438,7 +6572,7 @@ func TestBuildStatefulSet_ExtraVolumes(t *testing.T) {
 		{Name: "ssh-keys", MountPath: "/home/openclaw/.ssh", ReadOnly: true},
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// Check volume exists
 	vol := findVolume(sts.Spec.Template.Spec.Volumes, "ssh-keys")
@@ -6465,7 +6599,7 @@ func TestBuildStatefulSet_ExtraVolumes_DontInterfereWithExisting(t *testing.T) {
 		},
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	volumes := sts.Spec.Template.Spec.Volumes
 
 	// Existing volumes should still be present
@@ -6486,7 +6620,7 @@ func TestBuildStatefulSet_ExtraVolumes_DontInterfereWithExisting(t *testing.T) {
 
 func TestBuildStatefulSet_CABundle_Nil(t *testing.T) {
 	instance := newTestInstance("no-ca")
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	if findVolume(sts.Spec.Template.Spec.Volumes, "ca-bundle") != nil {
 		t.Error("ca-bundle volume should not exist when CABundle is nil")
@@ -6500,7 +6634,7 @@ func TestBuildStatefulSet_CABundle_ConfigMap(t *testing.T) {
 		Key:           "custom-ca.crt",
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// Volume
 	vol := findVolume(sts.Spec.Template.Spec.Volumes, "ca-bundle")
@@ -6538,7 +6672,7 @@ func TestBuildStatefulSet_CABundle_Secret(t *testing.T) {
 		SecretName: "ca-secret",
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	vol := findVolume(sts.Spec.Template.Spec.Volumes, "ca-bundle")
 	if vol == nil {
@@ -6559,7 +6693,7 @@ func TestBuildStatefulSet_CABundle_DefaultKey(t *testing.T) {
 		// Key not set — should default to "ca-bundle.crt"
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	main := sts.Spec.Template.Spec.Containers[0]
 
 	// Find the ca-bundle mount and check subPath
@@ -6582,7 +6716,7 @@ func TestBuildStatefulSet_CABundle_WithChromium(t *testing.T) {
 		Key:           "ca.crt",
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// Find chromium in init containers (native sidecar)
 	var chromium *corev1.Container
@@ -6615,7 +6749,7 @@ func TestBuildStatefulSet_CABundle_InitSkills(t *testing.T) {
 		Key:           "ca.crt",
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// Find init-skills container
 	var initSkills *corev1.Container
@@ -6650,7 +6784,7 @@ func TestBuildStatefulSet_CABundle_InitSkills(t *testing.T) {
 
 func TestBuildStatefulSet_NoCustomInitContainers(t *testing.T) {
 	instance := newTestInstance("no-custom-init")
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	for _, c := range sts.Spec.Template.Spec.InitContainers {
 		if c.Name == "my-init" {
 			t.Error("should not have custom init containers when none configured")
@@ -6668,7 +6802,7 @@ func TestBuildStatefulSet_CustomInitContainers(t *testing.T) {
 		},
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// Custom init container should be last
 	initContainers := sts.Spec.Template.Spec.InitContainers
@@ -6694,7 +6828,7 @@ func TestBuildStatefulSet_CustomInitContainers_AfterOperatorManaged(t *testing.T
 		{Name: "user-init", Image: "busybox:1.37"},
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
 	if len(initContainers) != 5 {
@@ -6720,14 +6854,14 @@ func TestBuildStatefulSet_CustomInitContainers_AfterOperatorManaged(t *testing.T
 func TestConfigHash_ChangesWithInitContainers(t *testing.T) {
 	instance := newTestInstance("hash-ic")
 
-	dep1 := BuildStatefulSet(instance, "", nil)
+	dep1 := BuildStatefulSet(instance, "", nil, nil, nil)
 	hash1 := dep1.Spec.Template.Annotations["openclaw.rocks/config-hash"]
 
 	instance.Spec.InitContainers = []corev1.Container{
 		{Name: "my-init", Image: "busybox:1.37"},
 	}
 
-	dep2 := BuildStatefulSet(instance, "", nil)
+	dep2 := BuildStatefulSet(instance, "", nil, nil, nil)
 	hash2 := dep2.Spec.Template.Annotations["openclaw.rocks/config-hash"]
 
 	if hash1 == hash2 {
@@ -6747,7 +6881,7 @@ func TestBuildInitScript_JSON5_Overwrite(t *testing.T) {
 	}
 	instance.Spec.Config.Format = ConfigFormatJSON5
 
-	script := BuildInitScript(instance, nil)
+	script := BuildInitScript(instance, nil, nil, nil)
 	if !strings.Contains(script, "npx -y json5") {
 		t.Errorf("JSON5 overwrite should use npx json5, got: %q", script)
 	}
@@ -6764,7 +6898,7 @@ func TestBuildStatefulSet_JSON5_UsesOpenClawImage(t *testing.T) {
 	}
 	instance.Spec.Config.Format = ConfigFormatJSON5
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	initContainers := sts.Spec.Template.Spec.InitContainers
 	if len(initContainers) == 0 {
 		t.Fatal("expected init container for JSON5 mode")
@@ -6784,7 +6918,7 @@ func TestBuildStatefulSet_JSON5_InitTmpVolume(t *testing.T) {
 	}
 	instance.Spec.Config.Format = ConfigFormatJSON5
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// Should have init-tmp volume
 	initTmpVol := findVolume(sts.Spec.Template.Spec.Volumes, "init-tmp")
@@ -6804,7 +6938,7 @@ func TestBuildStatefulSet_JSON5_WritableRootFS(t *testing.T) {
 	}
 	instance.Spec.Config.Format = ConfigFormatJSON5
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	initC := sts.Spec.Template.Spec.InitContainers[0]
 
 	if initC.SecurityContext.ReadOnlyRootFilesystem == nil || *initC.SecurityContext.ReadOnlyRootFilesystem {
@@ -6819,7 +6953,7 @@ func TestBuildInitScript_JSON_Overwrite_NoBusyboxRegression(t *testing.T) {
 	}
 	instance.Spec.Config.Format = "json"
 
-	script := BuildInitScript(instance, nil)
+	script := BuildInitScript(instance, nil, nil, nil)
 	if strings.Contains(script, "npx") {
 		t.Errorf("JSON overwrite should not use npx, got: %q", script)
 	}
@@ -6836,7 +6970,7 @@ func TestBuildStatefulSet_RuntimeDeps_Pnpm(t *testing.T) {
 	instance := newTestInstance("pnpm")
 	instance.Spec.RuntimeDeps.Pnpm = true
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
 	// Should have init-pnpm container
@@ -6908,7 +7042,7 @@ func TestBuildStatefulSet_RuntimeDeps_Python(t *testing.T) {
 	instance := newTestInstance("python")
 	instance.Spec.RuntimeDeps.Python = true
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
 	// Should have init-python container
@@ -6978,7 +7112,7 @@ func TestBuildStatefulSet_RuntimeDeps_Both(t *testing.T) {
 	instance.Spec.RuntimeDeps.Pnpm = true
 	instance.Spec.RuntimeDeps.Python = true
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
 	var hasPnpm, hasPython bool
@@ -7016,7 +7150,7 @@ func TestBuildStatefulSet_RuntimeDeps_None(t *testing.T) {
 	instance := newTestInstance("no-deps")
 	// RuntimeDeps defaults to zero value (both false)
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
 	for _, c := range initContainers {
@@ -7054,7 +7188,7 @@ func TestBuildStatefulSet_RuntimeDeps_InitContainerOrder(t *testing.T) {
 		{Name: "user-init", Image: "busybox:1.37"},
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
 	expected := []string{"init-config", "init-uv", "init-pip", "init-pnpm", "init-python", "init-skills", "user-init"}
@@ -7083,7 +7217,7 @@ func TestBuildStatefulSet_RuntimeDeps_Pnpm_CABundle(t *testing.T) {
 		Key:           "ca.crt",
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	var pnpmContainer *corev1.Container
 	for i := range sts.Spec.Template.Spec.InitContainers {
 		if sts.Spec.Template.Spec.InitContainers[i].Name == "init-pnpm" {
@@ -7114,12 +7248,12 @@ func TestBuildStatefulSet_RuntimeDeps_Pnpm_CABundle(t *testing.T) {
 func TestConfigHash_ChangesWithRuntimeDeps(t *testing.T) {
 	instance := newTestInstance("hash-rd")
 
-	sts1 := BuildStatefulSet(instance, "", nil)
+	sts1 := BuildStatefulSet(instance, "", nil, nil, nil)
 	hash1 := sts1.Spec.Template.Annotations["openclaw.rocks/config-hash"]
 
 	instance.Spec.RuntimeDeps.Pnpm = true
 
-	sts2 := BuildStatefulSet(instance, "", nil)
+	sts2 := BuildStatefulSet(instance, "", nil, nil, nil)
 	hash2 := sts2.Spec.Template.Annotations["openclaw.rocks/config-hash"]
 
 	if hash1 == hash2 {
@@ -7284,7 +7418,7 @@ func TestBuildStatefulSet_TailscaleSidecar(t *testing.T) {
 	instance.Spec.Tailscale.Enabled = true
 	instance.Spec.Tailscale.AuthKeySecretRef = &corev1.LocalObjectReference{Name: "ts-auth"}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	containers := sts.Spec.Template.Spec.Containers
 
 	// Find the tailscale sidecar
@@ -7359,7 +7493,7 @@ func TestBuildStatefulSet_TailscaleAuthKeyOnSidecar_NotMain(t *testing.T) {
 	instance.Spec.Tailscale.Enabled = true
 	instance.Spec.Tailscale.AuthKeySecretRef = &corev1.LocalObjectReference{Name: "ts-auth"}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	main := sts.Spec.Template.Spec.Containers[0]
 
 	// TS_AUTHKEY and TS_HOSTNAME should NOT be on the main container
@@ -7392,7 +7526,7 @@ func TestBuildStatefulSet_TailscaleCustomHostname(t *testing.T) {
 	instance.Spec.Tailscale.Enabled = true
 	instance.Spec.Tailscale.Hostname = "my-custom-host"
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// Find sidecar
 	var tsSidecar *corev1.Container
@@ -7423,7 +7557,7 @@ func TestBuildStatefulSet_TailscaleCustomSecretKey(t *testing.T) {
 	instance.Spec.Tailscale.AuthKeySecretRef = &corev1.LocalObjectReference{Name: "ts-secret"}
 	instance.Spec.Tailscale.AuthKeySecretKey = "my-key"
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// Find sidecar
 	var tsSidecar *corev1.Container
@@ -7451,7 +7585,7 @@ func TestBuildStatefulSet_TailscaleCustomSecretKey(t *testing.T) {
 func TestBuildStatefulSet_TailscaleDisabled(t *testing.T) {
 	instance := newTestInstance("ts-disabled")
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	main := sts.Spec.Template.Spec.Containers[0]
 
 	for _, env := range main.Env {
@@ -7479,7 +7613,7 @@ func TestBuildStatefulSet_TailscaleInitContainer(t *testing.T) {
 	instance := newTestInstance("ts-init")
 	instance.Spec.Tailscale.Enabled = true
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var initContainer *corev1.Container
 	for i := range sts.Spec.Template.Spec.InitContainers {
@@ -7501,7 +7635,7 @@ func TestBuildStatefulSet_TailscaleVolumes(t *testing.T) {
 	instance := newTestInstance("ts-vols")
 	instance.Spec.Tailscale.Enabled = true
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	volumes := sts.Spec.Template.Spec.Volumes
 
 	for _, name := range []string{"tailscale-socket", "tailscale-bin", "tailscale-tmp"} {
@@ -7520,7 +7654,7 @@ func TestBuildStatefulSet_TailscaleMainContainerMounts(t *testing.T) {
 	instance := newTestInstance("ts-mounts")
 	instance.Spec.Tailscale.Enabled = true
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	main := sts.Spec.Template.Spec.Containers[0]
 
 	assertVolumeMount(t, main.VolumeMounts, "tailscale-socket", TailscaleSocketDir)
@@ -7541,7 +7675,7 @@ func TestBuildStatefulSet_TailscalePATH(t *testing.T) {
 	instance := newTestInstance("ts-path")
 	instance.Spec.Tailscale.Enabled = true
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	main := sts.Spec.Template.Spec.Containers[0]
 
 	var pathVar *corev1.EnvVar
@@ -7564,7 +7698,7 @@ func TestBuildStatefulSet_TailscalePATH_WithRuntimeDeps(t *testing.T) {
 	instance.Spec.Tailscale.Enabled = true
 	instance.Spec.RuntimeDeps.Pnpm = true
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	main := sts.Spec.Template.Spec.Containers[0]
 
 	var pathVar *corev1.EnvVar
@@ -7592,7 +7726,7 @@ func TestBuildStatefulSet_TailscaleCustomImage(t *testing.T) {
 	instance.Spec.Tailscale.Image.Repository = "my-registry/tailscale"
 	instance.Spec.Tailscale.Image.Tag = "v1.60.0"
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// Check sidecar
 	var tsSidecar *corev1.Container
@@ -7626,7 +7760,7 @@ func TestBuildStatefulSet_TailscaleImageDigest(t *testing.T) {
 	instance.Spec.Tailscale.Enabled = true
 	instance.Spec.Tailscale.Image.Digest = "sha256:abc123"
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var tsSidecar *corev1.Container
 	for i := range sts.Spec.Template.Spec.Containers {
@@ -7720,8 +7854,8 @@ func TestBuildStatefulSet_Idempotent_WithTailscale(t *testing.T) {
 	instance.Spec.Tailscale.AuthKeySecretRef = &corev1.LocalObjectReference{Name: "ts-auth"}
 	instance.Spec.Tailscale.Hostname = "my-ts-host"
 
-	dep1 := BuildStatefulSet(instance, "", nil)
-	dep2 := BuildStatefulSet(instance, "", nil)
+	dep1 := BuildStatefulSet(instance, "", nil, nil, nil)
+	dep2 := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	b1, _ := json.Marshal(dep1.Spec)
 	b2, _ := json.Marshal(dep2.Spec)
@@ -7734,13 +7868,13 @@ func TestBuildStatefulSet_Idempotent_WithTailscale(t *testing.T) {
 func TestConfigHash_ChangesWithTailscale(t *testing.T) {
 	instance := newTestInstance("hash-ts")
 
-	sts1 := BuildStatefulSet(instance, "", nil)
+	sts1 := BuildStatefulSet(instance, "", nil, nil, nil)
 	hash1 := sts1.Spec.Template.Annotations["openclaw.rocks/config-hash"]
 
 	instance.Spec.Tailscale.Enabled = true
 	instance.Spec.Tailscale.Mode = "serve"
 
-	sts2 := BuildStatefulSet(instance, "", nil)
+	sts2 := BuildStatefulSet(instance, "", nil, nil, nil)
 	hash2 := sts2.Spec.Template.Annotations["openclaw.rocks/config-hash"]
 
 	if hash1 == hash2 {
@@ -7898,7 +8032,7 @@ func TestBuildStatefulSet_TailscaleServe_UsesHTTPProbes(t *testing.T) {
 	instance.Spec.Tailscale.Enabled = true
 	instance.Spec.Tailscale.Mode = "serve"
 
-	sts := BuildStatefulSet(instance, "hash", nil)
+	sts := BuildStatefulSet(instance, "hash", nil, nil, nil)
 	container := sts.Spec.Template.Spec.Containers[0]
 
 	if container.LivenessProbe == nil {
@@ -7935,7 +8069,7 @@ func TestBuildStatefulSet_AlwaysUsesHTTPProbes(t *testing.T) {
 	instance := newTestInstance("always-http-probes")
 	// Tailscale not enabled - probes should still use HTTPGet via proxy
 
-	sts := BuildStatefulSet(instance, "hash", nil)
+	sts := BuildStatefulSet(instance, "hash", nil, nil, nil)
 	container := sts.Spec.Template.Spec.Containers[0]
 
 	if container.LivenessProbe == nil {
@@ -7961,7 +8095,7 @@ func TestBuildStatefulSet_TailscaleFunnel_UsesHTTPProbes(t *testing.T) {
 	instance.Spec.Tailscale.Enabled = true
 	instance.Spec.Tailscale.Mode = "funnel"
 
-	sts := BuildStatefulSet(instance, "hash", nil)
+	sts := BuildStatefulSet(instance, "hash", nil, nil, nil)
 	container := sts.Spec.Template.Spec.Containers[0]
 
 	if container.LivenessProbe.HTTPGet == nil {
@@ -8003,7 +8137,7 @@ func TestBuildStatefulSet_TailscaleAutoMountToken(t *testing.T) {
 	instance := newTestInstance("ts-automount")
 	instance.Spec.Tailscale.Enabled = true
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	token := sts.Spec.Template.Spec.AutomountServiceAccountToken
 	if token == nil || !*token {
 		t.Error("AutomountServiceAccountToken should be true when Tailscale is enabled")
@@ -8072,7 +8206,7 @@ func TestBuildRole_NoTailscaleRule_WhenDisabled(t *testing.T) {
 func TestBuildStatefulSet_ProbeEndpointPaths(t *testing.T) {
 	instance := newTestInstance("probe-paths")
 
-	sts := BuildStatefulSet(instance, "hash", nil)
+	sts := BuildStatefulSet(instance, "hash", nil, nil, nil)
 	container := sts.Spec.Template.Spec.Containers[0]
 
 	tests := []struct {
@@ -8321,7 +8455,7 @@ func TestBuildStatefulSet_OllamaEnabled(t *testing.T) {
 	instance := newTestInstance("ollama-test")
 	instance.Spec.Ollama.Enabled = true
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	containers := sts.Spec.Template.Spec.Containers
 
 	if len(containers) != 4 {
@@ -8434,7 +8568,7 @@ func TestBuildStatefulSet_OllamaEnabled_WithModels(t *testing.T) {
 	instance.Spec.Ollama.Enabled = true
 	instance.Spec.Ollama.Models = []string{"llama3.2", "nomic-embed-text"}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
 	var initOllama *corev1.Container
@@ -8476,7 +8610,7 @@ func TestBuildStatefulSet_OllamaEnabled_NoModels(t *testing.T) {
 	instance := newTestInstance("ollama-no-models")
 	instance.Spec.Ollama.Enabled = true
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// Sidecar should be present
 	found := false
@@ -8503,7 +8637,7 @@ func TestBuildStatefulSet_OllamaEnabled_GPU(t *testing.T) {
 	instance.Spec.Ollama.Enabled = true
 	instance.Spec.Ollama.GPU = Ptr(int32(2))
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var ollama *corev1.Container
 	for i := range sts.Spec.Template.Spec.Containers {
@@ -8542,7 +8676,7 @@ func TestBuildStatefulSet_OllamaEnabled_ExistingClaim(t *testing.T) {
 	instance.Spec.Ollama.Enabled = true
 	instance.Spec.Ollama.Storage.ExistingClaim = "my-model-pvc"
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	volumes := sts.Spec.Template.Spec.Volumes
 
 	var ollamaVol *corev1.Volume
@@ -8571,7 +8705,7 @@ func TestBuildStatefulSet_OllamaEnabled_CustomImage(t *testing.T) {
 		Tag:        "v0.3.0",
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var ollama *corev1.Container
 	for i := range sts.Spec.Template.Spec.Containers {
@@ -8597,7 +8731,7 @@ func TestBuildStatefulSet_OllamaEnabled_CustomImageDigest(t *testing.T) {
 		Digest:     "sha256:ollamahash",
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var ollama *corev1.Container
 	for i := range sts.Spec.Template.Spec.Containers {
@@ -8628,7 +8762,7 @@ func TestBuildStatefulSet_OllamaEnabled_CustomResources(t *testing.T) {
 		},
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var ollama *corev1.Container
 	for i := range sts.Spec.Template.Spec.Containers {
@@ -8657,7 +8791,7 @@ func TestBuildStatefulSet_OllamaAndChromiumEnabled(t *testing.T) {
 	instance.Spec.Ollama.Enabled = true
 	instance.Spec.Ollama.Models = []string{"llama3.2"}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	containers := sts.Spec.Template.Spec.Containers
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
@@ -8736,7 +8870,7 @@ func TestBuildStatefulSet_OllamaAndChromiumEnabled(t *testing.T) {
 func TestBuildStatefulSet_OllamaDisabled(t *testing.T) {
 	instance := newTestInstance("no-ollama")
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// No ollama container
 	for _, c := range sts.Spec.Template.Spec.Containers {
@@ -8766,7 +8900,7 @@ func TestBuildStatefulSet_OllamaEnabled_CustomStorageSize(t *testing.T) {
 	instance.Spec.Ollama.Enabled = true
 	instance.Spec.Ollama.Storage.SizeLimit = "50Gi"
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var ollamaVol *corev1.Volume
 	for i := range sts.Spec.Template.Spec.Volumes {
@@ -8790,7 +8924,7 @@ func TestBuildStatefulSet_OllamaContainerDefaults(t *testing.T) {
 	instance := newTestInstance("ollama-defaults")
 	instance.Spec.Ollama.Enabled = true
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	if len(sts.Spec.Template.Spec.Containers) < 2 {
 		t.Fatal("expected ollama sidecar container")
 	}
@@ -8832,7 +8966,7 @@ func TestBuildStatefulSet_OllamaEnabled_InitContainerUsesCustomImage(t *testing.
 		Tag:        "v0.3.0",
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var initOllama *corev1.Container
 	for i := range sts.Spec.Template.Spec.InitContainers {
@@ -9108,7 +9242,7 @@ func TestBuildStatefulSet_SelfConfigureEnvVars(t *testing.T) {
 		Enabled: true,
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	mainContainer := sts.Spec.Template.Spec.Containers[0]
 	envMap := map[string]string{}
@@ -9127,7 +9261,7 @@ func TestBuildStatefulSet_SelfConfigureEnvVars(t *testing.T) {
 func TestBuildStatefulSet_SelfConfigureDisabledNoEnvVars(t *testing.T) {
 	instance := newTestInstance("sc-noenv")
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	mainContainer := sts.Spec.Template.Spec.Containers[0]
 	for _, ev := range mainContainer.Env {
@@ -9143,7 +9277,7 @@ func TestBuildStatefulSet_SelfConfigureAutoMount(t *testing.T) {
 		Enabled: true,
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	if sts.Spec.Template.Spec.AutomountServiceAccountToken == nil ||
 		!*sts.Spec.Template.Spec.AutomountServiceAccountToken {
@@ -9194,7 +9328,7 @@ func TestBuildWorkspaceConfigMap_SelfConfigureSkillInjected(t *testing.T) {
 		Enabled: true,
 	}
 
-	cm := BuildWorkspaceConfigMap(instance, nil)
+	cm := BuildWorkspaceConfigMap(instance, nil, nil, nil)
 
 	if cm == nil {
 		t.Fatal("BuildWorkspaceConfigMap returned nil when self-configure is enabled")
@@ -9220,7 +9354,7 @@ func TestBuildWorkspaceConfigMap_SelfConfigureMergedWithUserFiles(t *testing.T) 
 		},
 	}
 
-	cm := BuildWorkspaceConfigMap(instance, nil)
+	cm := BuildWorkspaceConfigMap(instance, nil, nil, nil)
 
 	if cm == nil {
 		t.Fatal("BuildWorkspaceConfigMap returned nil")
@@ -9246,7 +9380,7 @@ func TestBuildWorkspaceConfigMap_SelfConfigureMergedWithUserFiles(t *testing.T) 
 func TestBuildWorkspaceConfigMap_SelfConfigureDisabledNoFiles(t *testing.T) {
 	instance := newTestInstance("sc-ws-off")
 
-	cm := BuildWorkspaceConfigMap(instance, nil)
+	cm := BuildWorkspaceConfigMap(instance, nil, nil, nil)
 
 	// Operator files are always injected, so ConfigMap is never nil
 	if cm == nil {
@@ -9279,7 +9413,7 @@ func TestBuildStatefulSet_SelfConfigureWorkspaceVolume(t *testing.T) {
 		Enabled: true,
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// Should have workspace-init volume
 	foundVol := false
@@ -9634,7 +9768,7 @@ func TestStatefulSetReplicas_HPAEnabled(t *testing.T) {
 		Enabled: Ptr(true),
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	if sts.Spec.Replicas != nil {
 		t.Errorf("replicas should be nil when HPA is enabled, got %d", *sts.Spec.Replicas)
 	}
@@ -9643,7 +9777,7 @@ func TestStatefulSetReplicas_HPAEnabled(t *testing.T) {
 func TestStatefulSetReplicas_HPADisabled(t *testing.T) {
 	instance := newTestInstance("my-app")
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	if sts.Spec.Replicas == nil || *sts.Spec.Replicas != 1 {
 		t.Errorf("replicas should be 1 when HPA is disabled")
 	}
@@ -9761,7 +9895,7 @@ func TestBuildStatefulSet_MetricsPortEnabled(t *testing.T) {
 	instance := newTestInstance("sts-metrics-enabled")
 	// Metrics enabled by default (nil)
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// Metrics port should be on the otel-collector container, not main
 	main := sts.Spec.Template.Spec.Containers[0]
@@ -9788,7 +9922,7 @@ func TestBuildStatefulSet_MetricsPortDisabled(t *testing.T) {
 	instance := newTestInstance("sts-metrics-disabled")
 	instance.Spec.Observability.Metrics.Enabled = Ptr(false)
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	for _, c := range sts.Spec.Template.Spec.Containers {
 		if c.Name == "otel-collector" {
@@ -9806,7 +9940,7 @@ func TestBuildStatefulSet_MetricsPortCustom(t *testing.T) {
 	instance := newTestInstance("sts-metrics-custom")
 	instance.Spec.Observability.Metrics.Port = Ptr(int32(8080))
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	for _, c := range sts.Spec.Template.Spec.Containers {
 		if c.Name == "otel-collector" {
@@ -9825,7 +9959,7 @@ func TestBuildStatefulSet_WebTerminalEnabled(t *testing.T) {
 	instance := newTestInstance("web-terminal-test")
 	instance.Spec.WebTerminal.Enabled = true
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	containers := sts.Spec.Template.Spec.Containers
 
 	if len(containers) != 4 {
@@ -9951,7 +10085,7 @@ func TestBuildStatefulSet_WebTerminalCustomImage(t *testing.T) {
 		Tag:        "v1.7.0",
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var wt corev1.Container
 	for _, c := range sts.Spec.Template.Spec.Containers {
@@ -9974,7 +10108,7 @@ func TestBuildStatefulSet_WebTerminalDigest(t *testing.T) {
 		Digest:     "sha256:abcdef1234567890",
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var wt corev1.Container
 	for _, c := range sts.Spec.Template.Spec.Containers {
@@ -9997,7 +10131,7 @@ func TestBuildStatefulSet_WebTerminalCustomResources(t *testing.T) {
 		Limits:   openclawv1alpha1.ResourceList{CPU: "500m", Memory: "256Mi"},
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var wt corev1.Container
 	for _, c := range sts.Spec.Template.Spec.Containers {
@@ -10030,7 +10164,7 @@ func TestBuildStatefulSet_WebTerminalReadOnly(t *testing.T) {
 	instance.Spec.WebTerminal.Enabled = true
 	instance.Spec.WebTerminal.ReadOnly = true
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var wt corev1.Container
 	for _, c := range sts.Spec.Template.Spec.Containers {
@@ -10064,7 +10198,7 @@ func TestBuildStatefulSet_WebTerminalCredential(t *testing.T) {
 		SecretRef: corev1.LocalObjectReference{Name: "wt-secret"},
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var wt corev1.Container
 	for _, c := range sts.Spec.Template.Spec.Containers {
@@ -10124,7 +10258,7 @@ func TestBuildStatefulSet_WebTerminalCredential(t *testing.T) {
 func TestBuildStatefulSet_WebTerminalDisabled(t *testing.T) {
 	instance := newTestInstance("no-web-terminal")
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// No web-terminal container
 	for _, c := range sts.Spec.Template.Spec.Containers {
@@ -10145,7 +10279,7 @@ func TestBuildStatefulSet_WebTerminalContainerDefaults(t *testing.T) {
 	instance := newTestInstance("wt-defaults")
 	instance.Spec.WebTerminal.Enabled = true
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var wt corev1.Container
 	for _, c := range sts.Spec.Template.Spec.Containers {
@@ -10293,7 +10427,7 @@ func TestBuildStatefulSet_WebTerminalReadOnlyWithCredential(t *testing.T) {
 		SecretRef: corev1.LocalObjectReference{Name: "cred-secret"},
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var wt corev1.Container
 	for _, c := range sts.Spec.Template.Spec.Containers {
@@ -10318,7 +10452,7 @@ func TestBuildStatefulSet_WebTerminalReadOnlyWithCredential(t *testing.T) {
 
 func TestBuildStatefulSet_HasGatewayProxyContainer(t *testing.T) {
 	instance := newTestInstance("gw-proxy")
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var proxy *corev1.Container
 	for i := range sts.Spec.Template.Spec.Containers {
@@ -10404,7 +10538,7 @@ func TestBuildStatefulSet_HasGatewayProxyContainer(t *testing.T) {
 
 func TestBuildStatefulSet_GatewayProxyTmpVolume(t *testing.T) {
 	instance := newTestInstance("gw-proxy-vol")
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	found := false
 	for _, v := range sts.Spec.Template.Spec.Volumes {
@@ -10928,8 +11062,8 @@ func TestBuildWorkspaceConfigMap_Idempotent(t *testing.T) {
 			"SOUL.md": "# Personality\nBe helpful.",
 		},
 	}
-	w1 := BuildWorkspaceConfigMap(instance, nil)
-	w2 := BuildWorkspaceConfigMap(instance, nil)
+	w1 := BuildWorkspaceConfigMap(instance, nil, nil, nil)
+	w2 := BuildWorkspaceConfigMap(instance, nil, nil, nil)
 	b1, _ := json.Marshal(w1.Data)
 	b2, _ := json.Marshal(w2.Data)
 	if !bytes.Equal(b1, b2) {
@@ -10972,7 +11106,7 @@ func TestBuildRBAC_Idempotent(t *testing.T) {
 func TestBuildStatefulSet_NilAvailability(t *testing.T) {
 	instance := newTestInstance("nil-avail")
 	// Zero-value AvailabilitySpec - should not panic
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	if sts == nil {
 		t.Fatal("BuildStatefulSet returned nil for zero-value availability")
 	}
@@ -11032,7 +11166,7 @@ func TestBuildIngress_NoHosts_ReturnsEmpty(t *testing.T) {
 
 func TestNormalizeStatefulSet_DeprecatedServiceAccount(t *testing.T) {
 	instance := newTestInstance("norm-test")
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	NormalizeStatefulSet(sts)
 
 	podSpec := sts.Spec.Template.Spec
@@ -11048,7 +11182,7 @@ func TestNormalizeStatefulSet_DeprecatedServiceAccount(t *testing.T) {
 func TestNormalizeStatefulSet_FieldRefAPIVersion(t *testing.T) {
 	instance := newTestInstance("norm-fieldref")
 	instance.Spec.Chromium.Enabled = true
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	NormalizeStatefulSet(sts)
 
 	for _, c := range sts.Spec.Template.Spec.Containers {
@@ -11067,7 +11201,7 @@ func TestNormalizeStatefulSet_Idempotent(t *testing.T) {
 	// Verifies that normalizing twice produces the same result (stability).
 	instance := newTestInstance("norm-idem")
 	instance.Spec.Chromium.Enabled = true
-	sts := BuildStatefulSet(instance, "gw-secret", nil)
+	sts := BuildStatefulSet(instance, "gw-secret", nil, nil, nil)
 	NormalizeStatefulSet(sts)
 
 	// JSON-serialize as first snapshot
@@ -11090,7 +11224,7 @@ func TestNormalizeStatefulSet_NoSpuriousDiff(t *testing.T) {
 	instance.Spec.Chromium.Enabled = true
 
 	// First build (simulates "existing" after initial create + K8s defaulting)
-	sts1 := BuildStatefulSet(instance, "gw-secret", nil)
+	sts1 := BuildStatefulSet(instance, "gw-secret", nil, nil, nil)
 	NormalizeStatefulSet(sts1)
 
 	// Simulate K8s round-trip: JSON marshal/unmarshal (like reading from API)
@@ -11104,7 +11238,7 @@ func TestNormalizeStatefulSet_NoSpuriousDiff(t *testing.T) {
 	}
 
 	// Second build (simulates next reconcile's "desired")
-	sts2 := BuildStatefulSet(instance, "gw-secret", nil)
+	sts2 := BuildStatefulSet(instance, "gw-secret", nil, nil, nil)
 	NormalizeStatefulSet(sts2)
 
 	// Apply mutation like the controller does: replace spec
@@ -11144,7 +11278,7 @@ func TestNormalizeStatefulSet_UpdateStrategyRollingUpdate(t *testing.T) {
 
 func TestNormalizeStatefulSet_ProbeDefaults(t *testing.T) {
 	instance := newTestInstance("norm-probe")
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	NormalizeStatefulSet(sts)
 
 	main := sts.Spec.Template.Spec.Containers[0]
@@ -11165,7 +11299,7 @@ func TestNormalizeStatefulSet_ProbeDefaults(t *testing.T) {
 func TestBuildWorkspaceConfigMap_NilWorkspace(t *testing.T) {
 	instance := newTestInstance("ws-nil")
 	instance.Spec.Workspace = nil
-	cm := BuildWorkspaceConfigMap(instance, nil)
+	cm := BuildWorkspaceConfigMap(instance, nil, nil, nil)
 	// Operator files are always injected, so the ConfigMap is never nil
 	if cm == nil {
 		t.Fatal("expected non-nil ConfigMap (operator files are always injected)")
@@ -11193,7 +11327,7 @@ func TestBuildStatefulSet_RunAsNonRoot_DefaultBehavior(t *testing.T) {
 	instance.Spec.WebTerminal.Enabled = true
 	instance.Spec.Skills = []string{"@test/skill"}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	containers := sts.Spec.Template.Spec.Containers
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
@@ -11249,7 +11383,7 @@ func TestBuildStatefulSet_PodLevelRunAsNonRootFalse_Propagation(t *testing.T) {
 	instance.Spec.RuntimeDeps.Pnpm = true
 	instance.Spec.RuntimeDeps.Python = true
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	containers := sts.Spec.Template.Spec.Containers
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
@@ -11331,7 +11465,7 @@ func TestBuildStatefulSet_ContainerLevelRunAsNonRootOverride(t *testing.T) {
 	instance.Spec.Tailscale.Enabled = true
 	instance.Spec.Tailscale.AuthKeySecretRef = &corev1.LocalObjectReference{Name: "ts-secret"}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	containers := sts.Spec.Template.Spec.Containers
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
@@ -11373,7 +11507,7 @@ func TestBuildStatefulSet_ContainerLevelRunAsUser(t *testing.T) {
 		RunAsUser: Ptr(int64(2000)),
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	main := sts.Spec.Template.Spec.Containers[0]
 
 	if main.SecurityContext.RunAsUser == nil || *main.SecurityContext.RunAsUser != 2000 {
@@ -11406,7 +11540,7 @@ func TestBuildStatefulSet_FullNonRootFalseScenario(t *testing.T) {
 	instance.Spec.RuntimeDeps.Pnpm = true
 	instance.Spec.RuntimeDeps.Python = true
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	var allContainers []corev1.Container
 	allContainers = append(allContainers, sts.Spec.Template.Spec.InitContainers...)
 	allContainers = append(allContainers, sts.Spec.Template.Spec.Containers...)
@@ -11540,7 +11674,7 @@ func TestBuildStatefulSet_NoChromiumProxy(t *testing.T) {
 	instance := newTestInstance("no-proxy")
 	instance.Spec.Chromium.Enabled = true
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	for _, c := range sts.Spec.Template.Spec.InitContainers {
 		if c.Name == "chromium-proxy" {
 			t.Error("chromium-proxy should not exist - Chrome runs via run.sh")
@@ -11594,7 +11728,7 @@ func TestChromiumArgs_PersistenceAddsUserDataDir(t *testing.T) {
 func TestBuildStatefulSet_GatewayProxyDisabled_NoProxyContainer(t *testing.T) {
 	instance := newTestInstance("gw-disabled")
 	instance.Spec.Gateway.Enabled = Ptr(false)
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	for _, c := range sts.Spec.Template.Spec.Containers {
 		if c.Name == "gateway-proxy" {
@@ -11606,7 +11740,7 @@ func TestBuildStatefulSet_GatewayProxyDisabled_NoProxyContainer(t *testing.T) {
 func TestBuildStatefulSet_GatewayProxyDisabled_NoProxyTmpVolume(t *testing.T) {
 	instance := newTestInstance("gw-disabled-vol")
 	instance.Spec.Gateway.Enabled = Ptr(false)
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	for _, v := range sts.Spec.Template.Spec.Volumes {
 		if v.Name == "gateway-proxy-tmp" {
@@ -11618,7 +11752,7 @@ func TestBuildStatefulSet_GatewayProxyDisabled_NoProxyTmpVolume(t *testing.T) {
 func TestBuildStatefulSet_GatewayProxyDisabled_ProbesTargetGatewayPort(t *testing.T) {
 	instance := newTestInstance("gw-disabled-probes")
 	instance.Spec.Gateway.Enabled = Ptr(false)
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var main *corev1.Container
 	for i := range sts.Spec.Template.Spec.Containers {
@@ -11656,7 +11790,7 @@ func TestBuildStatefulSet_GatewayProxyDisabled_ProbesTargetGatewayPort(t *testin
 func TestBuildStatefulSet_GatewayProxyEnabled_ProbesTargetProxyPort(t *testing.T) {
 	instance := newTestInstance("gw-enabled-probes")
 	// Default (nil) means enabled
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	var main *corev1.Container
 	for i := range sts.Spec.Template.Spec.Containers {
@@ -11756,7 +11890,7 @@ func TestBuildStatefulSet_VCT_PersistenceAndHPA(t *testing.T) {
 	}
 	instance.Spec.Storage.Persistence.Size = "20Gi"
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// VolumeClaimTemplates should be set
 	if len(sts.Spec.VolumeClaimTemplates) != 1 {
@@ -11793,7 +11927,7 @@ func TestBuildStatefulSet_VCT_CustomAccessModes(t *testing.T) {
 	}
 	instance.Spec.Storage.Persistence.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	if len(sts.Spec.VolumeClaimTemplates) != 1 {
 		t.Fatalf("VolumeClaimTemplates length = %d, want 1", len(sts.Spec.VolumeClaimTemplates))
@@ -11811,7 +11945,7 @@ func TestBuildStatefulSet_VCT_StorageClass(t *testing.T) {
 	sc := "fast-ssd"
 	instance.Spec.Storage.Persistence.StorageClass = &sc
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	if len(sts.Spec.VolumeClaimTemplates) != 1 {
 		t.Fatalf("VolumeClaimTemplates length = %d, want 1", len(sts.Spec.VolumeClaimTemplates))
@@ -11828,7 +11962,7 @@ func TestBuildStatefulSet_VCT_NoStorageClass(t *testing.T) {
 		Enabled: Ptr(true),
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	if len(sts.Spec.VolumeClaimTemplates) != 1 {
 		t.Fatalf("VolumeClaimTemplates length = %d, want 1", len(sts.Spec.VolumeClaimTemplates))
@@ -11841,7 +11975,7 @@ func TestBuildStatefulSet_VCT_NoStorageClass(t *testing.T) {
 func TestBuildStatefulSet_NoVCT_HPADisabled(t *testing.T) {
 	instance := newTestInstance("no-vct")
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// No VCTs when HPA is disabled
 	if len(sts.Spec.VolumeClaimTemplates) != 0 {
@@ -11865,7 +11999,7 @@ func TestBuildStatefulSet_NoVCT_PersistenceDisabledWithHPA(t *testing.T) {
 	}
 	instance.Spec.Storage.Persistence.Enabled = Ptr(false)
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	// No VCTs when persistence is disabled
 	if len(sts.Spec.VolumeClaimTemplates) != 0 {
@@ -11889,7 +12023,7 @@ func TestBuildStatefulSet_VCT_DefaultSize(t *testing.T) {
 	}
 	// Don't set size - should default to 10Gi
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	if len(sts.Spec.VolumeClaimTemplates) != 1 {
 		t.Fatalf("VolumeClaimTemplates length = %d, want 1", len(sts.Spec.VolumeClaimTemplates))
@@ -11906,7 +12040,7 @@ func TestBuildStatefulSet_VCT_HasLabels(t *testing.T) {
 		Enabled: Ptr(true),
 	}
 
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	if len(sts.Spec.VolumeClaimTemplates) != 1 {
 		t.Fatalf("VolumeClaimTemplates length = %d, want 1", len(sts.Spec.VolumeClaimTemplates))
@@ -11932,13 +12066,237 @@ func TestBuildStatefulSet_Idempotent_WithHPAAndPersistence(t *testing.T) {
 	sc := "fast-ssd"
 	instance.Spec.Storage.Persistence.StorageClass = &sc
 
-	sts1 := BuildStatefulSet(instance, "", nil)
-	sts2 := BuildStatefulSet(instance, "", nil)
+	sts1 := BuildStatefulSet(instance, "", nil, nil, nil)
+	sts2 := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	b1, _ := json.Marshal(sts1.Spec)
 	b2, _ := json.Marshal(sts2.Spec)
 
 	if !bytes.Equal(b1, b2) {
 		t.Error("BuildStatefulSet with HPA and persistence is not idempotent - two calls with the same input produce different specs")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Additional workspaces (multi-agent support)
+// ---------------------------------------------------------------------------
+
+func TestBuildWorkspaceConfigMap_WithAdditionalWorkspaces(t *testing.T) {
+	instance := newTestInstance("ws-addl")
+	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+		AdditionalWorkspaces: []openclawv1alpha1.AdditionalWorkspace{
+			{
+				Name: "work",
+				InitialFiles: map[string]string{
+					"SOUL.md": "I am the work agent",
+				},
+			},
+		},
+	}
+
+	cm := BuildWorkspaceConfigMap(instance, nil, nil, nil)
+	if cm == nil {
+		t.Fatal("expected non-nil ConfigMap")
+	}
+
+	// Check namespaced key for inline file
+	key := AdditionalWorkspaceCMKey("work", "SOUL.md")
+	if cm.Data[key] != "I am the work agent" {
+		t.Errorf("expected work workspace SOUL.md, got %q", cm.Data[key])
+	}
+
+	// ENVIRONMENT.md should be injected for additional workspace
+	envKey := AdditionalWorkspaceCMKey("work", "ENVIRONMENT.md")
+	if cm.Data[envKey] != EnvironmentSkillContent {
+		t.Error("expected ENVIRONMENT.md injected for additional workspace")
+	}
+
+	// BOOTSTRAP.md should NOT be injected for additional workspace
+	bootstrapKey := AdditionalWorkspaceCMKey("work", "BOOTSTRAP.md")
+	if _, ok := cm.Data[bootstrapKey]; ok {
+		t.Error("BOOTSTRAP.md should not be injected for additional workspaces")
+	}
+
+	// Default workspace files should still be present
+	if cm.Data["ENVIRONMENT.md"] != EnvironmentSkillContent {
+		t.Error("default workspace ENVIRONMENT.md missing")
+	}
+	if cm.Data["BOOTSTRAP.md"] != BootstrapContent {
+		t.Error("default workspace BOOTSTRAP.md missing")
+	}
+}
+
+func TestBuildWorkspaceConfigMap_AdditionalWorkspaceMergePriority(t *testing.T) {
+	instance := newTestInstance("ws-addl-merge")
+	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+		AdditionalWorkspaces: []openclawv1alpha1.AdditionalWorkspace{
+			{
+				Name: "work",
+				InitialFiles: map[string]string{
+					"SOUL.md": "inline wins",
+				},
+			},
+		},
+	}
+	additionalExt := map[string]map[string]string{
+		"work": {
+			"SOUL.md":   "external loses",
+			"REMOTE.md": "only from external",
+		},
+	}
+
+	cm := BuildWorkspaceConfigMap(instance, nil, additionalExt, nil)
+	if cm == nil {
+		t.Fatal("expected non-nil ConfigMap")
+	}
+
+	// Inline should override external
+	key := AdditionalWorkspaceCMKey("work", "SOUL.md")
+	if cm.Data[key] != "inline wins" {
+		t.Errorf("SOUL.md should be inline value, got %q", cm.Data[key])
+	}
+
+	// External-only file should still be present
+	remoteKey := AdditionalWorkspaceCMKey("work", "REMOTE.md")
+	if cm.Data[remoteKey] != "only from external" {
+		t.Errorf("REMOTE.md should be from external, got %q", cm.Data[remoteKey])
+	}
+
+	// ENVIRONMENT.md overrides everything (operator-injected)
+	envKey := AdditionalWorkspaceCMKey("work", "ENVIRONMENT.md")
+	if cm.Data[envKey] != EnvironmentSkillContent {
+		t.Error("ENVIRONMENT.md should be operator-injected content")
+	}
+}
+
+func TestBuildWorkspaceConfigMap_AdditionalWorkspaceOperatorFiles(t *testing.T) {
+	instance := newTestInstance("ws-addl-ops")
+	instance.Spec.SelfConfigure.Enabled = true
+	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+		AdditionalWorkspaces: []openclawv1alpha1.AdditionalWorkspace{
+			{Name: "research"},
+		},
+	}
+
+	cm := BuildWorkspaceConfigMap(instance, nil, nil, nil)
+
+	// Default workspace gets SELFCONFIG.md and selfconfig.sh
+	if _, ok := cm.Data["SELFCONFIG.md"]; !ok {
+		t.Error("default workspace should have SELFCONFIG.md")
+	}
+
+	// Additional workspace should NOT get SELFCONFIG.md
+	scKey := AdditionalWorkspaceCMKey("research", "SELFCONFIG.md")
+	if _, ok := cm.Data[scKey]; ok {
+		t.Error("additional workspace should not have SELFCONFIG.md")
+	}
+
+	// Additional workspace should get ENVIRONMENT.md
+	envKey := AdditionalWorkspaceCMKey("research", "ENVIRONMENT.md")
+	if cm.Data[envKey] != EnvironmentSkillContent {
+		t.Error("additional workspace should have ENVIRONMENT.md")
+	}
+}
+
+func TestBuildInitScript_AdditionalWorkspaces(t *testing.T) {
+	instance := newTestInstance("ws-addl-init")
+	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+		AdditionalWorkspaces: []openclawv1alpha1.AdditionalWorkspace{
+			{
+				Name: "work",
+				InitialFiles: map[string]string{
+					"SOUL.md": "work soul",
+				},
+				InitialDirectories: []string{"tools"},
+			},
+		},
+	}
+
+	script := BuildInitScript(instance, nil, nil, nil)
+
+	// shellQuote wraps each path segment in single quotes
+	// Should create the workspace directory
+	if !strings.Contains(script, "mkdir -p /data/'workspace-work'") {
+		t.Errorf("init script should create workspace-work directory, got:\n%s", script)
+	}
+
+	// Should create the tools subdirectory
+	if !strings.Contains(script, "mkdir -p /data/'workspace-work'/'tools'") {
+		t.Errorf("init script should create workspace-work/tools directory, got:\n%s", script)
+	}
+
+	// Should copy SOUL.md using namespaced key
+	cmKey := AdditionalWorkspaceCMKey("work", "SOUL.md")
+	if !strings.Contains(script, cmKey) {
+		t.Errorf("init script should reference namespaced key %q, got:\n%s", cmKey, script)
+	}
+
+	// Should use seed-once semantics ([ -f ... ] || cp ...)
+	if !strings.Contains(script, "[ -f /data/'workspace-work'/'SOUL.md' ] || cp") {
+		t.Errorf("init script should use seed-once for SOUL.md, got:\n%s", script)
+	}
+
+	// Should also copy ENVIRONMENT.md for additional workspace
+	envKey := AdditionalWorkspaceCMKey("work", "ENVIRONMENT.md")
+	if !strings.Contains(script, envKey) {
+		t.Errorf("init script should reference ENVIRONMENT.md namespaced key, got:\n%s", script)
+	}
+}
+
+func TestConfigHash_ChangesWithAdditionalWorkspace(t *testing.T) {
+	instance := newTestInstance("ws-addl-hash")
+	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+		AdditionalWorkspaces: []openclawv1alpha1.AdditionalWorkspace{
+			{Name: "work"},
+		},
+	}
+
+	sts1 := BuildStatefulSet(instance, "", nil, nil, nil)
+	hash1 := sts1.Spec.Template.Annotations["openclaw.rocks/config-hash"]
+
+	// Add additional external files
+	additionalExt := map[string]map[string]string{
+		"work": {"SOUL.md": "work soul"},
+	}
+	sts2 := BuildStatefulSet(instance, "", nil, nil, additionalExt)
+	hash2 := sts2.Spec.Template.Annotations["openclaw.rocks/config-hash"]
+
+	if hash1 == hash2 {
+		t.Error("config hash should change when additional workspace external files are added")
+	}
+
+	// Same content should produce same hash
+	sts3 := BuildStatefulSet(instance, "", nil, nil, additionalExt)
+	hash3 := sts3.Spec.Template.Annotations["openclaw.rocks/config-hash"]
+	if hash2 != hash3 {
+		t.Error("config hash should be deterministic for same additional workspace content")
+	}
+}
+
+func TestAdditionalWorkspaceCMKey_Roundtrip(t *testing.T) {
+	tests := []struct {
+		wsName   string
+		filename string
+	}{
+		{"work", "SOUL.md"},
+		{"research", "ENVIRONMENT.md"},
+		{"my-agent", "deep-nested-file.txt"},
+	}
+	for _, tt := range tests {
+		key := AdditionalWorkspaceCMKey(tt.wsName, tt.filename)
+		gotName, gotFile, ok := ParseAdditionalWorkspaceCMKey(key)
+		if !ok {
+			t.Errorf("ParseAdditionalWorkspaceCMKey(%q) returned !ok", key)
+			continue
+		}
+		if gotName != tt.wsName || gotFile != tt.filename {
+			t.Errorf("roundtrip failed: got (%q, %q), want (%q, %q)", gotName, gotFile, tt.wsName, tt.filename)
+		}
+	}
+
+	// Non-additional-workspace key should return false
+	_, _, ok := ParseAdditionalWorkspaceCMKey("SOUL.md")
+	if ok {
+		t.Error("ParseAdditionalWorkspaceCMKey should return false for non-namespaced key")
 	}
 }
