@@ -309,7 +309,8 @@ func (r *OpenClawInstanceReconciler) reconcileResources(ctx context.Context, ins
 
 	// 2c. Reconcile Tailscale state Secret (must precede StatefulSet)
 	if instance.Spec.Tailscale.Enabled {
-		if err := r.reconcileTailscaleStateSecret(ctx, instance); err != nil {
+		err = r.reconcileTailscaleStateSecret(ctx, instance)
+		if err != nil {
 			return fmt.Errorf("failed to reconcile Tailscale state secret: %w", err)
 		}
 		logger.V(1).Info("Tailscale state secret reconciled")
@@ -319,7 +320,8 @@ func (r *OpenClawInstanceReconciler) reconcileResources(ctx context.Context, ins
 	var skillPacks *resources.ResolvedSkillPacks
 	packNames := resources.ExtractPackSkills(instance.Spec.Skills)
 	if len(packNames) > 0 && r.SkillPackResolver != nil {
-		resolved, err := r.SkillPackResolver.Resolve(ctx, packNames)
+		var resolved *resources.ResolvedSkillPacks
+		resolved, err = r.SkillPackResolver.Resolve(ctx, packNames)
 		if err != nil {
 			logger.Error(err, "Failed to resolve skill packs, continuing without them", "packs", packNames)
 			r.Recorder.Event(instance, corev1.EventTypeWarning, "SkillPackResolutionFailed",
@@ -346,7 +348,8 @@ func (r *OpenClawInstanceReconciler) reconcileResources(ctx context.Context, ins
 	}
 
 	// 3. Reconcile ConfigMap (always - enrichment pipeline runs on all config sources)
-	if err := r.reconcileConfigMap(ctx, instance, gatewayToken, skillPacks); err != nil {
+	err = r.reconcileConfigMap(ctx, instance, gatewayToken, skillPacks)
+	if err != nil {
 		return fmt.Errorf("failed to reconcile ConfigMap: %w", err)
 	}
 	logger.V(1).Info("ConfigMap reconciled")
