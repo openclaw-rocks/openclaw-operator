@@ -82,7 +82,7 @@ Every request is validated against the instance's allowlist policy. Protected co
 | **Scalable** | Auto-scaling | HPA integration with CPU and memory metrics, min/max replica bounds, automatic StatefulSet replica management |
 | **Resilient** | Self-healing lifecycle | PodDisruptionBudgets, health probes, automatic config rollouts via content hashing, 5-minute drift detection |
 | **Backup/Restore** | S3-backed snapshots | Automatic backup to S3-compatible storage on deletion, pre-update, and on a cron schedule; restore into a new instance from any snapshot |
-| **Workspace Seeding** | Initial files & dirs | Pre-populate the workspace with files and directories before the agent starts |
+| **Workspace Seeding** | Initial files & dirs | Pre-populate the workspace with files and directories before the agent starts; reference an external ConfigMap for GitOps workflows |
 | **Gateway Auth** | Auto-generated tokens | Automatic gateway token Secret per instance, bypassing mDNS pairing (unusable in k8s) |
 | **Tailscale** | Tailnet access | Expose via Tailscale Serve or Funnel with SSO auth - no Ingress needed |
 | **Extensible** | Sidecars & init containers | Chromium for browser automation, Ollama for local LLMs, Tailscale for tailnet access, plus custom init containers and sidecars |
@@ -478,6 +478,83 @@ spec:
 ```
 
 npm lifecycle scripts are disabled globally on the init container (`NPM_CONFIG_IGNORE_SCRIPTS=true`) to mitigate supply chain attacks. Plugins are installed into the PVC-backed `~/.openclaw/node_modules` directory and persist across pod restarts.
+
+### Workspace seeding
+
+Pre-populate the agent workspace with files and directories before the agent starts. Files can be provided inline or referenced from an external ConfigMap -- ideal for GitOps workflows where workspace content is managed alongside your manifests.
+
+**Inline files:**
+
+```yaml
+spec:
+  workspace:
+    initialDirectories:
+      - tools/scripts
+    initialFiles:
+      README.md: |
+        # My Workspace
+        This workspace is managed by OpenClaw.
+```
+
+**External ConfigMap reference:**
+
+```yaml
+spec:
+  workspace:
+    configMapRef:
+      name: agent-alpha-workspace   # all keys become workspace files
+    initialFiles:                    # inline files (override configMapRef)
+      EXTRA.md: "additional content"
+```
+
+All keys in the referenced ConfigMap are written as files into the workspace directory. When both `configMapRef` and `initialFiles` are specified, inline files take precedence over ConfigMap entries with the same filename.
+
+**Merge priority** (highest wins): operator-injected files > inline `initialFiles` > external `configMapRef` > skill packs.
+
+The operator sets a `WorkspaceReady` status condition to `False` when the referenced ConfigMap is missing or contains invalid filenames, and `True` once workspace files are seeded successfully. The controller watches external ConfigMaps for changes and re-reconciles automatically.
+
+**GitOps example with Kustomize:**
+
+```yaml
+# kustomization.yaml
+configMapGenerator:
+  - name: agent-alpha-workspace
+    files:
+      - SOUL.md
+      - AGENT.md
+```
+
+> **Note:** When using Kustomize `configMapGenerator`, disable the default name suffix hashing (`generatorOptions: { disableNameSuffixHash: true }`) or use the generated name in `configMapRef.name`, since the operator looks up the ConfigMap by exact name.
+
+**Additional workspaces (multi-agent):**
+
+When running multiple agents with isolated workspaces, use `additionalWorkspaces` to seed files for each agent. Each entry seeds to `~/.openclaw/workspace-<name>/` -- set matching paths in `spec.config.raw.agents.list[].workspace`.
+
+```yaml
+spec:
+  workspace:
+    initialFiles:
+      SOUL.md: "I am the default agent"
+    additionalWorkspaces:
+      - name: work
+        configMapRef:
+          name: work-agent-files
+        initialFiles:
+          SOUL.md: "I am the work agent"
+        initialDirectories:
+          - tools
+  config:
+    raw:
+      agents:
+        list:
+          - id: home
+            default: true
+            workspace: "~/.openclaw/workspace"
+          - id: work
+            workspace: "~/.openclaw/workspace-work"
+```
+
+Each additional workspace supports the same `configMapRef`, `initialFiles`, and `initialDirectories` as the default workspace. Operator-injected `ENVIRONMENT.md` is included; `BOOTSTRAP.md` is not (only the default agent runs onboarding). Max 10 additional workspaces.
 
 ### Self-configure
 

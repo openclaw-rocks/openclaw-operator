@@ -83,24 +83,62 @@ Configuration for the OpenClaw application (`openclaw.json`).
 
 Configures initial workspace files seeded into the instance. Files are copied once on first boot and never overwritten, so agent modifications survive pod restarts.
 
-| Field                | Type                  | Default | Description                                                                                       |
-|----------------------|-----------------------|---------|---------------------------------------------------------------------------------------------------|
-| `initialFiles`       | `map[string]string`   | --      | Maps filenames to their content. Each file is written to the workspace directory only if it does not already exist. Max 50 entries. |
-| `initialDirectories` | `[]string`            | --      | Directories to create (`mkdir -p`) inside the workspace directory. Nested paths like `tools/scripts` are allowed. Max 20 items. |
+| Field                  | Type                      | Default | Description                                                                                       |
+|------------------------|---------------------------|---------|---------------------------------------------------------------------------------------------------|
+| `configMapRef`         | `ConfigMapNameSelector`   | --      | Reference to an external ConfigMap whose keys become workspace files. See sub-fields below. |
+| `initialFiles`         | `map[string]string`       | --      | Maps filenames to their content. Each file is written to the workspace directory only if it does not already exist. Max 50 entries. |
+| `initialDirectories`   | `[]string`                | --      | Directories to create (`mkdir -p`) inside the workspace directory. Nested paths like `tools/scripts` are allowed. Max 20 items. |
+| `additionalWorkspaces` | `[]AdditionalWorkspace`   | --      | Additional agent workspaces for multi-agent setups. Each entry seeds files to `~/.openclaw/workspace-<name>/`. Max 10 items. See sub-fields below. |
+
+#### spec.workspace.configMapRef
+
+| Field  | Type     | Default | Description                                                      |
+|--------|----------|---------|------------------------------------------------------------------|
+| `name` | `string` | --      | **(Required)** Name of the ConfigMap in the same namespace as the instance. All keys in the ConfigMap are written as files to the workspace directory. |
+
+**Merge priority** (highest wins): operator-injected files > inline `initialFiles` > external `configMapRef` > skill packs.
+
+The controller watches the referenced ConfigMap for changes and re-reconciles automatically. If the ConfigMap is missing or contains invalid filenames, the `WorkspaceReady` status condition is set to `False`.
+
+#### spec.workspace.additionalWorkspaces[]
+
+Each entry configures a named workspace for a secondary agent. The operator seeds files to `~/.openclaw/workspace-<name>/`.
+
+| Field              | Type                    | Default | Description                                                                                       |
+|--------------------|-------------------------|---------|---------------------------------------------------------------------------------------------------|
+| `name`             | `string`                | --      | **(Required)** Workspace identifier. Must be a DNS label (`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`), max 63 chars. Seeds to `~/.openclaw/workspace-<name>/`. |
+| `configMapRef`     | `ConfigMapNameSelector` | --      | Reference to an external ConfigMap whose keys become workspace files. |
+| `initialFiles`     | `map[string]string`     | --      | Maps filenames to their content. Max 50 entries. |
+| `initialDirectories` | `[]string`            | --      | Directories to create inside this workspace. Max 20 items. |
+
+Per-workspace merge priority (highest wins): operator-injected `ENVIRONMENT.md` > inline `initialFiles` > external `configMapRef`. Note: `BOOTSTRAP.md`, self-configure files, and skill packs are only injected into the default workspace.
 
 ```yaml
 spec:
   workspace:
+    configMapRef:
+      name: agent-alpha-workspace   # all keys become workspace files
     initialDirectories:
       - tools/scripts
       - data
-    initialFiles:
+    initialFiles:                    # inline files override configMapRef
       README.md: |
         # My Workspace
         This workspace is managed by OpenClaw.
       tools/scripts/setup.sh: |
         #!/bin/bash
         echo "Hello from setup"
+```
+
+**GitOps example with Kustomize:**
+
+```yaml
+# kustomization.yaml
+configMapGenerator:
+  - name: agent-alpha-workspace
+    files:
+      - SOUL.md
+      - AGENT.md
 ```
 
 ### spec.skills
@@ -905,6 +943,7 @@ Standard `metav1.Condition` array. Condition types:
 | `AutoUpdateAvailable` | A newer version is available in the OCI registry.              |
 | `SecretsReady`        | All referenced Secrets exist and are accessible.               |
 | `SkillPacksReady`     | Skill packs resolved successfully from GitHub. `False` with reason `ResolutionFailed` when GitHub is unreachable - instance runs without skill packs (phase `Degraded`). Retried on next reconcile. |
+| `WorkspaceReady`      | Workspace files seeded successfully. `False` when an external ConfigMap referenced by `spec.workspace.configMapRef` is missing or contains invalid filenames. `True` once all workspace files (from configMapRef, initialFiles, and skill packs) are seeded. |
 
 ### status.endpoints
 
