@@ -37,7 +37,9 @@ import (
 // BuildStatefulSet creates a StatefulSet for the OpenClawInstance.
 // If gatewayTokenSecretName is non-empty and the user hasn't already set
 // OPENCLAW_GATEWAY_TOKEN in spec.env, the env var is injected via SecretKeyRef.
-func BuildStatefulSet(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecretName string, skillPacks *ResolvedSkillPacks) *appsv1.StatefulSet {
+// externalWorkspaceFiles are the resolved contents of spec.workspace.configMapRef (may be nil).
+// additionalExternalFiles maps workspace name to resolved configMapRef contents (may be nil).
+func BuildStatefulSet(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecretName string, skillPacks *ResolvedSkillPacks, externalWorkspaceFiles map[string]string, additionalExternalFiles map[string]map[string]string) *appsv1.StatefulSet {
 	labels := Labels(instance)
 	selectorLabels := SelectorLabels(instance)
 
@@ -67,14 +69,14 @@ func BuildStatefulSet(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenS
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels:      labels,
-					Annotations: buildPodAnnotations(instance),
+					Annotations: buildPodAnnotations(instance, externalWorkspaceFiles, additionalExternalFiles),
 				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName:            ServiceAccountName(instance),
 					DeprecatedServiceAccount:      ServiceAccountName(instance),
 					AutomountServiceAccountToken:  Ptr(instance.Spec.SelfConfigure.Enabled || instance.Spec.Tailscale.Enabled),
 					SecurityContext:               buildPodSecurityContext(instance),
-					InitContainers:                buildInitContainers(instance, skillPacks),
+					InitContainers:                buildInitContainers(instance, externalWorkspaceFiles, additionalExternalFiles, skillPacks),
 					Containers:                    buildContainers(instance, gwSecretName),
 					Volumes:                       buildVolumes(instance, skillPacks),
 					NodeSelector:                  instance.Spec.Availability.NodeSelector,
@@ -129,12 +131,12 @@ func BuildStatefulSet(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenS
 }
 
 // buildPodAnnotations builds the pod annotations for the pod template
-func buildPodAnnotations(instance *openclawv1alpha1.OpenClawInstance) map[string]string {
+func buildPodAnnotations(instance *openclawv1alpha1.OpenClawInstance, externalWorkspaceFiles map[string]string, additionalExternalFiles map[string]map[string]string) map[string]string {
 	annotations := make(map[string]string, len(instance.Spec.PodAnnotations)+1)
 	for k, v := range instance.Spec.PodAnnotations {
 		annotations[k] = v
 	}
-	annotations["openclaw.rocks/config-hash"] = calculateConfigHash(instance)
+	annotations["openclaw.rocks/config-hash"] = calculateConfigHash(instance, externalWorkspaceFiles, additionalExternalFiles)
 	return annotations
 }
 
@@ -517,11 +519,11 @@ func hasUserEnv(instance *openclawv1alpha1.OpenClawInstance, name string) bool {
 // files into the data volume. Config is always overwritten (operator-managed),
 // while workspace files use seed-once semantics (only copied if not present).
 // Skills are installed via a separate init container using the OpenClaw image.
-func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance, skillPacks *ResolvedSkillPacks) []corev1.Container {
+func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance, externalWorkspaceFiles map[string]string, additionalExternalFiles map[string]map[string]string, skillPacks *ResolvedSkillPacks) []corev1.Container {
 	var initContainers []corev1.Container
 
 	// Config/workspace init container (only if there's something to do)
-	if script := BuildInitScript(instance, skillPacks); script != "" {
+	if script := BuildInitScript(instance, externalWorkspaceFiles, additionalExternalFiles, skillPacks); script != "" {
 		mounts := []corev1.VolumeMount{
 			{Name: "data", MountPath: "/data"},
 		}
@@ -653,7 +655,7 @@ func shellQuote(s string) string {
 // It handles config copy or merge, directory creation (idempotent),
 // workspace file seeding (only if not present), and skill pack file mapping.
 // Returns "" if there is nothing to do.
-func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance, skillPacks *ResolvedSkillPacks) string {
+func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance, externalWorkspaceFiles map[string]string, additionalExternalFiles map[string]map[string]string, skillPacks *ResolvedSkillPacks) string {
 	var lines []string
 
 	// 1. Config handling — overwrite or merge, with optional JSON5 conversion
@@ -711,6 +713,10 @@ func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance, skillPacks *Re
 	hasFiles := hasWorkspaceFiles(instance, skillPacks)
 	if hasFiles {
 		allFiles := make(map[string]bool)
+		// External configMapRef files
+		for name := range externalWorkspaceFiles {
+			allFiles[name] = true
+		}
 		if ws != nil {
 			for name := range ws.InitialFiles {
 				allFiles[name] = true
@@ -748,6 +754,59 @@ func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance, skillPacks *Re
 				wsPath := skillPacks.PathMapping[cmKey]
 				lines = append(lines, fmt.Sprintf("[ -f /data/workspace/%s ] || cp /workspace-init/%s /data/workspace/%s",
 					shellQuote(wsPath), shellQuote(cmKey), shellQuote(wsPath)))
+			}
+		}
+	}
+
+	// Additional workspaces - create dirs and seed files for each
+	if ws != nil {
+		// Sort additional workspaces for deterministic output
+		addlWs := make([]openclawv1alpha1.AdditionalWorkspace, len(ws.AdditionalWorkspaces))
+		copy(addlWs, ws.AdditionalWorkspaces)
+		sort.Slice(addlWs, func(i, j int) bool { return addlWs[i].Name < addlWs[j].Name })
+
+		for _, aw := range addlWs {
+			wsDir := fmt.Sprintf("workspace-%s", aw.Name)
+
+			// Create the workspace directory
+			lines = append(lines, fmt.Sprintf("mkdir -p /data/%s", shellQuote(wsDir)))
+
+			// Create initialDirectories
+			dirs := make([]string, len(aw.InitialDirectories))
+			copy(dirs, aw.InitialDirectories)
+			sort.Strings(dirs)
+			for _, dir := range dirs {
+				lines = append(lines, fmt.Sprintf("mkdir -p /data/%s/%s", shellQuote(wsDir), shellQuote(dir)))
+			}
+
+			// Collect all file names for this workspace
+			awFiles := make(map[string]bool)
+
+			// External configMapRef files
+			if extFiles, ok := additionalExternalFiles[aw.Name]; ok {
+				for name := range extFiles {
+					awFiles[name] = true
+				}
+			}
+			// Inline initialFiles
+			for name := range aw.InitialFiles {
+				awFiles[name] = true
+			}
+			// Operator-injected ENVIRONMENT.md
+			awFiles["ENVIRONMENT.md"] = true
+
+			// Seed files (only if not present)
+			sorted := make([]string, 0, len(awFiles))
+			for name := range awFiles {
+				sorted = append(sorted, name)
+			}
+			sort.Strings(sorted)
+			for _, name := range sorted {
+				cmKey := AdditionalWorkspaceCMKey(aw.Name, name)
+				lines = append(lines, fmt.Sprintf("[ -f /data/%s/%s ] || cp /workspace-init/%s /data/%s/%s",
+					shellQuote(wsDir), shellQuote(name),
+					shellQuote(cmKey),
+					shellQuote(wsDir), shellQuote(name)))
 			}
 		}
 	}
@@ -2333,13 +2392,47 @@ func getPullPolicy(instance *openclawv1alpha1.OpenClawInstance) corev1.PullPolic
 
 // calculateConfigHash computes a hash of the config, workspace, and skills for rollout detection.
 // Changes to any of these trigger a pod restart.
-func calculateConfigHash(instance *openclawv1alpha1.OpenClawInstance) string {
+func calculateConfigHash(instance *openclawv1alpha1.OpenClawInstance, externalWorkspaceFiles map[string]string, additionalExternalFiles map[string]map[string]string) string {
 	h := sha256.New()
 	configData, _ := json.Marshal(instance.Spec.Config)
 	h.Write(configData)
 	if instance.Spec.Workspace != nil {
 		wsData, _ := json.Marshal(instance.Spec.Workspace)
 		h.Write(wsData)
+	}
+	// Hash external workspace files content for pod restart detection
+	if len(externalWorkspaceFiles) > 0 {
+		// Sort keys for deterministic hashing
+		keys := make([]string, 0, len(externalWorkspaceFiles))
+		for k := range externalWorkspaceFiles {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			h.Write([]byte(k))
+			h.Write([]byte(externalWorkspaceFiles[k]))
+		}
+	}
+	// Hash additional workspace external files
+	if len(additionalExternalFiles) > 0 {
+		wsNames := make([]string, 0, len(additionalExternalFiles))
+		for name := range additionalExternalFiles {
+			wsNames = append(wsNames, name)
+		}
+		sort.Strings(wsNames)
+		for _, name := range wsNames {
+			h.Write([]byte(name))
+			files := additionalExternalFiles[name]
+			fKeys := make([]string, 0, len(files))
+			for k := range files {
+				fKeys = append(fKeys, k)
+			}
+			sort.Strings(fKeys)
+			for _, k := range fKeys {
+				h.Write([]byte(k))
+				h.Write([]byte(files[k]))
+			}
+		}
 	}
 	if len(instance.Spec.Skills) > 0 {
 		skillsData, _ := json.Marshal(instance.Spec.Skills)
