@@ -357,7 +357,8 @@ func (r *OpenClawInstanceReconciler) reconcileResources(ctx context.Context, ins
 	}
 
 	// 3b. Reconcile Workspace ConfigMap (seed files for workspace)
-	if err := r.reconcileWorkspaceConfigMap(ctx, instance, skillPacks); err != nil {
+	wsFiles, err := r.reconcileWorkspaceConfigMap(ctx, instance, skillPacks)
+	if err != nil {
 		return fmt.Errorf("failed to reconcile Workspace ConfigMap: %w", err)
 	}
 	logger.V(1).Info("Workspace ConfigMap reconciled")
@@ -401,7 +402,7 @@ func (r *OpenClawInstanceReconciler) reconcileResources(ctx context.Context, ins
 	if err := r.migrateDeploymentToStatefulSet(ctx, instance); err != nil {
 		return fmt.Errorf("failed to migrate Deployment to StatefulSet: %w", err)
 	}
-	if err := r.reconcileStatefulSet(ctx, instance, gatewayToken, skillPacks); err != nil {
+	if err := r.reconcileStatefulSet(ctx, instance, gatewayToken, skillPacks, wsFiles); err != nil {
 		return fmt.Errorf("failed to reconcile StatefulSet: %w", err)
 	}
 	logger.V(1).Info("StatefulSet reconciled")
@@ -728,18 +729,141 @@ func (r *OpenClawInstanceReconciler) reconcileConfigMap(ctx context.Context, ins
 
 // reconcileWorkspaceConfigMap reconciles the ConfigMap containing workspace seed files.
 // If the instance has no workspace files, any existing workspace ConfigMap is cleaned up.
-func (r *OpenClawInstanceReconciler) reconcileWorkspaceConfigMap(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance, skillPacks *resources.ResolvedSkillPacks) error {
-	desired := resources.BuildWorkspaceConfigMap(instance, skillPacks)
+// Returns the resolved external workspace files so callers (e.g. reconcileStatefulSet)
+// can use them for config hash calculation and init script generation.
+// resolvedWorkspaceFiles holds the resolved external files for default and additional workspaces.
+type resolvedWorkspaceFiles struct {
+	// defaultFiles are the resolved contents of spec.workspace.configMapRef.
+	defaultFiles map[string]string
+	// additionalFiles maps workspace name to resolved configMapRef contents.
+	additionalFiles map[string]map[string]string
+}
+
+func (r *OpenClawInstanceReconciler) reconcileWorkspaceConfigMap(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance, skillPacks *resources.ResolvedSkillPacks) (*resolvedWorkspaceFiles, error) {
+	logger := log.FromContext(ctx)
+	resolved := &resolvedWorkspaceFiles{}
+
+	// Resolve external workspace ConfigMap if referenced
+	if instance.Spec.Workspace != nil && instance.Spec.Workspace.ConfigMapRef != nil {
+		ref := instance.Spec.Workspace.ConfigMapRef
+		extCM := &corev1.ConfigMap{}
+		if err := r.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: instance.Namespace}, extCM); err != nil {
+			if apierrors.IsNotFound(err) {
+				meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+					Type:               openclawv1alpha1.ConditionTypeWorkspaceReady,
+					Status:             metav1.ConditionFalse,
+					Reason:             "ConfigMapNotFound",
+					Message:            fmt.Sprintf("Workspace ConfigMap %q not found", ref.Name),
+					ObservedGeneration: instance.Generation,
+				})
+				r.Recorder.Eventf(instance, corev1.EventTypeWarning, "WorkspaceConfigMapNotFound",
+					"Workspace ConfigMap %q referenced by spec.workspace.configMapRef not found", ref.Name)
+				return nil, fmt.Errorf("workspace configMapRef %q not found: %w", ref.Name, err)
+			}
+			return nil, fmt.Errorf("fetching workspace configMapRef %q: %w", ref.Name, err)
+		}
+
+		// Validate all keys from the external ConfigMap
+		for key := range extCM.Data {
+			if err := resources.ValidateWorkspaceFilename(key); err != nil {
+				meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+					Type:               openclawv1alpha1.ConditionTypeWorkspaceReady,
+					Status:             metav1.ConditionFalse,
+					Reason:             "InvalidFilename",
+					Message:            fmt.Sprintf("Workspace ConfigMap %q key %q: %v", ref.Name, key, err),
+					ObservedGeneration: instance.Generation,
+				})
+				return nil, fmt.Errorf("workspace configMapRef %q key %q: %w", ref.Name, key, err)
+			}
+		}
+
+		resolved.defaultFiles = extCM.Data
+		logger.V(1).Info("Resolved external workspace ConfigMap", "configMap", ref.Name, "keys", len(resolved.defaultFiles))
+	}
+
+	// Resolve additional workspace ConfigMaps
+	if instance.Spec.Workspace != nil {
+		for i := range instance.Spec.Workspace.AdditionalWorkspaces {
+			aw := &instance.Spec.Workspace.AdditionalWorkspaces[i]
+			if aw.ConfigMapRef == nil {
+				continue
+			}
+			extCM := &corev1.ConfigMap{}
+			if err := r.Get(ctx, types.NamespacedName{Name: aw.ConfigMapRef.Name, Namespace: instance.Namespace}, extCM); err != nil {
+				if apierrors.IsNotFound(err) {
+					meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+						Type:               openclawv1alpha1.ConditionTypeWorkspaceReady,
+						Status:             metav1.ConditionFalse,
+						Reason:             "ConfigMapNotFound",
+						Message:            fmt.Sprintf("Additional workspace %q ConfigMap %q not found", aw.Name, aw.ConfigMapRef.Name),
+						ObservedGeneration: instance.Generation,
+					})
+					r.Recorder.Eventf(instance, corev1.EventTypeWarning, "WorkspaceConfigMapNotFound",
+						"Additional workspace %q ConfigMap %q not found", aw.Name, aw.ConfigMapRef.Name)
+					return nil, fmt.Errorf("additional workspace %q configMapRef %q not found: %w", aw.Name, aw.ConfigMapRef.Name, err)
+				}
+				return nil, fmt.Errorf("fetching additional workspace %q configMapRef %q: %w", aw.Name, aw.ConfigMapRef.Name, err)
+			}
+
+			// Validate all keys
+			for key := range extCM.Data {
+				if err := resources.ValidateWorkspaceFilename(key); err != nil {
+					meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+						Type:               openclawv1alpha1.ConditionTypeWorkspaceReady,
+						Status:             metav1.ConditionFalse,
+						Reason:             "InvalidFilename",
+						Message:            fmt.Sprintf("Additional workspace %q ConfigMap %q key %q: %v", aw.Name, aw.ConfigMapRef.Name, key, err),
+						ObservedGeneration: instance.Generation,
+					})
+					return nil, fmt.Errorf("additional workspace %q configMapRef %q key %q: %w", aw.Name, aw.ConfigMapRef.Name, key, err)
+				}
+			}
+
+			if resolved.additionalFiles == nil {
+				resolved.additionalFiles = make(map[string]map[string]string)
+			}
+			resolved.additionalFiles[aw.Name] = extCM.Data
+			logger.V(1).Info("Resolved additional workspace ConfigMap", "workspace", aw.Name, "configMap", aw.ConfigMapRef.Name, "keys", len(extCM.Data))
+		}
+	}
+
+	// Determine if any configMapRef is in use (default or additional)
+	hasConfigMapRef := instance.Spec.Workspace != nil && instance.Spec.Workspace.ConfigMapRef != nil
+	if !hasConfigMapRef && instance.Spec.Workspace != nil {
+		for i := range instance.Spec.Workspace.AdditionalWorkspaces {
+			if instance.Spec.Workspace.AdditionalWorkspaces[i].ConfigMapRef != nil {
+				hasConfigMapRef = true
+				break
+			}
+		}
+	}
+
+	// Set WorkspaceReady=True when any configMapRef is used and all resolved successfully
+	if hasConfigMapRef {
+		totalFiles := len(resolved.defaultFiles)
+		for _, files := range resolved.additionalFiles {
+			totalFiles += len(files)
+		}
+		meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+			Type:               openclawv1alpha1.ConditionTypeWorkspaceReady,
+			Status:             metav1.ConditionTrue,
+			Reason:             "Resolved",
+			Message:            fmt.Sprintf("All workspace ConfigMaps resolved with %d total file(s)", totalFiles),
+			ObservedGeneration: instance.Generation,
+		})
+	}
+
+	desired := resources.BuildWorkspaceConfigMap(instance, resolved.defaultFiles, resolved.additionalFiles, skillPacks)
 
 	if desired == nil {
-		// No workspace files — clean up existing ConfigMap if present
+		// No workspace files - clean up existing ConfigMap if present
 		existing := &corev1.ConfigMap{}
 		existing.Name = resources.WorkspaceConfigMapName(instance)
 		existing.Namespace = instance.Namespace
 		if err := r.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
-			return err
+			return nil, err
 		}
-		return nil
+		return resolved, nil
 	}
 
 	cm := &corev1.ConfigMap{
@@ -753,10 +877,10 @@ func (r *OpenClawInstanceReconciler) reconcileWorkspaceConfigMap(ctx context.Con
 		cm.Data = desired.Data
 		return controllerutil.SetControllerReference(instance, cm, r.Scheme)
 	}); err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return resolved, nil
 }
 
 // reconcilePVC reconciles the PersistentVolumeClaim
@@ -1010,7 +1134,7 @@ func (r *OpenClawInstanceReconciler) migrateDeploymentToStatefulSet(ctx context.
 }
 
 // reconcileStatefulSet reconciles the StatefulSet
-func (r *OpenClawInstanceReconciler) reconcileStatefulSet(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance, gatewayToken string, skillPacks *resources.ResolvedSkillPacks) error {
+func (r *OpenClawInstanceReconciler) reconcileStatefulSet(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance, gatewayToken string, skillPacks *resources.ResolvedSkillPacks, wsFiles *resolvedWorkspaceFiles) error {
 	// Compute secret hash for rollout trigger on secret rotation
 	secretHash, missingSecrets, err := r.computeSecretHash(ctx, instance)
 	if err != nil {
@@ -1051,7 +1175,7 @@ func (r *OpenClawInstanceReconciler) reconcileStatefulSet(ctx context.Context, i
 
 	// Build the desired StatefulSet once and reuse for both VCT comparison
 	// and the CreateOrUpdate mutate func.
-	desired := resources.BuildStatefulSet(instance, gwSecretName, skillPacks)
+	desired := resources.BuildStatefulSet(instance, gwSecretName, skillPacks, wsFiles.defaultFiles, wsFiles.additionalFiles)
 	resources.NormalizeStatefulSet(desired)
 
 	sts := &appsv1.StatefulSet{
@@ -1630,5 +1754,56 @@ func (r *OpenClawInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&policyv1.PodDisruptionBudget{}).
 		Owns(&autoscalingv2.HorizontalPodAutoscaler{}).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.findInstancesForSecret)).
+		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.findInstancesForConfigMap)).
 		Complete(r)
+}
+
+// findInstancesForConfigMap maps an external ConfigMap change to the OpenClawInstances
+// that reference it via spec.config.configMapRef or spec.workspace.configMapRef.
+func (r *OpenClawInstanceReconciler) findInstancesForConfigMap(ctx context.Context, obj client.Object) []reconcile.Request {
+	cm, ok := obj.(*corev1.ConfigMap)
+	if !ok {
+		return nil
+	}
+
+	instanceList := &openclawv1alpha1.OpenClawInstanceList{}
+	if err := r.List(ctx, instanceList, client.InNamespace(cm.Namespace)); err != nil {
+		log.FromContext(ctx).Error(err, "Failed to list OpenClawInstances for ConfigMap watch")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for i := range instanceList.Items {
+		instance := &instanceList.Items[i]
+		matched := false
+		// Check spec.config.configMapRef
+		if instance.Spec.Config.ConfigMapRef != nil && instance.Spec.Config.ConfigMapRef.Name == cm.Name {
+			matched = true
+		}
+		// Check spec.workspace.configMapRef
+		if !matched && instance.Spec.Workspace != nil &&
+			instance.Spec.Workspace.ConfigMapRef != nil &&
+			instance.Spec.Workspace.ConfigMapRef.Name == cm.Name {
+			matched = true
+		}
+		// Check spec.workspace.additionalWorkspaces[].configMapRef
+		if !matched && instance.Spec.Workspace != nil {
+			for i := range instance.Spec.Workspace.AdditionalWorkspaces {
+				if instance.Spec.Workspace.AdditionalWorkspaces[i].ConfigMapRef != nil &&
+					instance.Spec.Workspace.AdditionalWorkspaces[i].ConfigMapRef.Name == cm.Name {
+					matched = true
+					break
+				}
+			}
+		}
+		if matched {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      instance.Name,
+					Namespace: instance.Namespace,
+				},
+			})
+		}
+	}
+	return requests
 }
