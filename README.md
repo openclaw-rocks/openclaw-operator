@@ -63,6 +63,8 @@ spec:
 
 Every request is validated against the instance's allowlist policy. Protected config keys cannot be overwritten, and denied requests are logged with a reason. See [Self-configure](#self-configure) for details.
 
+> **Note:** Without `selfConfigure` enabled, config or skill changes made by the agent inside the container won't trigger a pod restart. You'll need to restart the pod manually (e.g. `kubectl delete pod <pod-name>`) for changes to take effect.
+
 ## Features
 
 | | Feature | Details |
