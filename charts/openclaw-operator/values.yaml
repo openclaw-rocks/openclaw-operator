@@ -97,6 +97,12 @@ metrics:
     scrapeTimeout: ""
     labels: {}
 
+# OTLP metrics export configuration
+otlp:
+  enabled: false
+  endpoint: ""  # e.g. "clickstack-otel-collector.observability-system.svc:4317"
+  insecure: true
+
 # Webhook configuration (optional)
 webhook:
   enabled: false

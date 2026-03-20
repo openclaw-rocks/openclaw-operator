@@ -30,12 +30,18 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	otelprom "go.opentelemetry.io/contrib/bridges/prometheus"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
+	otelmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/resource"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -62,6 +68,8 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var otlpEndpoint string
+	var otlpInsecure bool
 	var tlsOpts []func(*tls.Config)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable.")
@@ -69,6 +77,8 @@ func main() {
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false, "Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
 	flag.BoolVar(&secureMetrics, "metrics-secure", true, "If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false, "If set, HTTP/2 will be enabled for the metrics and webhook servers.")
+	flag.StringVar(&otlpEndpoint, "otlp-endpoint", "", "OTLP gRPC endpoint for metrics export (e.g. collector.observability.svc:4317). Also respects OTEL_EXPORTER_OTLP_ENDPOINT env var.")
+	flag.BoolVar(&otlpInsecure, "otlp-insecure", true, "If set, OTLP exporter connects without TLS.")
 
 	opts := zap.Options{
 		Development: true,
@@ -125,6 +135,27 @@ func main() {
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
+	}
+
+	// Set up OTLP metrics export if configured. The flag takes precedence
+	// over the environment variable.
+	if otlpEndpoint == "" {
+		otlpEndpoint = os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	}
+	if otlpEndpoint != "" {
+		shutdownOTLP, otlpErr := setupOTLPMetrics(otlpEndpoint, otlpInsecure)
+		if otlpErr != nil {
+			setupLog.Error(otlpErr, "unable to set up OTLP metrics exporter")
+			os.Exit(1)
+		}
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := shutdownOTLP(ctx); err != nil {
+				setupLog.Error(err, "error shutting down OTLP metrics exporter")
+			}
+		}()
+		setupLog.Info("OTLP metrics exporter configured", "endpoint", otlpEndpoint, "insecure", otlpInsecure)
 	}
 
 	operatorNamespace := os.Getenv("POD_NAMESPACE")
@@ -190,4 +221,49 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+// setupOTLPMetrics configures an OTLP gRPC metrics exporter that bridges all
+// Prometheus metrics registered with controller-runtime's default registry.
+// It returns a shutdown function that must be called on exit.
+func setupOTLPMetrics(endpoint string, insecure bool) (func(context.Context) error, error) {
+	ctx := context.Background()
+
+	opts := []otlpmetricgrpc.Option{
+		otlpmetricgrpc.WithEndpoint(endpoint),
+	}
+	if insecure {
+		opts = append(opts, otlpmetricgrpc.WithInsecure())
+	}
+
+	exporter, err := otlpmetricgrpc.New(ctx, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("creating OTLP metrics exporter: %w", err)
+	}
+
+	res, err := resource.New(ctx,
+		resource.WithAttributes(
+			semconv.ServiceName("openclaw-operator"),
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("creating OTel resource: %w", err)
+	}
+
+	// Bridge the controller-runtime Prometheus registry to OTel
+	bridge := otelprom.NewMetricProducer(
+		otelprom.WithGatherer(metrics.Registry),
+	)
+
+	provider := otelmetric.NewMeterProvider(
+		otelmetric.WithReader(
+			otelmetric.NewPeriodicReader(exporter,
+				otelmetric.WithInterval(30*time.Second),
+				otelmetric.WithProducer(bridge),
+			),
+		),
+		otelmetric.WithResource(res),
+	)
+
+	return provider.Shutdown, nil
 }
