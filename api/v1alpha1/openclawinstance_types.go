@@ -240,6 +240,19 @@ type RawConfig struct {
 // Files listed in InitialFiles are seeded once (only if they don't already
 // exist on the PVC), so agent modifications survive pod restarts.
 type WorkspaceSpec struct {
+	// ConfigMapRef references an external ConfigMap whose keys become workspace files.
+	// All keys in the referenced ConfigMap are included as workspace files.
+	// This is useful for GitOps workflows where workspace files (AGENT.md, SOUL.md, etc.)
+	// are managed as standalone files and bundled via Kustomize configMapGenerator or similar.
+	//
+	// Merge priority (highest wins):
+	// 1. Operator-injected files (ENVIRONMENT.md, BOOTSTRAP.md, SELFCONFIG.md, selfconfig.sh)
+	// 2. Inline initialFiles
+	// 3. External configMapRef entries
+	// 4. Skill pack files
+	// +optional
+	ConfigMapRef *ConfigMapNameSelector `json:"configMapRef,omitempty"`
+
 	// InitialFiles maps filenames to their content. Each file is written
 	// to the workspace directory only if it does not already exist.
 	// +kubebuilder:validation:MaxProperties=50
@@ -251,6 +264,47 @@ type WorkspaceSpec struct {
 	// +kubebuilder:validation:MaxItems=20
 	// +optional
 	InitialDirectories []string `json:"initialDirectories,omitempty"`
+
+	// AdditionalWorkspaces configures workspace files for secondary agents.
+	// Each entry seeds files to ~/.openclaw/workspace-<name>/, matching the
+	// workspace path configured in spec.config.raw.agents.list[].workspace.
+	// +kubebuilder:validation:MaxItems=10
+	// +optional
+	AdditionalWorkspaces []AdditionalWorkspace `json:"additionalWorkspaces,omitempty"`
+}
+
+// AdditionalWorkspace defines a named workspace for a secondary agent.
+// The operator seeds files to ~/.openclaw/workspace-<name>/.
+type AdditionalWorkspace struct {
+	// Name identifies this workspace. The operator seeds files to
+	// ~/.openclaw/workspace-<name>/. Must match the workspace path
+	// configured in spec.config.raw.agents.list[].workspace.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`
+	Name string `json:"name"`
+
+	// ConfigMapRef references an external ConfigMap whose keys become workspace files.
+	// +optional
+	ConfigMapRef *ConfigMapNameSelector `json:"configMapRef,omitempty"`
+
+	// InitialFiles maps filenames to their content (same as spec.workspace.initialFiles).
+	// +kubebuilder:validation:MaxProperties=50
+	// +optional
+	InitialFiles map[string]string `json:"initialFiles,omitempty"`
+
+	// InitialDirectories is a list of directories to create inside this workspace.
+	// +kubebuilder:validation:MaxItems=20
+	// +optional
+	InitialDirectories []string `json:"initialDirectories,omitempty"`
+}
+
+// ConfigMapNameSelector references a ConfigMap by name.
+// Unlike ConfigMapKeySelector, all keys in the ConfigMap are used.
+type ConfigMapNameSelector struct {
+	// Name is the name of the ConfigMap to reference.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
 }
 
 // ResourcesSpec defines compute resource requirements
@@ -1524,6 +1578,10 @@ const (
 
 	// ConditionTypeSkillPacksReady indicates skill packs were resolved successfully
 	ConditionTypeSkillPacksReady = "SkillPacksReady"
+
+	// ConditionTypeWorkspaceReady indicates the workspace configuration is valid
+	// and any external ConfigMap referenced by spec.workspace.configMapRef exists
+	ConditionTypeWorkspaceReady = "WorkspaceReady"
 )
 
 // Phase constants
