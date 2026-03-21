@@ -502,7 +502,7 @@ spec:
 spec:
   workspace:
     configMapRef:
-      name: agent-alpha-workspace   # all keys become workspace files
+      name: my-workspace-files      # all keys become workspace files
     initialFiles:                    # inline files (override configMapRef)
       EXTRA.md: "additional content"
 ```
@@ -513,18 +513,30 @@ All keys in the referenced ConfigMap are written as files into the workspace dir
 
 The operator sets a `WorkspaceReady` status condition to `False` when the referenced ConfigMap is missing or contains invalid filenames, and `True` once workspace files are seeded successfully. The controller watches external ConfigMaps for changes and re-reconciles automatically.
 
+**How it works:** Workspace files are seeded once via an init container. The init container copies files from a read-only ConfigMap volume to the PVC. The main container only sees the PVC (writable), so agents can modify their workspace files and changes persist across pod restarts. ConfigMaps are never mounted directly on the main container.
+
 **GitOps example with Kustomize:**
 
 ```yaml
 # kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: my-namespace              # must match the instance namespace
+
+generatorOptions:
+  disableNameSuffixHash: true        # required - operator looks up by exact name
+
 configMapGenerator:
-  - name: agent-alpha-workspace
+  - name: my-workspace-files
     files:
-      - SOUL.md
-      - AGENT.md
+      - workspace/SOUL.md
+      - workspace/AGENT.md
 ```
 
-> **Note:** When using Kustomize `configMapGenerator`, disable the default name suffix hashing (`generatorOptions: { disableNameSuffixHash: true }`) or use the generated name in `configMapRef.name`, since the operator looks up the ConfigMap by exact name.
+> **Important:** Two kustomize settings are required when using `configMapGenerator` with `configMapRef`:
+> - **`disableNameSuffixHash: true`** -- The operator looks up ConfigMaps by exact name. Kustomize's default hash suffix (e.g. `-57k7g4dthc`) would cause a `ConfigMapNotFound` error.
+> - **`namespace`** -- Generated ConfigMaps must be in the same namespace as the instance. Without this, kustomize creates them in the `default` namespace.
 
 **Additional workspaces (multi-agent):**
 
@@ -533,28 +545,62 @@ When running multiple agents with isolated workspaces, use `additionalWorkspaces
 ```yaml
 spec:
   workspace:
-    initialFiles:
-      SOUL.md: "I am the default agent"
+    configMapRef:
+      name: main-agent-workspace
     additionalWorkspaces:
-      - name: work
+      - name: scheduler
         configMapRef:
-          name: work-agent-files
+          name: scheduler-workspace
         initialFiles:
-          SOUL.md: "I am the work agent"
+          SOUL.md: "I am the scheduler agent"
         initialDirectories:
           - tools
   config:
     raw:
       agents:
         list:
-          - id: home
-            default: true
-            workspace: "~/.openclaw/workspace"
-          - id: work
-            workspace: "~/.openclaw/workspace-work"
+          - id: main
+            name: "Main Agent"
+          - id: scheduler
+            name: "Scheduler Agent"
+      bindings:
+        - agentId: scheduler
+          match:
+            channel: discord
+            peer:
+              kind: channel
+              id: "123456789"        # bind to a specific channel
 ```
 
 Each additional workspace supports the same `configMapRef`, `initialFiles`, and `initialDirectories` as the default workspace. Operator-injected `ENVIRONMENT.md` is included; `BOOTSTRAP.md` is not (only the default agent runs onboarding). Max 10 additional workspaces.
+
+> **Seed-once behavior:** Workspace files (both default and additional) are only written on first boot when they don't already exist on the PVC. If an agent modifies its own SOUL.md or AGENT.md at runtime, those changes persist across pod restarts and are never overwritten by the ConfigMap content. To re-seed a file, delete it from the PVC first.
+
+**Full GitOps example with multiple agents:**
+
+```yaml
+# kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: my-namespace
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+resources:
+  - instance.yaml
+
+configMapGenerator:
+  - name: main-agent-workspace
+    files:
+      - agents/main/SOUL.md
+      - agents/main/AGENT.md
+  - name: scheduler-workspace
+    files:
+      - agents/scheduler/SOUL.md
+      - agents/scheduler/TOOLS.md
+```
 
 ### Self-configure
 

@@ -100,6 +100,10 @@ Configures initial workspace files seeded into the instance. Files are copied on
 
 The controller watches the referenced ConfigMap for changes and re-reconciles automatically. If the ConfigMap is missing or contains invalid filenames, the `WorkspaceReady` status condition is set to `False`.
 
+**How seeding works:** The operator merges all workspace file sources into a single operator-managed ConfigMap, which is mounted read-only on the init container. The init container copies files to the PVC (writable) using seed-once semantics (`[ -f target ] || cp source target`). The main container only mounts the PVC -- ConfigMaps are never mounted directly on the main container, so agents can freely modify their workspace files.
+
+**Seed-once, never overwrite:** Files are only written when they don't already exist on the PVC. If an agent modifies its workspace files at runtime (e.g. updating SOUL.md via the self-improvement skill), those changes persist across pod restarts. Updating the ConfigMap or `initialFiles` only affects new instances or files that have been manually deleted from the PVC.
+
 #### spec.workspace.additionalWorkspaces[]
 
 Each entry configures a named workspace for a secondary agent. The operator seeds files to `~/.openclaw/workspace-<name>/`.
@@ -113,11 +117,13 @@ Each entry configures a named workspace for a secondary agent. The operator seed
 
 Per-workspace merge priority (highest wins): operator-injected `ENVIRONMENT.md` > inline `initialFiles` > external `configMapRef`. Note: `BOOTSTRAP.md`, self-configure files, and skill packs are only injected into the default workspace.
 
+The agent workspace path in `spec.config.raw.agents.list[].workspace` must match the convention `~/.openclaw/workspace-<name>` where `<name>` is the `additionalWorkspaces[].name` value.
+
 ```yaml
 spec:
   workspace:
     configMapRef:
-      name: agent-alpha-workspace   # all keys become workspace files
+      name: my-workspace-files      # all keys become workspace files
     initialDirectories:
       - tools/scripts
       - data
@@ -125,21 +131,51 @@ spec:
       README.md: |
         # My Workspace
         This workspace is managed by OpenClaw.
-      tools/scripts/setup.sh: |
-        #!/bin/bash
-        echo "Hello from setup"
+    additionalWorkspaces:
+      - name: scheduler
+        configMapRef:
+          name: scheduler-workspace
+        initialFiles:
+          SOUL.md: "I am the scheduler"
+  config:
+    raw:
+      agents:
+        list:
+          - id: main
+          - id: scheduler
+            workspace: "~/.openclaw/workspace-scheduler"
 ```
 
 **GitOps example with Kustomize:**
 
+When using Kustomize `configMapGenerator` with `configMapRef`, two settings are required:
+
 ```yaml
 # kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: my-namespace                # ConfigMaps must be in the same namespace as the instance
+
+generatorOptions:
+  disableNameSuffixHash: true          # operator looks up ConfigMaps by exact name
+
+resources:
+  - instance.yaml
+
 configMapGenerator:
-  - name: agent-alpha-workspace
+  - name: my-workspace-files           # default agent workspace
     files:
-      - SOUL.md
-      - AGENT.md
+      - agents/main/SOUL.md
+      - agents/main/AGENT.md
+  - name: scheduler-workspace          # additional agent workspace
+    files:
+      - agents/scheduler/SOUL.md
+      - agents/scheduler/TOOLS.md
 ```
+
+- **`disableNameSuffixHash: true`** -- Required. Without this, kustomize appends a content hash to ConfigMap names (e.g. `my-workspace-files-57k7g4dthc`), causing the operator to fail with `ConfigMapNotFound`. The operator handles rollout detection via its own config hash annotation, so the kustomize hash is unnecessary.
+- **`namespace`** -- Required. Generated ConfigMaps must be in the same namespace as the instance. Without this, kustomize creates them in the `default` namespace.
 
 ### spec.skills
 
