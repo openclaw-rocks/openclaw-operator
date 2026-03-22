@@ -96,10 +96,10 @@ jobs:
           ### Update to openclaw-operator
 
           **Version:** ${VERSION}
-          **Operator:** [OpenClaw Kubernetes Operator](https://github.com/openclaw-rocks/k8s-operator)
+          **Operator:** [OpenClaw Kubernetes Operator](https://github.com/openclaw-rocks/openclaw-operator)
 
           #### Changes
-          See [release notes](https://github.com/openclaw-rocks/k8s-operator/releases/tag/v${VERSION}).
+          See [release notes](https://github.com/openclaw-rocks/openclaw-operator/releases/tag/v${VERSION}).
 
           #### Testing
           - CI tests pass on the source repository

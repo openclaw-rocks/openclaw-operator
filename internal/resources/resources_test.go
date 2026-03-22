@@ -32,7 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1alpha1 "github.com/openclawrocks/openclaw-operator/api/v1alpha1"
 )
 
 // newTestInstance creates a minimal OpenClawInstance for testing.
@@ -455,13 +455,13 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 		t.Errorf("chromium RestartPolicy = %v, want Always (native sidecar)", chromium.RestartPolicy)
 	}
 
-	// Main container should have OPENCLAW_CHROMIUM_CDP using CDP service DNS name
+	// Main container should have OPENCLAW_CHROMIUM_CDP using localhost (sidecar shares pod network)
 	mainContainer := containers[0]
 	foundChromiumCDP := false
 	for _, env := range mainContainer.Env {
 		if env.Name == "OPENCLAW_CHROMIUM_CDP" {
 			foundChromiumCDP = true
-			expected := fmt.Sprintf("http://%s-cdp.%s.svc:%d", instance.Name, instance.Namespace, ChromiumPort)
+			expected := fmt.Sprintf("http://127.0.0.1:%d", ChromiumPort)
 			if env.Value != expected {
 				t.Errorf("OPENCLAW_CHROMIUM_CDP = %q, want %q", env.Value, expected)
 			}
@@ -8157,9 +8157,9 @@ func TestBuildConfigMap_ChromiumBrowserConfig(t *testing.T) {
 		t.Fatal("expected browser.profiles key")
 	}
 
-	// Both "default" and "chrome" profiles must use the resolved CDP Service
-	// DNS URL (not an env var reference).
-	expectedCDP := fmt.Sprintf("http://%s-cdp.test-ns.svc:%d", instance.Name, ChromiumPort)
+	// Both "default" and "chrome" profiles must use the env var reference
+	// which resolves to the Chromium sidecar's localhost address at runtime.
+	expectedCDP := "${OPENCLAW_CHROMIUM_CDP}"
 	for _, name := range []string{"default", "chrome"} {
 		p, ok := profiles[name].(map[string]interface{})
 		if !ok {

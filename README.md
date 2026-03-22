@@ -5,8 +5,8 @@
 # OpenClaw Kubernetes Operator
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Go Report Card](https://goreportcard.com/badge/github.com/OpenClaw-rocks/k8s-operator)](https://goreportcard.com/report/github.com/OpenClaw-rocks/k8s-operator)
-[![CI](https://github.com/OpenClaw-rocks/k8s-operator/actions/workflows/ci.yaml/badge.svg)](https://github.com/OpenClaw-rocks/k8s-operator/actions/workflows/ci.yaml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/OpenClaw-rocks/openclaw-operator)](https://goreportcard.com/report/github.com/OpenClaw-rocks/openclaw-operator)
+[![CI](https://github.com/OpenClaw-rocks/openclaw-operator/actions/workflows/ci.yaml/badge.svg)](https://github.com/OpenClaw-rocks/openclaw-operator/actions/workflows/ci.yaml)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-1.28%2B-326CE5?logo=kubernetes&logoColor=white)](https://kubernetes.io)
 [![Go](https://img.shields.io/badge/Go-1.24-00ADD8?logo=go&logoColor=white)](https://go.dev)
 
@@ -62,6 +62,8 @@ spec:
 ```
 
 Every request is validated against the instance's allowlist policy. Protected config keys cannot be overwritten, and denied requests are logged with a reason. See [Self-configure](#self-configure) for details.
+
+> **Note:** Without `selfConfigure` enabled, config or skill changes made by the agent inside the container won't trigger a pod restart. You'll need to restart the pod manually (e.g. `kubectl delete pod <pod-name>`) for changes to take effect.
 
 ## Features
 
@@ -966,8 +968,8 @@ Platform-specific deployment guides are available for:
 
 ```bash
 # Clone and set up
-git clone https://github.com/OpenClaw-rocks/k8s-operator.git
-cd k8s-operator
+git clone https://github.com/OpenClaw-rocks/openclaw-operator.git
+cd openclaw-operator
 go mod download
 
 # Generate code and manifests

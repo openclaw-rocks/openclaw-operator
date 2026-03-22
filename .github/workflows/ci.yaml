@@ -39,7 +39,7 @@ jobs:
           # Detect bare r.Update/r.Create calls in the controller that bypass
           # controllerutil.CreateOrUpdate. Only r.Update(ctx, instance) and
           # r.Status().Update(ctx, instance) are allowed (CR-level updates).
-          # See: https://github.com/openclaw-rocks/k8s-operator/issues/28
+          # See: https://github.com/openclaw-rocks/openclaw-operator/issues/28
           VIOLATIONS=$(grep -n 'r\.Update(ctx,' internal/controller/openclawinstance_controller.go \
             | grep -v 'instance)' \
             | grep -v '// reconcile-guard:allow' || true)
@@ -189,6 +189,13 @@ jobs:
         run: |
           kind load docker-image ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}:e2e --name e2e-test
 
+      - name: Pre-pull test images
+        run: |
+          docker pull chromedp/headless-shell:stable
+          kind load docker-image chromedp/headless-shell:stable --name e2e-test
+          docker pull curlimages/curl
+          kind load docker-image curlimages/curl --name e2e-test
+
       - name: Install CRDs
         run: make install
 
@@ -214,6 +221,8 @@ jobs:
 
       - name: Run E2E tests
         run: make test-e2e
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 
       - name: Install operator-sdk
         run: |

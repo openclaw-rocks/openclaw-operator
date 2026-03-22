@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openclawrocks/k8s-operator/internal/resources"
+	"github.com/openclawrocks/openclaw-operator/internal/resources"
 )
 
 // ghFile returns a GitHub Contents API JSON response for a file.

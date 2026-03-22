@@ -1,9 +1,10 @@
-module github.com/openclawrocks/k8s-operator
+module github.com/openclawrocks/openclaw-operator
 
 go 1.24.0
 
 require (
 	github.com/Masterminds/semver/v3 v3.4.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/onsi/ginkgo/v2 v2.28.1
 	github.com/onsi/gomega v1.39.1
 	github.com/prometheus/client_golang v1.19.1

@@ -42,8 +42,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
-	"github.com/openclawrocks/k8s-operator/internal/resources"
+	openclawv1alpha1 "github.com/openclawrocks/openclaw-operator/api/v1alpha1"
+	"github.com/openclawrocks/openclaw-operator/internal/resources"
 )
 
 var (
@@ -1528,16 +1528,15 @@ var _ = Describe("OpenClawInstance Controller", func() {
 					"chromium-proxy should not exist - Chrome runs via run.sh")
 			}
 
-			// Verify main container has OPENCLAW_CHROMIUM_CDP using service DNS name
+			// Verify main container has OPENCLAW_CHROMIUM_CDP using localhost
 			mainContainer := statefulSet.Spec.Template.Spec.Containers[0]
 			var foundChromiumCDP bool
-			expectedCDP := fmt.Sprintf("http://%s.%s.svc:%d",
-				resources.ChromiumCDPServiceName(instance), instance.Namespace, resources.ChromiumPort)
+			expectedCDP := fmt.Sprintf("http://127.0.0.1:%d", resources.ChromiumPort)
 			for _, env := range mainContainer.Env {
 				if env.Name == "OPENCLAW_CHROMIUM_CDP" {
 					foundChromiumCDP = true
 					Expect(env.Value).To(Equal(expectedCDP),
-						"OPENCLAW_CHROMIUM_CDP should use service DNS name")
+						"OPENCLAW_CHROMIUM_CDP should use localhost (sidecar shares pod network)")
 				}
 			}
 			Expect(foundChromiumCDP).To(BeTrue(), "OPENCLAW_CHROMIUM_CDP env var should be set")
@@ -1563,13 +1562,12 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			profiles, ok := browser["profiles"].(map[string]interface{})
 			Expect(ok).To(BeTrue(), "browser should have profiles key")
 
-			expectedCDPURL := fmt.Sprintf("http://%s.%s.svc:%d",
-				resources.ChromiumCDPServiceName(instance), namespace, resources.ChromiumPort)
+			expectedCDPURL := "${OPENCLAW_CHROMIUM_CDP}"
 			for _, profileName := range []string{"default", "chrome"} {
 				profile, ok := profiles[profileName].(map[string]interface{})
 				Expect(ok).To(BeTrue(), "profiles should have %s key", profileName)
 				Expect(profile["cdpUrl"]).To(Equal(expectedCDPURL),
-					"browser.profiles.%s.cdpUrl should use resolved CDP Service DNS", profileName)
+					"browser.profiles.%s.cdpUrl should use env var reference", profileName)
 			}
 
 			// Verify Service has chromium port

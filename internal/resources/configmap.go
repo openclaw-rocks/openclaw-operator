@@ -24,7 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1alpha1 "github.com/openclawrocks/openclaw-operator/api/v1alpha1"
 )
 
 // BuildConfigMap creates a ConfigMap for the OpenClawInstance configuration.
@@ -75,7 +75,7 @@ func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseCo
 		}
 	}
 	if instance.Spec.Chromium.Enabled {
-		if enriched, err := enrichConfigWithBrowser(configBytes, instance); err == nil {
+		if enriched, err := enrichConfigWithBrowser(configBytes); err == nil {
 			configBytes = enriched
 		}
 	}
@@ -359,7 +359,7 @@ func BuildTailscaleServeConfig(instance *openclawv1alpha1.OpenClawInstance) stri
 // Without this override the built-in "chrome" profile falls back to the
 // extension relay which does not work in a headless container.
 // Does not override user-set values.
-func enrichConfigWithBrowser(configJSON []byte, instance *openclawv1alpha1.OpenClawInstance) ([]byte, error) {
+func enrichConfigWithBrowser(configJSON []byte) ([]byte, error) {
 	var config map[string]interface{}
 	if err := json.Unmarshal(configJSON, &config); err != nil {
 		return configJSON, nil // not a JSON object, return unchanged
@@ -395,11 +395,12 @@ func enrichConfigWithBrowser(configJSON []byte, instance *openclawv1alpha1.OpenC
 		profiles = make(map[string]interface{})
 	}
 
-	// Build the resolved CDP URL at config generation time using the headless
-	// CDP Service DNS name. Previous versions used ${OPENCLAW_CHROMIUM_CDP}
-	// env var interpolation, but this proved unreliable across OpenClaw versions.
-	cdpURL := fmt.Sprintf("http://%s.%s.svc:%d",
-		ChromiumCDPServiceName(instance), instance.Namespace, ChromiumPort)
+	// Use ${OPENCLAW_CHROMIUM_CDP} env var (resolved at runtime by OpenClaw)
+	// which points to the Chromium sidecar via localhost (127.0.0.1:9222).
+	// Using a localhost address is required because OpenClaw's browser control
+	// service treats non-localhost CDP URLs as remote browsers that require
+	// device pairing, which is not available in a headless container.
+	cdpURL := "${OPENCLAW_CHROMIUM_CDP}"
 
 	// Configure both "default" and "chrome" profiles to point at the sidecar.
 	// LLMs often explicitly pass profile="chrome", so we redirect it to the

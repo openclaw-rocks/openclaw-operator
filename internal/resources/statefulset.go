@@ -31,7 +31,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1alpha1 "github.com/openclawrocks/openclaw-operator/api/v1alpha1"
 )
 
 // BuildStatefulSet creates a StatefulSet for the OpenClawInstance.
@@ -432,12 +432,13 @@ func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecre
 		// The headless CDP Service has publishNotReadyAddresses=true so the
 		// endpoint resolves before the pod is fully Ready, avoiding a race
 		// where OpenClaw checks CDP during startup before the main Service
-		// has endpoints.
-		cdpSvcDNS := fmt.Sprintf("%s.%s.svc", ChromiumCDPServiceName(instance), instance.Namespace)
+		// has endpoints. Use localhost because the chromium sidecar shares the
+		// pod network. Non-localhost addresses trigger OpenClaw's remote browser
+		// pairing flow which requires device identity.
 		env = append(env,
 			corev1.EnvVar{
 				Name:  "OPENCLAW_CHROMIUM_CDP",
-				Value: fmt.Sprintf("http://%s:%d", cdpSvcDNS, ChromiumPort),
+				Value: fmt.Sprintf("http://127.0.0.1:%d", ChromiumPort),
 			},
 		)
 	}

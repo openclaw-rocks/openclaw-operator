@@ -4,8 +4,8 @@ description: >-
   A Kubernetes operator for deploying and managing OpenClaw AI assistant
   instances
 type: application
-version: 0.22.1
-appVersion: 0.22.1
+version: 0.22.2
+appVersion: 0.22.2
 keywords:
   - kubernetes
   - operator
@@ -18,7 +18,7 @@ keywords:
 home: https://openclaw.rocks
 icon: https://openclaw.rocks/favicon.svg
 sources:
-  - https://github.com/OpenClaw-rocks/k8s-operator
+  - https://github.com/OpenClaw-rocks/openclaw-operator
 maintainers:
   - name: Jannes Stubbemann
     email: jannes@openclaw.rocks
@@ -40,7 +40,7 @@ annotations:
     - name: Artifact Hub
       url: https://artifacthub.io/packages/olm/community-operators/openclaw-operator
     - name: support
-      url: https://github.com/OpenClaw-rocks/k8s-operator/issues
+      url: https://github.com/OpenClaw-rocks/openclaw-operator/issues
   artifacthub.io/crds: |
     - kind: OpenClawInstance
       version: v1alpha1
