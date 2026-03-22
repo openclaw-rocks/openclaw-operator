@@ -9501,7 +9501,7 @@ spec:
                             configured in spec.config.raw.agents.list[].workspace.
                           maxLength: 63
                           minLength: 1
-                          pattern: ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$
+                          pattern: ^[a-z0-9]+(-[a-z0-9]+)*$
                           type: string
                       required:
                       - name

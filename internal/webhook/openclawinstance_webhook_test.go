@@ -1680,6 +1680,24 @@ func TestValidateCreate_AdditionalWorkspaceEmptyName(t *testing.T) {
 	}
 }
 
+func TestValidateCreate_AdditionalWorkspaceConsecutiveHyphens(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+		AdditionalWorkspaces: []openclawv1alpha1.AdditionalWorkspace{
+			{Name: "my--agent"},
+		},
+	}
+
+	_, err := v.ValidateCreate(context.Background(), instance)
+	if err == nil {
+		t.Fatal("expected error for consecutive hyphens in additional workspace name")
+	}
+	if !strings.Contains(err.Error(), "no consecutive hyphens") {
+		t.Errorf("expected consecutive hyphens error, got: %v", err)
+	}
+}
+
 func TestValidateCreate_AdditionalWorkspaceInvalidFilename(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()

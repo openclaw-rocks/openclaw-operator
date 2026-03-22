@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -36,6 +37,11 @@ import (
 
 const imageTagLatest = "latest"
 const configFormatJSON5 = "json5"
+
+// workspaceNameRegex matches the kubebuilder validation pattern for workspace names.
+// Requires lowercase alphanumeric, optionally followed by hyphen-separated segments.
+// Disallows consecutive hyphens to prevent ambiguous key parsing.
+var workspaceNameRegex = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
 // knownProviderEnvVars lists environment variable names for known AI provider API keys.
 var knownProviderEnvVars = map[string]bool{
@@ -308,6 +314,9 @@ func validateWorkspaceSpec(ws *openclawv1alpha1.WorkspaceSpec) error {
 	for i, aw := range ws.AdditionalWorkspaces {
 		if aw.Name == "" {
 			return fmt.Errorf("additionalWorkspaces[%d].name must not be empty", i)
+		}
+		if !workspaceNameRegex.MatchString(aw.Name) {
+			return fmt.Errorf("additionalWorkspaces[%d].name %q must match %s (lowercase alphanumeric, no consecutive hyphens)", i, aw.Name, workspaceNameRegex.String())
 		}
 		if seen[aw.Name] {
 			return fmt.Errorf("additionalWorkspaces[%d].name %q is duplicated", i, aw.Name)

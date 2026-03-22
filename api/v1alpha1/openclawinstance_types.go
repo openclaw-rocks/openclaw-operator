@@ -281,7 +281,7 @@ type AdditionalWorkspace struct {
 	// configured in spec.config.raw.agents.list[].workspace.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
-	// +kubebuilder:validation:Pattern=`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]+(-[a-z0-9]+)*$`
 	Name string `json:"name"`
 
 	// ConfigMapRef references an external ConfigMap whose keys become workspace files.
