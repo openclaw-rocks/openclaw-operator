@@ -11123,6 +11123,25 @@ func TestNormalizeStatefulSet_NoSpuriousDiff(t *testing.T) {
 	}
 }
 
+func TestNormalizeStatefulSet_UpdateStrategyRollingUpdate(t *testing.T) {
+	// Regression test: K8s API server defaults UpdateStrategy.RollingUpdate to &{}
+	// when Type == RollingUpdate and RollingUpdate == nil. Without normalizing this,
+	// CreateOrUpdate detects a diff on every reconcile (nil vs &{}), issues an
+	// unnecessary Update, and triggers a continuous reconcile loop via the StatefulSet watch.
+	instance := newTestInstance("norm-update-strategy")
+	sts := BuildStatefulSet(instance, "", nil)
+
+	if sts.Spec.UpdateStrategy.Type != appsv1.RollingUpdateStatefulSetStrategyType {
+		t.Fatal("expected RollingUpdate strategy type from builder")
+	}
+
+	NormalizeStatefulSet(sts)
+
+	if sts.Spec.UpdateStrategy.RollingUpdate == nil {
+		t.Error("NormalizeStatefulSet should set UpdateStrategy.RollingUpdate to &{} to match K8s API server defaulting")
+	}
+}
+
 func TestNormalizeStatefulSet_ProbeDefaults(t *testing.T) {
 	instance := newTestInstance("norm-probe")
 	sts := BuildStatefulSet(instance, "", nil)

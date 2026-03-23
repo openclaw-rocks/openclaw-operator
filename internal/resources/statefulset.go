@@ -2388,6 +2388,15 @@ func NormalizeStatefulSet(sts *appsv1.StatefulSet) {
 		normalizeContainer(&spec.Containers[i])
 	}
 
+	// K8s defaults UpdateStrategy.RollingUpdate to &{} when Type == RollingUpdate.
+	// Without this, CreateOrUpdate sees nil vs &{} on every reconcile, issues an
+	// unnecessary Update, increments the StatefulSet resourceVersion, fires a watch
+	// event, and causes a continuous reconcile loop.
+	// Mirrors: k8s.io/kubernetes/pkg/apis/apps/v1/defaults.go SetDefaults_StatefulSetSpec
+	if sts.Spec.UpdateStrategy.Type == appsv1.RollingUpdateStatefulSetStrategyType && sts.Spec.UpdateStrategy.RollingUpdate == nil {
+		sts.Spec.UpdateStrategy.RollingUpdate = &appsv1.RollingUpdateStatefulSetStrategy{}
+	}
+
 	// K8s defaults VolumeMode to Filesystem on VolumeClaimTemplates
 	filesystemMode := corev1.PersistentVolumeFilesystem
 	for i := range sts.Spec.VolumeClaimTemplates {
