@@ -11263,7 +11263,7 @@ func TestNormalizeStatefulSet_UpdateStrategyRollingUpdate(t *testing.T) {
 	// CreateOrUpdate detects a diff on every reconcile (nil vs &{}), issues an
 	// unnecessary Update, and triggers a continuous reconcile loop via the StatefulSet watch.
 	instance := newTestInstance("norm-update-strategy")
-	sts := BuildStatefulSet(instance, "", nil)
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
 	if sts.Spec.UpdateStrategy.Type != appsv1.RollingUpdateStatefulSetStrategyType {
 		t.Fatal("expected RollingUpdate strategy type from builder")
