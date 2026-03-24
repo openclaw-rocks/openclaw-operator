@@ -823,7 +823,16 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 		}
 	})
 
-	It("Should take a screenshot of openclaw.rocks via the agent pipeline", FlakeAttempts(3), func() {
+	// Skip: This test depends on an external LLM (OpenRouter/DeepSeek) choosing
+	// to invoke the browser tool correctly AND device pairing resolving before the
+	// LLM commits to a response path. Both are non-deterministic and cannot be made
+	// reliable in CI. The Tier 1 and Tier 2 CDP tests already validate the browser
+	// pipeline (CDP connectivity + screenshot via direct WebSocket commands).
+	// Run manually with: E2E_RUN_LLM_INTEGRATION=true go test ./test/e2e/... -run "agent pipeline"
+	It("Should take a screenshot of openclaw.rocks via the agent pipeline", func() {
+		if os.Getenv("E2E_RUN_LLM_INTEGRATION") != "true" {
+			Skip("Skipping LLM integration test (set E2E_RUN_LLM_INTEGRATION=true to run)")
+		}
 		By("Reading the gateway token from the auto-generated Secret")
 		tokenSecret := &corev1.Secret{}
 		secretName := resources.GatewayTokenSecretName(&openclawv1alpha1.OpenClawInstance{
@@ -912,90 +921,6 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 		sessionKey := gwPayload.Snapshot.SessionDefaults.MainSessionKey
 		Expect(sessionKey).NotTo(BeEmpty(), "connect response should contain mainSessionKey")
 		GinkgoWriter.Printf("Session key: %s\n", sessionKey)
-
-		By("Resetting session to clear stale conversation state from prior attempts")
-		resetID := randomHex()
-		resetReq := map[string]interface{}{
-			"type":   "req",
-			"id":     resetID,
-			"method": "sessions.reset",
-			"params": map[string]interface{}{
-				"sessionKey": sessionKey,
-			},
-		}
-		Expect(ws.WriteJSON(resetReq)).To(Succeed())
-		Expect(ws.SetReadDeadline(time.Now().Add(10 * time.Second))).To(Succeed())
-		_, resetRaw, err := ws.ReadMessage()
-		Expect(err).NotTo(HaveOccurred())
-		GinkgoWriter.Printf("Session reset response: %s\n", string(resetRaw))
-
-		By("Sending warm-up message to trigger device pairing before screenshot request")
-		warmupID := randomHex()
-		warmupReq := map[string]interface{}{
-			"type":   "req",
-			"id":     warmupID,
-			"method": "chat.send",
-			"params": map[string]interface{}{
-				"message":        "Say OK",
-				"sessionKey":     sessionKey,
-				"idempotencyKey": randomHex(),
-			},
-		}
-		Expect(ws.WriteJSON(warmupReq)).To(Succeed())
-		GinkgoWriter.Println("Warm-up message sent, waiting for device pairing and completion...")
-
-		// Read events until warm-up chat completes, auto-approving any pairing requests.
-		// This ensures the internal agent process is paired before the real request.
-		warmupDone := false
-		warmupTimeout := time.After(90 * time.Second)
-		for !warmupDone {
-			Expect(ws.SetReadDeadline(time.Now().Add(90 * time.Second))).To(Succeed())
-			_, data, rErr := ws.ReadMessage()
-			if rErr != nil {
-				GinkgoWriter.Printf("Warm-up read error: %v\n", rErr)
-				break
-			}
-			var msg gwMessage
-			if json.Unmarshal(data, &msg) != nil {
-				continue
-			}
-			switch {
-			case msg.Type == "event" && msg.Event == "device.pair.requested":
-				var pp map[string]interface{}
-				if json.Unmarshal(msg.Payload, &pp) == nil {
-					if rid, ok := pp["requestId"].(string); ok {
-						GinkgoWriter.Printf("Warm-up: auto-approving device pair: %s\n", rid)
-						_ = ws.WriteJSON(map[string]interface{}{
-							"type": "req", "id": randomHex(),
-							"method": "device.pair.approve",
-							"params": map[string]interface{}{"requestId": rid},
-						})
-					}
-				}
-			case msg.Type == "event" && msg.Event == "chat":
-				var cp gwChatPayload
-				if json.Unmarshal(msg.Payload, &cp) == nil && cp.State == "final" {
-					warmupDone = true
-					GinkgoWriter.Println("Warm-up completed")
-				}
-			}
-			select {
-			case <-warmupTimeout:
-				GinkgoWriter.Println("Warm-up timed out")
-				warmupDone = true
-			default:
-			}
-		}
-
-		// Reset session again so the screenshot request starts with a clean slate
-		resetID2 := randomHex()
-		_ = ws.WriteJSON(map[string]interface{}{
-			"type": "req", "id": resetID2,
-			"method": "sessions.reset",
-			"params": map[string]interface{}{"sessionKey": sessionKey},
-		})
-		Expect(ws.SetReadDeadline(time.Now().Add(10 * time.Second))).To(Succeed())
-		_, _, _ = ws.ReadMessage() // consume reset response
 
 		By("Sending message to take a screenshot of openclaw.rocks")
 		sendID := randomHex()
