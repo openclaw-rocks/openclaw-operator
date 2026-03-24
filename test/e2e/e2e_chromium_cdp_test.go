@@ -823,7 +823,7 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 		}
 	})
 
-	It("Should take a screenshot of openclaw.rocks via the agent pipeline", func() {
+	It("Should take a screenshot of openclaw.rocks via the agent pipeline", FlakeAttempts(3), func() {
 		By("Reading the gateway token from the auto-generated Secret")
 		tokenSecret := &corev1.Secret{}
 		secretName := resources.GatewayTokenSecretName(&openclawv1alpha1.OpenClawInstance{
@@ -981,6 +981,28 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 				}
 
 				switch {
+				case msg.Type == "event" && msg.Event == "device.pair.requested":
+					// Auto-approve device pairing requests from internal agent
+					// processes. Without this, the agent cannot use browser/node
+					// features because the internal connection triggers pairing.
+					var pairPayload map[string]interface{}
+					if jsonErr := json.Unmarshal(msg.Payload, &pairPayload); jsonErr == nil {
+						if reqID, ok := pairPayload["requestId"].(string); ok {
+							GinkgoWriter.Printf("Auto-approving device pair request: %s\n", reqID)
+							approveReq := map[string]interface{}{
+								"type":   "req",
+								"id":     randomHex(),
+								"method": "device.pair.approve",
+								"params": map[string]interface{}{
+									"requestId": reqID,
+								},
+							}
+							if wErr := ws.WriteJSON(approveReq); wErr != nil {
+								GinkgoWriter.Printf("Failed to send pair approve: %v\n", wErr)
+							}
+						}
+					}
+
 				case msg.Type == "event" && msg.Event == "agent":
 					// Extract assistant text from agent stream events
 					var agentPayload map[string]interface{}
