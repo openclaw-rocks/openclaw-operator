@@ -9459,6 +9459,75 @@ spec:
                   Files are copied once on first boot and never overwritten, so agent
                   modifications survive pod restarts.
                 properties:
+                  additionalWorkspaces:
+                    description: |-
+                      AdditionalWorkspaces configures workspace files for secondary agents.
+                      Each entry seeds files to ~/.openclaw/workspace-<name>/, matching the
+                      workspace path configured in spec.config.raw.agents.list[].workspace.
+                    items:
+                      description: |-
+                        AdditionalWorkspace defines a named workspace for a secondary agent.
+                        The operator seeds files to ~/.openclaw/workspace-<name>/.
+                      properties:
+                        configMapRef:
+                          description: ConfigMapRef references an external ConfigMap
+                            whose keys become workspace files.
+                          properties:
+                            name:
+                              description: Name is the name of the ConfigMap to reference.
+                              minLength: 1
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        initialDirectories:
+                          description: InitialDirectories is a list of directories
+                            to create inside this workspace.
+                          items:
+                            type: string
+                          maxItems: 20
+                          type: array
+                        initialFiles:
+                          additionalProperties:
+                            type: string
+                          description: InitialFiles maps filenames to their content
+                            (same as spec.workspace.initialFiles).
+                          maxProperties: 50
+                          type: object
+                        name:
+                          description: |-
+                            Name identifies this workspace. The operator seeds files to
+                            ~/.openclaw/workspace-<name>/. Must match the workspace path
+                            configured in spec.config.raw.agents.list[].workspace.
+                          maxLength: 63
+                          minLength: 1
+                          pattern: ^[a-z0-9]+(-[a-z0-9]+)*$
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    maxItems: 10
+                    type: array
+                  configMapRef:
+                    description: |-
+                      ConfigMapRef references an external ConfigMap whose keys become workspace files.
+                      All keys in the referenced ConfigMap are included as workspace files.
+                      This is useful for GitOps workflows where workspace files (AGENT.md, SOUL.md, etc.)
+                      are managed as standalone files and bundled via Kustomize configMapGenerator or similar.
+
+                      Merge priority (highest wins):
+                      1. Operator-injected files (ENVIRONMENT.md, BOOTSTRAP.md, SELFCONFIG.md, selfconfig.sh)
+                      2. Inline initialFiles
+                      3. External configMapRef entries
+                      4. Skill pack files
+                    properties:
+                      name:
+                        description: Name is the name of the ConfigMap to reference.
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    type: object
                   initialDirectories:
                     description: |-
                       InitialDirectories is a list of directories to create (mkdir -p)

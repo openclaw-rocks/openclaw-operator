@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -31,10 +32,16 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	openclawv1alpha1 "github.com/openclawrocks/openclaw-operator/api/v1alpha1"
+	"github.com/openclawrocks/openclaw-operator/internal/resources"
 )
 
 const imageTagLatest = "latest"
 const configFormatJSON5 = "json5"
+
+// workspaceNameRegex matches the kubebuilder validation pattern for workspace names.
+// Requires lowercase alphanumeric, optionally followed by hyphen-separated segments.
+// Disallows consecutive hyphens to prevent ambiguous key parsing.
+var workspaceNameRegex = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
 // knownProviderEnvVars lists environment variable names for known AI provider API keys.
 var knownProviderEnvVars = map[string]bool{
@@ -286,16 +293,51 @@ func (v *OpenClawInstanceValidator) validate(instance *openclawv1alpha1.OpenClaw
 
 // validateWorkspaceSpec validates workspace file and directory names.
 func validateWorkspaceSpec(ws *openclawv1alpha1.WorkspaceSpec) error {
+	// Validate configMapRef
+	if ws.ConfigMapRef != nil && ws.ConfigMapRef.Name == "" {
+		return fmt.Errorf("workspace configMapRef.name must not be empty")
+	}
+
 	for name := range ws.InitialFiles {
-		if err := validateWorkspaceFilename(name); err != nil {
+		if err := resources.ValidateWorkspaceFilename(name); err != nil {
 			return fmt.Errorf("workspace initialFiles key %q: %w", name, err)
 		}
 	}
 	for _, dir := range ws.InitialDirectories {
-		if err := validateWorkspaceDirectory(dir); err != nil {
+		if err := resources.ValidateWorkspaceDirectory(dir); err != nil {
 			return fmt.Errorf("workspace initialDirectories entry %q: %w", dir, err)
 		}
 	}
+
+	// Validate additional workspaces
+	seen := make(map[string]bool, len(ws.AdditionalWorkspaces))
+	for i, aw := range ws.AdditionalWorkspaces {
+		if aw.Name == "" {
+			return fmt.Errorf("additionalWorkspaces[%d].name must not be empty", i)
+		}
+		if !workspaceNameRegex.MatchString(aw.Name) {
+			return fmt.Errorf("additionalWorkspaces[%d].name %q must match %s (lowercase alphanumeric, no consecutive hyphens)", i, aw.Name, workspaceNameRegex.String())
+		}
+		if seen[aw.Name] {
+			return fmt.Errorf("additionalWorkspaces[%d].name %q is duplicated", i, aw.Name)
+		}
+		seen[aw.Name] = true
+
+		if aw.ConfigMapRef != nil && aw.ConfigMapRef.Name == "" {
+			return fmt.Errorf("additionalWorkspaces[%d] %q configMapRef.name must not be empty", i, aw.Name)
+		}
+		for name := range aw.InitialFiles {
+			if err := resources.ValidateWorkspaceFilename(name); err != nil {
+				return fmt.Errorf("additionalWorkspaces[%d] %q initialFiles key %q: %w", i, aw.Name, name, err)
+			}
+		}
+		for _, dir := range aw.InitialDirectories {
+			if err := resources.ValidateWorkspaceDirectory(dir); err != nil {
+				return fmt.Errorf("additionalWorkspaces[%d] %q initialDirectories entry %q: %w", i, aw.Name, dir, err)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -405,51 +447,8 @@ func validateResourceQuantities(instance *openclawv1alpha1.OpenClawInstance) err
 	return nil
 }
 
-// validateWorkspaceFilename checks a single workspace filename.
-func validateWorkspaceFilename(name string) error {
-	if name == "" {
-		return fmt.Errorf("filename must not be empty")
-	}
-	if len(name) > 253 {
-		return fmt.Errorf("filename must be at most 253 characters")
-	}
-	if strings.Contains(name, "/") {
-		return fmt.Errorf("filename must not contain '/'")
-	}
-	if strings.Contains(name, "\\") {
-		return fmt.Errorf("filename must not contain '\\'")
-	}
-	if strings.Contains(name, "..") {
-		return fmt.Errorf("filename must not contain '..'")
-	}
-	if strings.HasPrefix(name, ".") {
-		return fmt.Errorf("filename must not start with '.'")
-	}
-	if name == "openclaw.json" {
-		return fmt.Errorf("filename 'openclaw.json' is reserved for config")
-	}
-	return nil
-}
-
-// validateWorkspaceDirectory checks a single workspace directory path.
-func validateWorkspaceDirectory(dir string) error {
-	if dir == "" {
-		return fmt.Errorf("directory must not be empty")
-	}
-	if len(dir) > 253 {
-		return fmt.Errorf("directory must be at most 253 characters")
-	}
-	if strings.Contains(dir, "\\") {
-		return fmt.Errorf("directory must not contain '\\'")
-	}
-	if strings.Contains(dir, "..") {
-		return fmt.Errorf("directory must not contain '..'")
-	}
-	if strings.HasPrefix(dir, "/") {
-		return fmt.Errorf("directory must not be an absolute path")
-	}
-	return nil
-}
+// validateWorkspaceFilename and validateWorkspaceDirectory are in
+// internal/resources/validation.go (exported for use by both webhook and controller).
 
 // validateSkillName checks a single skill identifier.
 // Entries may use the "npm:" prefix to install npm packages instead of ClawHub

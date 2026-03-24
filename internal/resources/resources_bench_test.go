@@ -136,7 +136,7 @@ func BenchmarkBuildStatefulSet_Minimal(b *testing.B) {
 	instance := newBenchInstance()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		BuildStatefulSet(instance, "", nil)
+		BuildStatefulSet(instance, "", nil, nil, nil)
 	}
 }
 
@@ -144,7 +144,7 @@ func BenchmarkBuildStatefulSet_FullyLoaded(b *testing.B) {
 	instance := newFullBenchInstance()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		BuildStatefulSet(instance, "", nil)
+		BuildStatefulSet(instance, "", nil, nil, nil)
 	}
 }
 

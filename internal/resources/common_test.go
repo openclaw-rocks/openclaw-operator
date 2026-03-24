@@ -202,7 +202,7 @@ func TestBuildStatefulSet_WithRegistry(t *testing.T) {
 	instance := newTestInstance("test")
 	instance.Spec.Registry = "my-registry.example.com"
 
-	sts := BuildStatefulSet(instance, "test-secret", nil)
+	sts := BuildStatefulSet(instance, "test-secret", nil, nil, nil)
 
 	// Check main container image
 	var mainContainer *corev1.Container
