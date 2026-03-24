@@ -746,6 +746,7 @@ func (r *OpenClawInstanceReconciler) reconcileWorkspaceConfigMap(ctx context.Con
 	logger := log.FromContext(ctx)
 	resolved := &resolvedWorkspaceFiles{}
 	hasConfigMapRef := false
+	degraded := false
 
 	// Resolve external workspace ConfigMap if referenced
 	if instance.Spec.Workspace != nil && instance.Spec.Workspace.ConfigMapRef != nil {
@@ -764,6 +765,7 @@ func (r *OpenClawInstanceReconciler) reconcileWorkspaceConfigMap(ctx context.Con
 				r.Recorder.Eventf(instance, corev1.EventTypeWarning, "WorkspaceConfigMapNotFound",
 					"Workspace ConfigMap %q referenced by spec.workspace.configMapRef not found", ref.Name)
 				logger.Info("Workspace configMapRef not found, continuing without default workspace files", "configMap", ref.Name)
+				degraded = true
 			} else {
 				return nil, fmt.Errorf("fetching workspace configMapRef %q: %w", ref.Name, err)
 			}
@@ -786,6 +788,7 @@ func (r *OpenClawInstanceReconciler) reconcileWorkspaceConfigMap(ctx context.Con
 					"Workspace ConfigMap %q key %q: %v", ref.Name, key, vErr)
 				logger.Info("Workspace configMapRef has invalid filename, continuing without default workspace files", "configMap", ref.Name, "key", key)
 				resolved.defaultFiles = nil
+				degraded = true
 				break
 			}
 			if resolved.defaultFiles != nil {
@@ -815,6 +818,7 @@ func (r *OpenClawInstanceReconciler) reconcileWorkspaceConfigMap(ctx context.Con
 					r.Recorder.Eventf(instance, corev1.EventTypeWarning, "WorkspaceConfigMapNotFound",
 						"Additional workspace %q ConfigMap %q not found", aw.Name, aw.ConfigMapRef.Name)
 					logger.Info("Additional workspace configMapRef not found, skipping", "workspace", aw.Name, "configMap", aw.ConfigMapRef.Name)
+					degraded = true
 					continue
 				}
 				return nil, fmt.Errorf("fetching additional workspace %q configMapRef %q: %w", aw.Name, aw.ConfigMapRef.Name, err)
@@ -837,6 +841,7 @@ func (r *OpenClawInstanceReconciler) reconcileWorkspaceConfigMap(ctx context.Con
 				r.Recorder.Eventf(instance, corev1.EventTypeWarning, "InvalidWorkspaceFilename",
 					"Additional workspace %q ConfigMap %q key %q: %v", aw.Name, aw.ConfigMapRef.Name, key, vErr)
 				logger.Info("Additional workspace configMapRef has invalid filename, skipping", "workspace", aw.Name, "configMap", aw.ConfigMapRef.Name, "key", key)
+				degraded = true
 				valid = false
 				break
 			}
@@ -853,7 +858,7 @@ func (r *OpenClawInstanceReconciler) reconcileWorkspaceConfigMap(ctx context.Con
 	}
 
 	// Set WorkspaceReady=True when any configMapRef is used and all resolved successfully
-	if hasConfigMapRef {
+	if hasConfigMapRef && !degraded {
 		totalFiles := len(resolved.defaultFiles)
 		for _, files := range resolved.additionalFiles {
 			totalFiles += len(files)
