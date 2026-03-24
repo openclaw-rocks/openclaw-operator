@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.23.0](https://github.com/openclaw-rocks/openclaw-operator/compare/v0.22.2...v0.23.0) (2026-03-24)
+
+
+### Features
+
+* add spec.workspace.configMapRef and additionalWorkspaces for multi-agent support ([#395](https://github.com/openclaw-rocks/openclaw-operator/issues/395)) ([8fe107a](https://github.com/openclaw-rocks/openclaw-operator/commit/8fe107a8ec6808d0a64580c77e7109187a5cc248))
+
+
+### Bug Fixes
+
+* **backup:** add --copy-links to rclone to include symlinks ([#400](https://github.com/openclaw-rocks/openclaw-operator/issues/400)) ([8ffb8e8](https://github.com/openclaw-rocks/openclaw-operator/commit/8ffb8e8668a178facaffdc215c8029b81c5b35f4))
+* **chromium:** use run.sh entrypoint and migrate deprecated image ([#397](https://github.com/openclaw-rocks/openclaw-operator/issues/397)) ([e74dffd](https://github.com/openclaw-rocks/openclaw-operator/commit/e74dffd6a80a52c7acf6a1b988c4f95e17ccfd65))
+* **controller:** normalize UpdateStrategy.RollingUpdate to stop continuous reconcile loop ([#403](https://github.com/openclaw-rocks/openclaw-operator/issues/403)) ([0df4bcb](https://github.com/openclaw-rocks/openclaw-operator/commit/0df4bcb1e9b410b76ab950d5dc492d62e866cd73))
+* **e2e:** stabilize flaky CDP integration screenshot test ([#405](https://github.com/openclaw-rocks/openclaw-operator/issues/405)) ([2b441af](https://github.com/openclaw-rocks/openclaw-operator/commit/2b441af81304a284ba068b17fe7315b2b85a950d))
+* preserve user-set gateway auth mode in config enrichment ([#404](https://github.com/openclaw-rocks/openclaw-operator/issues/404)) ([337eb72](https://github.com/openclaw-rocks/openclaw-operator/commit/337eb72a3fc889e3ccf38c0247ab2eb34f632772))
+
 ## [0.11.0](https://github.com/openclaw-rocks/openclaw-operator/compare/v0.10.30...v0.11.0) (2026-03-10)
 
 
