@@ -8,7 +8,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1alpha1 "github.com/openclawrocks/openclaw-operator/api/v1alpha1"
 )
 
 func TestParseQuantity(t *testing.T) {
@@ -202,7 +202,7 @@ func TestBuildStatefulSet_WithRegistry(t *testing.T) {
 	instance := newTestInstance("test")
 	instance.Spec.Registry = "my-registry.example.com"
 
-	sts := BuildStatefulSet(instance, "test-secret", nil)
+	sts := BuildStatefulSet(instance, "test-secret", nil, nil, nil)
 
 	// Check main container image
 	var mainContainer *corev1.Container

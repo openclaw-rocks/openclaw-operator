@@ -38,8 +38,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
-	"github.com/openclawrocks/k8s-operator/internal/resources"
+	openclawv1alpha1 "github.com/openclawrocks/openclaw-operator/api/v1alpha1"
+	"github.com/openclawrocks/openclaw-operator/internal/resources"
 )
 
 // cdpCommand represents a Chrome DevTools Protocol command sent over WebSocket.
@@ -424,6 +424,189 @@ var _ = Describe("Chromium CDP Functional Tests", Ordered, func() {
 	})
 })
 
+// Regression test for #396: verify that an instance with the deprecated
+// ghcr.io/browserless/chromium image (from pre-v0.22.1 kubebuilder defaults)
+// gets migrated and CDP actually works end-to-end.
+var _ = Describe("Chromium Deprecated Image Migration", Ordered, func() {
+	var (
+		namespace    string
+		instanceName string
+		localPort    int
+		portFwdCmd   *exec.Cmd
+		podName      string
+	)
+
+	BeforeAll(func() {
+		if os.Getenv("E2E_SKIP_CDP_FUNCTIONAL") == "true" {
+			Skip("Skipping CDP functional tests (E2E_SKIP_CDP_FUNCTIONAL=true)")
+		}
+		if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+			Skip("Skipping CDP functional tests in minimal mode")
+		}
+
+		instanceName = "cdp-migrate-test"
+		namespace = "test-migrate-" + time.Now().Format("20060102150405")
+
+		By("Creating test namespace")
+		ns := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: namespace},
+		}
+		Expect(k8sClient.Create(ctx, ns)).Should(Succeed())
+
+		By("Creating OpenClawInstance with deprecated browserless image")
+		instance := &openclawv1alpha1.OpenClawInstance{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      instanceName,
+				Namespace: namespace,
+				Annotations: map[string]string{
+					"openclaw.rocks/skip-backup": "true",
+				},
+			},
+			Spec: openclawv1alpha1.OpenClawInstanceSpec{
+				Image: openclawv1alpha1.ImageSpec{
+					Repository: "ghcr.io/openclaw/openclaw",
+					Tag:        "latest",
+				},
+				Chromium: openclawv1alpha1.ChromiumSpec{
+					Enabled: true,
+					Image: openclawv1alpha1.ChromiumImageSpec{
+						// Simulate pre-v0.22.1 kubebuilder defaults
+						Repository: resources.DeprecatedChromiumImage,
+						Tag:        "latest",
+					},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+		By("Waiting for StatefulSet to be created")
+		sts := &appsv1.StatefulSet{}
+		Eventually(func() error {
+			return k8sClient.Get(ctx, types.NamespacedName{
+				Name:      resources.StatefulSetName(instance),
+				Namespace: namespace,
+			}, sts)
+		}, 60*time.Second, 2*time.Second).Should(Succeed())
+
+		By("Verifying image was migrated in StatefulSet")
+		var chromiumContainer *corev1.Container
+		for i := range sts.Spec.Template.Spec.InitContainers {
+			if sts.Spec.Template.Spec.InitContainers[i].Name == "chromium" {
+				chromiumContainer = &sts.Spec.Template.Spec.InitContainers[i]
+				break
+			}
+		}
+		Expect(chromiumContainer).NotTo(BeNil())
+		expectedImage := resources.DefaultChromiumImage + ":" + resources.DefaultChromiumTag
+		Expect(chromiumContainer.Image).To(Equal(expectedImage),
+			"deprecated image should be migrated to %s", expectedImage)
+		Expect(chromiumContainer.Command).To(BeEmpty(),
+			"Command must be nil so run.sh entrypoint is used")
+
+		By("Waiting for pod to exist")
+		Eventually(func() string {
+			podList := &corev1.PodList{}
+			err := k8sClient.List(ctx, podList,
+				client.InNamespace(namespace),
+				client.MatchingLabels{
+					"app.kubernetes.io/instance": instanceName,
+					"app.kubernetes.io/name":     "openclaw",
+				},
+			)
+			if err != nil || len(podList.Items) == 0 {
+				return ""
+			}
+			podName = podList.Items[0].Name
+			return podName
+		}, 120*time.Second, 3*time.Second).ShouldNot(BeEmpty())
+
+		By("Waiting for chromium init container to be ready")
+		Eventually(func() bool {
+			pod := &corev1.Pod{}
+			err := k8sClient.Get(ctx, types.NamespacedName{
+				Name:      podName,
+				Namespace: namespace,
+			}, pod)
+			if err != nil {
+				return false
+			}
+			if pod.Status.Phase != corev1.PodRunning {
+				GinkgoWriter.Printf("Pod phase: %s (waiting for Running)\n", pod.Status.Phase)
+				return false
+			}
+			for _, cs := range pod.Status.InitContainerStatuses {
+				if cs.Name == "chromium" && cs.Ready {
+					return true
+				}
+			}
+			return false
+		}, 5*time.Minute, 3*time.Second).Should(BeTrue())
+
+		By("Starting port-forward to chromium CDP port")
+		listener, err := net.Listen("tcp", ":0")
+		Expect(err).NotTo(HaveOccurred())
+		localPort = listener.Addr().(*net.TCPAddr).Port
+		listener.Close()
+
+		portFwdCmd = exec.Command("kubectl", "port-forward",
+			fmt.Sprintf("pod/%s", podName),
+			fmt.Sprintf("%d:%d", localPort, resources.ChromiumPort),
+			"-n", namespace,
+		)
+		portFwdCmd.Stdout = GinkgoWriter
+		portFwdCmd.Stderr = GinkgoWriter
+		Expect(portFwdCmd.Start()).To(Succeed())
+
+		By("Waiting for CDP to respond")
+		Eventually(func() error {
+			if portFwdCmd.ProcessState != nil {
+				return fmt.Errorf("port-forward process exited: %s", portFwdCmd.ProcessState)
+			}
+			resp, err := http.Get(fmt.Sprintf("http://localhost:%d/json/version", localPort))
+			if err != nil {
+				return err
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				return fmt.Errorf("unexpected status: %d", resp.StatusCode)
+			}
+			return nil
+		}, 60*time.Second, 2*time.Second).Should(Succeed())
+	})
+
+	AfterAll(func() {
+		if portFwdCmd != nil && portFwdCmd.Process != nil {
+			_ = portFwdCmd.Process.Kill()
+			_ = portFwdCmd.Wait()
+		}
+		if namespace != "" {
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{Name: namespace},
+			}
+			_ = k8sClient.Delete(ctx, ns)
+		}
+	})
+
+	It("CDP responds after migrating from deprecated browserless image", func() {
+		resp, err := http.Get(fmt.Sprintf("http://localhost:%d/json/version", localPort))
+		Expect(err).NotTo(HaveOccurred())
+		defer resp.Body.Close()
+
+		body, err := io.ReadAll(resp.Body)
+		Expect(err).NotTo(HaveOccurred())
+
+		var version map[string]interface{}
+		Expect(json.Unmarshal(body, &version)).To(Succeed())
+
+		GinkgoWriter.Printf("CDP /json/version after migration: %s\n", string(body))
+
+		Expect(version).To(HaveKey("Browser"),
+			"migrated chromium should report Browser in /json/version")
+		Expect(version).To(HaveKey("webSocketDebuggerUrl"),
+			"migrated chromium should report webSocketDebuggerUrl")
+	})
+})
+
 // gwMessage represents a message in the OpenClaw gateway WebSocket protocol.
 type gwMessage struct {
 	Type    string          `json:"type"`
@@ -448,11 +631,6 @@ type gwConnectPayload struct {
 type gwChatPayload struct {
 	State      string `json:"state"`
 	StopReason string `json:"stopReason,omitempty"`
-}
-
-// gwDevicePairRequestPayload represents a device.pair.requested event payload.
-type gwDevicePairRequestPayload struct {
-	RequestID string `json:"requestId"`
 }
 
 // randomHex generates a random hex string suitable for use as a request ID.
@@ -735,65 +913,9 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 		Expect(sessionKey).NotTo(BeEmpty(), "connect response should contain mainSessionKey")
 		GinkgoWriter.Printf("Session key: %s\n", sessionKey)
 
-		By("Triggering device pairing via warm-up chat.send")
-		// OpenClaw emits device.pair.requested when a control-ui client first
-		// triggers the browser tool via the agent pipeline. Send a warm-up
-		// message to trigger the pairing flow, auto-approve it, and let the
-		// chat finish. The device stays paired for subsequent requests.
-		warmupID := randomHex()
-		warmupKey := randomHex()
-		warmupReq := map[string]interface{}{
-			"type":   "req",
-			"id":     warmupID,
-			"method": "chat.send",
-			"params": map[string]interface{}{
-				"message":        "Use the browser tool to navigate to https://example.com and take a screenshot.",
-				"sessionKey":     sessionKey,
-				"idempotencyKey": warmupKey,
-			},
-		}
-		Expect(ws.WriteJSON(warmupReq)).To(Succeed())
-		GinkgoWriter.Println("Warm-up chat.send dispatched for device pairing")
-
-		// Read events: auto-approve pairing, then wait for chat to finish.
-		warmupDeadline := time.Now().Add(90 * time.Second)
-		for time.Now().Before(warmupDeadline) {
-			Expect(ws.SetReadDeadline(warmupDeadline)).To(Succeed())
-			_, warmupRaw, warmupErr := ws.ReadMessage()
-			if warmupErr != nil {
-				GinkgoWriter.Printf("Warm-up read error: %v\n", warmupErr)
-				break
-			}
-			var warmupMsg gwMessage
-			if jsonErr := json.Unmarshal(warmupRaw, &warmupMsg); jsonErr != nil {
-				continue
-			}
-			if warmupMsg.Type == "event" && warmupMsg.Event == "device.pair.requested" {
-				var pairReq gwDevicePairRequestPayload
-				if jsonErr := json.Unmarshal(warmupMsg.Payload, &pairReq); jsonErr == nil && pairReq.RequestID != "" {
-					GinkgoWriter.Printf("Auto-approving device pair: %s\n", pairReq.RequestID)
-					approveReq := map[string]interface{}{
-						"type":   "req",
-						"id":     randomHex(),
-						"method": "device.pair.approve",
-						"params": map[string]interface{}{
-							"requestId": pairReq.RequestID,
-						},
-					}
-					_ = ws.WriteJSON(approveReq)
-				}
-				continue
-			}
-			if warmupMsg.Type == "event" && warmupMsg.Event == "chat" {
-				var chatPayload gwChatPayload
-				if jsonErr := json.Unmarshal(warmupMsg.Payload, &chatPayload); jsonErr == nil {
-					if chatPayload.State == "final" {
-						GinkgoWriter.Println("Warm-up chat completed, device should now be paired")
-						break
-					}
-				}
-			}
-		}
+		// Device pairing warm-up is not needed: the operator injects
+		// dangerouslyDisableDeviceAuth=true into the gateway config, so
+		// control-ui clients are authorized immediately.
 
 		By("Sending message to take a screenshot of openclaw.rocks")
 		sendID := randomHex()
@@ -815,80 +937,95 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 		// The agent streams assistant text containing a screenshot file path
 		// (e.g., sandbox:/home/openclaw/.openclaw/media/browser/<uuid>.png).
 		// Collect the full assistant text and verify it references a screenshot.
+		//
+		// Use a goroutine to read WebSocket messages and send them to a channel.
+		// This avoids using ws.SetReadDeadline which permanently breaks Gorilla
+		// WebSocket reads on timeout (readErr is cached, subsequent reads fail
+		// immediately without attempting I/O).
+		type wsResult struct {
+			data []byte
+			err  error
+		}
+		msgCh := make(chan wsResult, 1)
+		go func() {
+			for {
+				_, data, err := ws.ReadMessage()
+				msgCh <- wsResult{data, err}
+				if err != nil {
+					return
+				}
+			}
+		}()
+
 		var assistantText string
 		agentCompleted := false
-		pairApproved := false
-		deadline := time.Now().Add(2 * time.Minute)
+		chatSendOK := false
+		timeout := time.After(3 * time.Minute)
 
-		for time.Now().Before(deadline) && !agentCompleted {
-			Expect(ws.SetReadDeadline(deadline)).To(Succeed())
-
-			_, rawMsg, readErr := ws.ReadMessage()
-			if readErr != nil {
-				GinkgoWriter.Printf("WebSocket read error: %v\n", readErr)
-				break
-			}
-
-			var msg gwMessage
-			if jsonErr := json.Unmarshal(rawMsg, &msg); jsonErr != nil {
-				GinkgoWriter.Printf("Failed to unmarshal message: %v\n", jsonErr)
-				continue
-			}
-
-			switch {
-			case msg.Type == "event" && msg.Event == "device.pair.requested" && !pairApproved:
-				var pairReq gwDevicePairRequestPayload
-				if jsonErr := json.Unmarshal(msg.Payload, &pairReq); jsonErr == nil && pairReq.RequestID != "" {
-					GinkgoWriter.Printf("Auto-approving device pair request: %s\n", pairReq.RequestID)
-					approveReq := map[string]interface{}{
-						"type":   "req",
-						"id":     randomHex(),
-						"method": "device.pair.approve",
-						"params": map[string]interface{}{
-							"requestId": pairReq.RequestID,
-						},
-					}
-					_ = ws.WriteJSON(approveReq)
-					pairApproved = true
+	eventLoop:
+		for !agentCompleted {
+			select {
+			case <-timeout:
+				GinkgoWriter.Println("Timed out waiting for agent response")
+				break eventLoop
+			case result := <-msgCh:
+				if result.err != nil {
+					GinkgoWriter.Printf("WebSocket read error: %v\n", result.err)
+					break eventLoop
 				}
 
-			case msg.Type == "event" && msg.Event == "agent":
-				// Extract assistant text from agent stream events
-				var agentPayload map[string]interface{}
-				if jsonErr := json.Unmarshal(msg.Payload, &agentPayload); jsonErr == nil {
-					if agentPayload["stream"] == "assistant" {
-						if data, ok := agentPayload["data"].(map[string]interface{}); ok {
-							if text, ok := data["text"].(string); ok {
-								assistantText = text
+				var msg gwMessage
+				if jsonErr := json.Unmarshal(result.data, &msg); jsonErr != nil {
+					GinkgoWriter.Printf("Failed to unmarshal message: %v\n", jsonErr)
+					continue
+				}
+
+				switch {
+				case msg.Type == "event" && msg.Event == "agent":
+					// Extract assistant text from agent stream events
+					var agentPayload map[string]interface{}
+					if jsonErr := json.Unmarshal(msg.Payload, &agentPayload); jsonErr == nil {
+						if agentPayload["stream"] == "assistant" {
+							if data, ok := agentPayload["data"].(map[string]interface{}); ok {
+								if text, ok := data["text"].(string); ok {
+									assistantText = text
+								}
 							}
 						}
 					}
-				}
 
-			case msg.Type == "event" && msg.Event == "chat":
-				var chatPayload gwChatPayload
-				if jsonErr := json.Unmarshal(msg.Payload, &chatPayload); jsonErr == nil {
-					if chatPayload.State == "final" {
-						GinkgoWriter.Printf("Chat completed: stopReason=%s\n", chatPayload.StopReason)
-						agentCompleted = true
+				case msg.Type == "event" && msg.Event == "chat":
+					var chatPayload gwChatPayload
+					if jsonErr := json.Unmarshal(msg.Payload, &chatPayload); jsonErr == nil {
+						GinkgoWriter.Printf("Chat event: state=%s stopReason=%s\n",
+							chatPayload.State, chatPayload.StopReason)
+						if chatPayload.State == "final" {
+							agentCompleted = true
+						}
 					}
-				}
 
-			case msg.Type == "res" && msg.ID == sendID:
-				GinkgoWriter.Printf("Received response for send request: %s\n", string(rawMsg))
-
-			default:
-				if msg.Event != "tick" && msg.Event != "health" && msg.Event != "presence" {
-					logMsg := string(rawMsg)
-					if len(logMsg) > 200 {
-						logMsg = logMsg[:200] + "..."
+				case msg.Type == "res" && msg.ID == sendID:
+					if msg.OK != nil && *msg.OK {
+						chatSendOK = true
+						GinkgoWriter.Println("chat.send accepted")
+					} else {
+						GinkgoWriter.Printf("chat.send failed: %s\n", string(result.data))
 					}
-					GinkgoWriter.Printf("Event: type=%s event=%s - %s\n", msg.Type, msg.Event, logMsg)
+
+				default:
+					if msg.Event != "tick" && msg.Event != "health" && msg.Event != "presence" {
+						logMsg := string(result.data)
+						if len(logMsg) > 300 {
+							logMsg = logMsg[:300] + "..."
+						}
+						GinkgoWriter.Printf("Event: type=%s event=%s - %s\n", msg.Type, msg.Event, logMsg)
+					}
 				}
 			}
 		}
 
 		By("Verifying screenshot was taken")
+		Expect(chatSendOK).To(BeTrue(), "chat.send should have been accepted by the gateway")
 		GinkgoWriter.Printf("Final assistant text: %s\n", assistantText)
 		Expect(assistantText).To(SatisfyAny(
 			ContainSubstring(".png"),

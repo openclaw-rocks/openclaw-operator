@@ -25,7 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1alpha1 "github.com/openclawrocks/openclaw-operator/api/v1alpha1"
 )
 
 // ptr returns a pointer to the given value.
@@ -1093,6 +1093,39 @@ func TestValidateCreate_WorkspaceNestedDirAllowed(t *testing.T) {
 	}
 }
 
+func TestValidateCreate_WorkspaceConfigMapRefValid(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+		ConfigMapRef: &openclawv1alpha1.ConfigMapNameSelector{
+			Name: "my-workspace-cm",
+		},
+	}
+
+	_, err := v.ValidateCreate(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("expected no error for valid configMapRef, got: %v", err)
+	}
+}
+
+func TestValidateCreate_WorkspaceConfigMapRefEmptyName(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+		ConfigMapRef: &openclawv1alpha1.ConfigMapNameSelector{
+			Name: "",
+		},
+	}
+
+	_, err := v.ValidateCreate(context.Background(), instance)
+	if err == nil {
+		t.Fatal("expected error for empty configMapRef.name")
+	}
+	if !strings.Contains(err.Error(), "configMapRef.name must not be empty") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // CA bundle validation tests
 // ---------------------------------------------------------------------------
@@ -1573,5 +1606,140 @@ func TestValidateCreate_NoWarnWebTerminalDisabled(t *testing.T) {
 	}
 	if containsWarning(warnings, "Web terminal") {
 		t.Fatalf("expected no web terminal warning when disabled, got: %v", warnings)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Additional workspaces validation tests
+// ---------------------------------------------------------------------------
+
+func TestValidateCreate_AdditionalWorkspaceValid(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+		AdditionalWorkspaces: []openclawv1alpha1.AdditionalWorkspace{
+			{
+				Name: "work",
+				ConfigMapRef: &openclawv1alpha1.ConfigMapNameSelector{
+					Name: "work-files",
+				},
+				InitialFiles: map[string]string{
+					"SOUL.md": "work soul",
+				},
+				InitialDirectories: []string{"tools"},
+			},
+			{
+				Name: "research",
+				InitialFiles: map[string]string{
+					"AGENT.md": "research agent",
+				},
+			},
+		},
+	}
+
+	_, err := v.ValidateCreate(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("expected no error for valid additional workspaces, got: %v", err)
+	}
+}
+
+func TestValidateCreate_AdditionalWorkspaceDuplicateName(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+		AdditionalWorkspaces: []openclawv1alpha1.AdditionalWorkspace{
+			{Name: "work"},
+			{Name: "work"},
+		},
+	}
+
+	_, err := v.ValidateCreate(context.Background(), instance)
+	if err == nil {
+		t.Fatal("expected error for duplicate additional workspace names")
+	}
+	if !strings.Contains(err.Error(), "duplicated") {
+		t.Errorf("expected duplicate error, got: %v", err)
+	}
+}
+
+func TestValidateCreate_AdditionalWorkspaceEmptyName(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+		AdditionalWorkspaces: []openclawv1alpha1.AdditionalWorkspace{
+			{Name: ""},
+		},
+	}
+
+	_, err := v.ValidateCreate(context.Background(), instance)
+	if err == nil {
+		t.Fatal("expected error for empty additional workspace name")
+	}
+	if !strings.Contains(err.Error(), "must not be empty") {
+		t.Errorf("expected empty name error, got: %v", err)
+	}
+}
+
+func TestValidateCreate_AdditionalWorkspaceConsecutiveHyphens(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+		AdditionalWorkspaces: []openclawv1alpha1.AdditionalWorkspace{
+			{Name: "my--agent"},
+		},
+	}
+
+	_, err := v.ValidateCreate(context.Background(), instance)
+	if err == nil {
+		t.Fatal("expected error for consecutive hyphens in additional workspace name")
+	}
+	if !strings.Contains(err.Error(), "no consecutive hyphens") {
+		t.Errorf("expected consecutive hyphens error, got: %v", err)
+	}
+}
+
+func TestValidateCreate_AdditionalWorkspaceInvalidFilename(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+		AdditionalWorkspaces: []openclawv1alpha1.AdditionalWorkspace{
+			{
+				Name: "work",
+				InitialFiles: map[string]string{
+					"../evil.md": "path traversal",
+				},
+			},
+		},
+	}
+
+	_, err := v.ValidateCreate(context.Background(), instance)
+	if err == nil {
+		t.Fatal("expected error for invalid filename in additional workspace")
+	}
+	if !strings.Contains(err.Error(), "initialFiles") {
+		t.Errorf("expected initialFiles error, got: %v", err)
+	}
+}
+
+func TestValidateCreate_AdditionalWorkspaceConfigMapRefEmptyName(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+		AdditionalWorkspaces: []openclawv1alpha1.AdditionalWorkspace{
+			{
+				Name: "work",
+				ConfigMapRef: &openclawv1alpha1.ConfigMapNameSelector{
+					Name: "",
+				},
+			},
+		},
+	}
+
+	_, err := v.ValidateCreate(context.Background(), instance)
+	if err == nil {
+		t.Fatal("expected error for empty configMapRef.name in additional workspace")
+	}
+	if !strings.Contains(err.Error(), "configMapRef.name must not be empty") {
+		t.Errorf("expected configMapRef error, got: %v", err)
 	}
 }

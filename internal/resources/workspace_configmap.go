@@ -17,27 +17,53 @@ limitations under the License.
 package resources
 
 import (
+	"fmt"
+	"strings"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1alpha1 "github.com/openclawrocks/openclaw-operator/api/v1alpha1"
 )
+
+const additionalWorkspaceKeySep = "--ws--"
 
 // BuildWorkspaceConfigMap creates a ConfigMap containing workspace seed files.
 // Returns nil if the instance has no workspace files (user-defined, operator-injected, or skill packs).
 // Skill pack files use ConfigMap-safe keys (/ replaced with --); the init script
 // maps them back to the correct workspace paths.
-func BuildWorkspaceConfigMap(instance *openclawv1alpha1.OpenClawInstance, skillPacks *ResolvedSkillPacks) *corev1.ConfigMap {
+//
+// externalFiles are the resolved contents of spec.workspace.configMapRef (may be nil).
+// additionalExternalFiles maps workspace name to resolved configMapRef contents (may be nil).
+//
+// Merge priority (highest wins):
+//  1. Operator-injected (ENVIRONMENT.md, BOOTSTRAP.md, SELFCONFIG.md, selfconfig.sh)
+//  2. Inline initialFiles
+//  3. External configMapRef entries
+//  4. Skill pack files
+func BuildWorkspaceConfigMap(instance *openclawv1alpha1.OpenClawInstance, externalFiles map[string]string, additionalExternalFiles map[string]map[string]string, skillPacks *ResolvedSkillPacks) *corev1.ConfigMap {
 	files := make(map[string]string)
 
-	// User-defined workspace files
+	// 4. Skill pack files (lowest priority, ConfigMap-safe keys)
+	if skillPacks != nil {
+		for cmKey, content := range skillPacks.Files {
+			files[cmKey] = content
+		}
+	}
+
+	// 3. External configMapRef entries
+	for k, v := range externalFiles {
+		files[k] = v
+	}
+
+	// 2. User-defined inline workspace files
 	if instance.Spec.Workspace != nil {
 		for k, v := range instance.Spec.Workspace.InitialFiles {
 			files[k] = v
 		}
 	}
 
-	// Operator-injected files (always present)
+	// 1. Operator-injected files (highest priority - always present)
 	files["ENVIRONMENT.md"] = EnvironmentSkillContent
 	files["BOOTSTRAP.md"] = BootstrapContent
 
@@ -47,10 +73,29 @@ func BuildWorkspaceConfigMap(instance *openclawv1alpha1.OpenClawInstance, skillP
 		files["selfconfig.sh"] = SelfConfigureHelperScript
 	}
 
-	// Skill pack files (ConfigMap-safe keys)
-	if skillPacks != nil {
-		for cmKey, content := range skillPacks.Files {
-			files[cmKey] = content
+	// Additional workspaces - each gets namespaced keys in the same ConfigMap.
+	// Merge priority per workspace (highest wins):
+	//  1. Operator-injected (ENVIRONMENT.md only - no BOOTSTRAP.md for secondary agents)
+	//  2. Inline initialFiles
+	//  3. External configMapRef entries
+	if instance.Spec.Workspace != nil {
+		for i := range instance.Spec.Workspace.AdditionalWorkspaces {
+			ws := &instance.Spec.Workspace.AdditionalWorkspaces[i]
+
+			// 3. External configMapRef entries (lowest)
+			if extFiles, ok := additionalExternalFiles[ws.Name]; ok {
+				for k, v := range extFiles {
+					files[AdditionalWorkspaceCMKey(ws.Name, k)] = v
+				}
+			}
+
+			// 2. Inline initialFiles (overrides external)
+			for k, v := range ws.InitialFiles {
+				files[AdditionalWorkspaceCMKey(ws.Name, k)] = v
+			}
+
+			// 1. ENVIRONMENT.md only (no BOOTSTRAP.md for secondary agents)
+			files[AdditionalWorkspaceCMKey(ws.Name, "ENVIRONMENT.md")] = EnvironmentSkillContent
 		}
 	}
 
@@ -62,4 +107,25 @@ func BuildWorkspaceConfigMap(instance *openclawv1alpha1.OpenClawInstance, skillP
 		},
 		Data: files,
 	}
+}
+
+// AdditionalWorkspaceCMKey returns the ConfigMap key for a file in an additional workspace.
+// Uses a namespaced format: "--ws--<name>--<filename>" to avoid collisions with default workspace keys.
+func AdditionalWorkspaceCMKey(workspaceName, filename string) string {
+	return fmt.Sprintf("%s%s--%s", additionalWorkspaceKeySep, workspaceName, filename)
+}
+
+// ParseAdditionalWorkspaceCMKey extracts the workspace name and filename from a namespaced key.
+// Returns ("", "", false) if the key is not an additional workspace key.
+func ParseAdditionalWorkspaceCMKey(cmKey string) (workspaceName, filename string, ok bool) {
+	if !strings.HasPrefix(cmKey, additionalWorkspaceKeySep) {
+		return "", "", false
+	}
+	rest := cmKey[len(additionalWorkspaceKeySep):]
+	// Split on first "--" to get workspace name and filename
+	idx := strings.Index(rest, "--")
+	if idx < 0 {
+		return "", "", false
+	}
+	return rest[:idx], rest[idx+2:], true
 }

@@ -29,8 +29,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
-	"github.com/openclawrocks/k8s-operator/internal/resources"
+	openclawv1alpha1 "github.com/openclawrocks/openclaw-operator/api/v1alpha1"
+	"github.com/openclawrocks/openclaw-operator/internal/resources"
 )
 
 var _ = Describe("OpenClawSelfConfig Controller", func() {

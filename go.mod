@@ -1,4 +1,4 @@
-module github.com/openclawrocks/k8s-operator
+module github.com/openclawrocks/openclaw-operator
 
 go 1.24.0
 

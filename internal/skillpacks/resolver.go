@@ -27,7 +27,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/openclawrocks/k8s-operator/internal/resources"
+	"github.com/openclawrocks/openclaw-operator/internal/resources"
 )
 
 const defaultBaseURL = "https://api.github.com"

@@ -46,10 +46,10 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
-	"github.com/openclawrocks/k8s-operator/internal/controller"
-	"github.com/openclawrocks/k8s-operator/internal/registry"
-	"github.com/openclawrocks/k8s-operator/internal/skillpacks"
+	openclawv1alpha1 "github.com/openclawrocks/openclaw-operator/api/v1alpha1"
+	"github.com/openclawrocks/openclaw-operator/internal/controller"
+	"github.com/openclawrocks/openclaw-operator/internal/registry"
+	"github.com/openclawrocks/openclaw-operator/internal/skillpacks"
 )
 
 var (

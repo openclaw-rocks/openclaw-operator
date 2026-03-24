@@ -5,8 +5,8 @@
 # OpenClaw Kubernetes Operator
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Go Report Card](https://goreportcard.com/badge/github.com/OpenClaw-rocks/k8s-operator)](https://goreportcard.com/report/github.com/OpenClaw-rocks/k8s-operator)
-[![CI](https://github.com/OpenClaw-rocks/k8s-operator/actions/workflows/ci.yaml/badge.svg)](https://github.com/OpenClaw-rocks/k8s-operator/actions/workflows/ci.yaml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/OpenClaw-rocks/openclaw-operator)](https://goreportcard.com/report/github.com/OpenClaw-rocks/openclaw-operator)
+[![CI](https://github.com/OpenClaw-rocks/openclaw-operator/actions/workflows/ci.yaml/badge.svg)](https://github.com/OpenClaw-rocks/openclaw-operator/actions/workflows/ci.yaml)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-1.28%2B-326CE5?logo=kubernetes&logoColor=white)](https://kubernetes.io)
 [![Go](https://img.shields.io/badge/Go-1.24-00ADD8?logo=go&logoColor=white)](https://go.dev)
 
@@ -82,7 +82,7 @@ Every request is validated against the instance's allowlist policy. Protected co
 | **Scalable** | Auto-scaling | HPA integration with CPU and memory metrics, min/max replica bounds, automatic StatefulSet replica management |
 | **Resilient** | Self-healing lifecycle | PodDisruptionBudgets, health probes, automatic config rollouts via content hashing, 5-minute drift detection |
 | **Backup/Restore** | S3-backed snapshots | Automatic backup to S3-compatible storage on deletion, pre-update, and on a cron schedule; restore into a new instance from any snapshot |
-| **Workspace Seeding** | Initial files & dirs | Pre-populate the workspace with files and directories before the agent starts |
+| **Workspace Seeding** | Initial files & dirs | Pre-populate the workspace with files and directories before the agent starts; reference an external ConfigMap for GitOps workflows |
 | **Gateway Auth** | Auto-generated tokens | Automatic gateway token Secret per instance, bypassing mDNS pairing (unusable in k8s) |
 | **Tailscale** | Tailnet access | Expose via Tailscale Serve or Funnel with SSO auth - no Ingress needed |
 | **Extensible** | Sidecars & init containers | Chromium for browser automation, Ollama for local LLMs, Tailscale for tailnet access, plus custom init containers and sidecars |
@@ -478,6 +478,129 @@ spec:
 ```
 
 npm lifecycle scripts are disabled globally on the init container (`NPM_CONFIG_IGNORE_SCRIPTS=true`) to mitigate supply chain attacks. Plugins are installed into the PVC-backed `~/.openclaw/node_modules` directory and persist across pod restarts.
+
+### Workspace seeding
+
+Pre-populate the agent workspace with files and directories before the agent starts. Files can be provided inline or referenced from an external ConfigMap -- ideal for GitOps workflows where workspace content is managed alongside your manifests.
+
+**Inline files:**
+
+```yaml
+spec:
+  workspace:
+    initialDirectories:
+      - tools/scripts
+    initialFiles:
+      README.md: |
+        # My Workspace
+        This workspace is managed by OpenClaw.
+```
+
+**External ConfigMap reference:**
+
+```yaml
+spec:
+  workspace:
+    configMapRef:
+      name: my-workspace-files      # all keys become workspace files
+    initialFiles:                    # inline files (override configMapRef)
+      EXTRA.md: "additional content"
+```
+
+All keys in the referenced ConfigMap are written as files into the workspace directory. When both `configMapRef` and `initialFiles` are specified, inline files take precedence over ConfigMap entries with the same filename.
+
+**Merge priority** (highest wins): operator-injected files > inline `initialFiles` > external `configMapRef` > skill packs.
+
+The operator sets a `WorkspaceReady` status condition to `False` when the referenced ConfigMap is missing or contains invalid filenames, and `True` once workspace files are seeded successfully. The controller watches external ConfigMaps for changes and re-reconciles automatically.
+
+**How it works:** Workspace files are seeded once via an init container. The init container copies files from a read-only ConfigMap volume to the PVC. The main container only sees the PVC (writable), so agents can modify their workspace files and changes persist across pod restarts. ConfigMaps are never mounted directly on the main container.
+
+**GitOps example with Kustomize:**
+
+```yaml
+# kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: my-namespace              # must match the instance namespace
+
+generatorOptions:
+  disableNameSuffixHash: true        # required - operator looks up by exact name
+
+configMapGenerator:
+  - name: my-workspace-files
+    files:
+      - workspace/SOUL.md
+      - workspace/AGENT.md
+```
+
+> **Important:** Two kustomize settings are required when using `configMapGenerator` with `configMapRef`:
+> - **`disableNameSuffixHash: true`** -- The operator looks up ConfigMaps by exact name. Kustomize's default hash suffix (e.g. `-57k7g4dthc`) would cause a `ConfigMapNotFound` error.
+> - **`namespace`** -- Generated ConfigMaps must be in the same namespace as the instance. Without this, kustomize creates them in the `default` namespace.
+
+**Additional workspaces (multi-agent):**
+
+When running multiple agents with isolated workspaces, use `additionalWorkspaces` to seed files for each agent. Each entry seeds to `~/.openclaw/workspace-<name>/` -- set matching paths in `spec.config.raw.agents.list[].workspace`.
+
+```yaml
+spec:
+  workspace:
+    configMapRef:
+      name: main-agent-workspace
+    additionalWorkspaces:
+      - name: scheduler
+        configMapRef:
+          name: scheduler-workspace
+        initialFiles:
+          SOUL.md: "I am the scheduler agent"
+        initialDirectories:
+          - tools
+  config:
+    raw:
+      agents:
+        list:
+          - id: main
+            name: "Main Agent"
+          - id: scheduler
+            name: "Scheduler Agent"
+      bindings:
+        - agentId: scheduler
+          match:
+            channel: discord
+            peer:
+              kind: channel
+              id: "123456789"        # bind to a specific channel
+```
+
+Each additional workspace supports the same `configMapRef`, `initialFiles`, and `initialDirectories` as the default workspace. Operator-injected `ENVIRONMENT.md` is included; `BOOTSTRAP.md` is not (only the default agent runs onboarding). Max 10 additional workspaces.
+
+> **Seed-once behavior:** Workspace files (both default and additional) are only written on first boot when they don't already exist on the PVC. If an agent modifies its own SOUL.md or AGENT.md at runtime, those changes persist across pod restarts and are never overwritten by the ConfigMap content. To re-seed a file, delete it from the PVC first.
+
+**Full GitOps example with multiple agents:**
+
+```yaml
+# kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: my-namespace
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+resources:
+  - instance.yaml
+
+configMapGenerator:
+  - name: main-agent-workspace
+    files:
+      - agents/main/SOUL.md
+      - agents/main/AGENT.md
+  - name: scheduler-workspace
+    files:
+      - agents/scheduler/SOUL.md
+      - agents/scheduler/TOOLS.md
+```
 
 ### Self-configure
 
@@ -968,8 +1091,8 @@ Platform-specific deployment guides are available for:
 
 ```bash
 # Clone and set up
-git clone https://github.com/OpenClaw-rocks/k8s-operator.git
-cd k8s-operator
+git clone https://github.com/OpenClaw-rocks/openclaw-operator.git
+cd openclaw-operator
 go mod download
 
 # Generate code and manifests

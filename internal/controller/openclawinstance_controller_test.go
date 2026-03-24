@@ -31,8 +31,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
-	"github.com/openclawrocks/k8s-operator/internal/resources"
+	openclawv1alpha1 "github.com/openclawrocks/openclaw-operator/api/v1alpha1"
+	"github.com/openclawrocks/openclaw-operator/internal/resources"
 )
 
 var _ = Describe("OpenClawInstance Controller", func() {
@@ -262,7 +262,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				Spec: openclawv1alpha1.OpenClawInstanceSpec{},
 			}
 
-			sts := resources.BuildStatefulSet(instance, "", nil)
+			sts := resources.BuildStatefulSet(instance, "", nil, nil, nil)
 
 			// Verify pod security context
 			Expect(sts.Spec.Template.Spec.SecurityContext).NotTo(BeNil())

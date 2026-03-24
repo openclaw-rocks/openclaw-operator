@@ -22,7 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1alpha1 "github.com/openclawrocks/openclaw-operator/api/v1alpha1"
 )
 
 var rLog = ctrl.Log.WithName("resources")
@@ -62,6 +62,12 @@ const (
 	// session management (launch Chrome per connection, kill on disconnect)
 	// is incompatible with Playwright's connectOverCDP -- see #360.
 	DefaultChromiumImage = "chromedp/headless-shell"
+
+	// DeprecatedChromiumImage is the old browserless image used before v0.22.1.
+	// Instances created with older CRDs have this value stored via kubebuilder
+	// defaults. The builder normalizes it to DefaultChromiumImage at reconcile
+	// time so upgrades work without manual spec edits.
+	DeprecatedChromiumImage = "ghcr.io/browserless/chromium"
 
 	// DefaultChromiumTag is the default tag for the Chromium sidecar image.
 	// "stable" tracks the latest Chrome stable channel release.

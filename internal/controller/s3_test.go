@@ -24,8 +24,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
-	"github.com/openclawrocks/k8s-operator/internal/resources"
+	openclawv1alpha1 "github.com/openclawrocks/openclaw-operator/api/v1alpha1"
+	"github.com/openclawrocks/openclaw-operator/internal/resources"
 )
 
 var _ = Describe("S3 Helpers", func() {
@@ -157,6 +157,9 @@ var _ = Describe("S3 Helpers", func() {
 				}
 			}
 
+			// Verify --copy-links flag is present (follows symlinks during backup)
+			Expect(container.Args).To(ContainElement("--copy-links"))
+
 			// Verify non-sensitive env vars use plain Value
 			for _, e := range container.Env {
 				if e.Name == "S3_ENDPOINT" {
@@ -188,6 +191,8 @@ var _ = Describe("S3 Helpers", func() {
 			Expect(container.Args[0]).To(Equal("sync"))
 			// For restore, dest is /data/
 			Expect(container.Args[2]).To(Equal("/data/"))
+			// --copy-links is present for restore too (harmless - no symlinks on S3 side)
+			Expect(container.Args).To(ContainElement("--copy-links"))
 
 			vol := job.Spec.Template.Spec.Volumes[0]
 			Expect(vol.PersistentVolumeClaim.ClaimName).To(Equal("myinst-data"))
@@ -468,8 +473,9 @@ var _ = Describe("S3 Helpers", func() {
 			Expect(container.Command[0]).To(Equal("sh"))
 			Expect(container.Command[1]).To(Equal("-c"))
 			cmd := container.Command[2]
-			// Step 1: incremental sync to fixed "latest" path
+			// Step 1: incremental sync to fixed "latest" path (with --copy-links for symlinks)
 			Expect(cmd).To(ContainSubstring("rclone sync /data/"))
+			Expect(cmd).To(ContainSubstring("--copy-links"))
 			Expect(cmd).To(ContainSubstring("/latest"))
 			Expect(cmd).To(ContainSubstring(":s3:test-bucket/backups/cus_123/myinst/periodic"))
 			// Step 2: daily snapshot

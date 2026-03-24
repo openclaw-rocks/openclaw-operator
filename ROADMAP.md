@@ -44,7 +44,7 @@
 - Custom init containers (`spec.initContainers`)
 - JSON5 config support (`spec.config.format: json5`)
 - Docs: model fallback chains, custom AI providers (Ollama/vLLM), External Secrets Operator
-- Runtime dependency init containers — `spec.runtimeDeps.pnpm` and `spec.runtimeDeps.python` ([#89](https://github.com/openclaw-rocks/k8s-operator/issues/89))
+- Runtime dependency init containers — `spec.runtimeDeps.pnpm` and `spec.runtimeDeps.python` ([#89](https://github.com/openclaw-rocks/openclaw-operator/issues/89))
 - Ollama sidecar pattern (documented example + NetworkPolicy rules)
 
 ## Planned

@@ -31,8 +31,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
-	"github.com/openclawrocks/k8s-operator/internal/resources"
+	openclawv1alpha1 "github.com/openclawrocks/openclaw-operator/api/v1alpha1"
+	"github.com/openclawrocks/openclaw-operator/internal/resources"
 )
 
 const (
@@ -223,7 +223,7 @@ func buildRcloneJob(
 		// S3 -> PVC
 		args = append([]string{"sync", rcloneRemotePath, "/data/", providerFlag, "--s3-endpoint=$(S3_ENDPOINT)"}, authArgs...)
 	}
-	args = append(args, "--transfers=8", "--checkers=16", "-v")
+	args = append(args, "--copy-links", "--transfers=8", "--checkers=16", "-v")
 
 	if creds.Region != "" {
 		args = append(args, "--s3-region=$(S3_REGION)")
@@ -472,7 +472,7 @@ func buildBackupCronJob(
 			` && S3="%s"`+
 			// Step 1: incremental sync to fixed "latest" path
 			` && echo "Step 1: incremental sync to latest"`+
-			` && rclone sync /data/ "${S3}/latest" $R --transfers=8 --checkers=16 -v`+
+			` && rclone sync /data/ "${S3}/latest" $R --copy-links --transfers=8 --checkers=16 -v`+
 			// Step 2: daily snapshot (copy latest to snapshots/YYYY-MM-DD)
 			` && TODAY=$(date -u +%%Y-%%m-%%d)`+
 			` && echo "Step 2: snapshot ${TODAY}"`+
