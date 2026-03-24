@@ -2325,6 +2325,77 @@ var _ = Describe("OpenClawInstance Controller", func() {
 
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})
+
+		It("Should preserve trusted-proxy auth mode while injecting token", func() {
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instanceName := "cmref-trusted-proxy"
+
+			// Create external ConfigMap with trusted-proxy auth mode
+			externalCM := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "trusted-proxy-config",
+					Namespace: namespace,
+				},
+				Data: map[string]string{
+					"openclaw.json": `{"gateway":{"auth":{"mode":"trusted-proxy"}}}`,
+				},
+			}
+			Expect(k8sClient.Create(ctx, externalCM)).Should(Succeed())
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					Config: openclawv1alpha1.ConfigSpec{
+						ConfigMapRef: &openclawv1alpha1.ConfigMapKeySelector{
+							Name: "trusted-proxy-config",
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			// Verify operator-managed ConfigMap preserves the auth mode
+			cm := &corev1.ConfigMap{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.ConfigMapName(instance),
+					Namespace: namespace,
+				}, cm)
+			}, timeout, interval).Should(Succeed())
+
+			configContent, ok := cm.Data["openclaw.json"]
+			Expect(ok).To(BeTrue(), "operator-managed ConfigMap should have openclaw.json key")
+
+			var parsed map[string]interface{}
+			Expect(json.Unmarshal([]byte(configContent), &parsed)).To(Succeed())
+
+			gw, ok := parsed["gateway"].(map[string]interface{})
+			Expect(ok).To(BeTrue(), "config should have gateway key")
+			auth, ok := gw["auth"].(map[string]interface{})
+			Expect(ok).To(BeTrue(), "gateway should have auth key")
+
+			// Mode should be preserved as trusted-proxy (not overwritten to token)
+			Expect(auth["mode"]).To(Equal("trusted-proxy"),
+				"gateway.auth.mode should be preserved as trusted-proxy")
+			// Token should still be injected for internal loopback auth
+			Expect(auth["token"]).NotTo(BeEmpty(),
+				"gateway.auth.token should be set for internal loopback connections")
+
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
 	})
 
 	Context("When creating an instance with auto-scaling enabled", func() {

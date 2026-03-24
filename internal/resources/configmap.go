@@ -133,9 +133,10 @@ func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseCo
 	}
 }
 
-// enrichConfigWithGatewayAuth injects gateway.auth.mode=token and
-// gateway.auth.token into the config JSON. If the user has already set
-// gateway.auth.token, the config is returned unchanged (user override wins).
+// enrichConfigWithGatewayAuth injects the gateway token into the config JSON
+// for internal loopback authentication (cron, sessions_spawn). If the user has
+// not set gateway.auth.mode, it also injects mode=token. If the user has already
+// set gateway.auth.token, the config is returned unchanged (user override wins).
 func enrichConfigWithGatewayAuth(configJSON []byte, token string) ([]byte, error) {
 	var config map[string]interface{}
 	if err := json.Unmarshal(configJSON, &config); err != nil {
@@ -152,12 +153,18 @@ func enrichConfigWithGatewayAuth(configJSON []byte, token string) ([]byte, error
 		auth = make(map[string]interface{})
 	}
 
-	// If the user already set a token, don't override
+	// If the user already set a token, don't override anything
 	if existingToken, ok := auth["token"].(string); ok && existingToken != "" {
 		return configJSON, nil
 	}
 
-	auth["mode"] = "token" //nolint:goconst // OpenClaw auth mode, not k8s Secret key
+	// Only set mode to "token" if the user hasn't chosen a mode already.
+	// This preserves user-configured modes like "trusted-proxy" while still
+	// injecting the operator token for internal loopback connections (e.g.
+	// openclaw cron, sessions_spawn).
+	if _, hasMode := auth["mode"]; !hasMode {
+		auth["mode"] = "token" //nolint:goconst // OpenClaw auth mode, not k8s Secret key
+	}
 	auth["token"] = token
 	gw["auth"] = auth
 	config["gateway"] = gw
