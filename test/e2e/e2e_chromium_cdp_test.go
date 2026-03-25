@@ -500,8 +500,8 @@ var _ = Describe("Chromium Deprecated Image Migration", Ordered, func() {
 		expectedImage := resources.DefaultChromiumImage + ":" + resources.DefaultChromiumTag
 		Expect(chromiumContainer.Image).To(Equal(expectedImage),
 			"deprecated image should be migrated to %s", expectedImage)
-		Expect(chromiumContainer.Command).To(BeEmpty(),
-			"Command must be nil so run.sh entrypoint is used")
+		Expect(chromiumContainer.Command).To(Equal(resources.ChromiumEntrypointCommand),
+			"Command must be the entrypoint wrapper with quoted \"$@\" (#396)")
 
 		By("Waiting for pod to exist")
 		Eventually(func() string {

@@ -1512,10 +1512,10 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			Expect(chromiumContainer.Ports).To(HaveLen(1))
 			Expect(chromiumContainer.Ports[0].ContainerPort).To(Equal(int32(resources.ChromiumPort)))
 
-			// Command must be nil - Chrome runs via the image's run.sh entrypoint.
-			// Setting Command bypasses run.sh and breaks CDP on Chrome M136+ (#396).
-			Expect(chromiumContainer.Command).To(BeEmpty(),
-				"chromium Command must be nil so the image entrypoint (run.sh) is used")
+			// Command must be the entrypoint wrapper that fixes unquoted $@
+			// in upstream run.sh, preventing word-splitting of args with spaces (#396).
+			Expect(chromiumContainer.Command).To(Equal(resources.ChromiumEntrypointCommand),
+				"chromium Command must be the entrypoint wrapper with quoted \"$@\" (#396)")
 
 			// Args should contain launch flags passed to run.sh
 			Expect(chromiumContainer.Args).NotTo(BeEmpty(), "chromium should have Args with launch flags")
@@ -1659,9 +1659,9 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			Expect(chromiumContainer.Image).To(Equal(expectedImage),
 				"deprecated browserless image should be migrated to %s", expectedImage)
 
-			// Command must be nil so run.sh entrypoint is used (#396)
-			Expect(chromiumContainer.Command).To(BeEmpty(),
-				"chromium Command must be nil so the image entrypoint (run.sh) is used")
+			// Command must be the entrypoint wrapper with quoted "$@" (#396)
+			Expect(chromiumContainer.Command).To(Equal(resources.ChromiumEntrypointCommand),
+				"chromium Command must be the entrypoint wrapper with quoted \"$@\" (#396)")
 
 			// Args should still contain launch flags
 			Expect(chromiumContainer.Args).NotTo(BeEmpty(),

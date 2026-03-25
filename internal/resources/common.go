@@ -175,9 +175,28 @@ const (
 	OTelCollectorConfigKey = "otel-collector.yaml"
 )
 
+// ChromiumEntrypointCommand is a bash wrapper that replicates the upstream
+// chromedp/headless-shell run.sh entrypoint with properly quoted "$@".
+// The upstream run.sh uses unquoted $@ which causes word-splitting of
+// args containing spaces (e.g. --user-agent=...), leading to Chrome's
+// "Multiple targets are not supported" error. See #396.
+//
+// The socat bridge forwards 0.0.0.0:9222 to 127.0.0.1:9223 to work around
+// Chrome M136+ silently forcing --remote-debugging-address to loopback.
+//
+// Only used for the default chromedp/headless-shell image; custom images
+// keep their own entrypoint.
+var ChromiumEntrypointCommand = []string{
+	"/bin/bash", "-c",
+	"exec socat TCP4-LISTEN:9222,fork TCP4:127.0.0.1:9223 &\nexec /headless-shell/headless-shell --no-sandbox --use-gl=angle --use-angle=swiftshader --remote-debugging-address=0.0.0.0 --remote-debugging-port=9223 \"$@\"",
+	"--",
+}
+
 // DefaultChromiumLaunchArgs are additional Chrome flags passed as container
-// args to run.sh. The image entrypoint (run.sh) handles CDP connectivity
-// (--remote-debugging-port/--remote-debugging-address) internally.
+// args. When using the default image, ChromiumEntrypointCommand provides
+// the base flags (--no-sandbox, --use-gl, --use-angle, CDP flags); these
+// are the operator-specific extras. For custom images (no Command override),
+// --no-sandbox is included here as a safety default.
 // User ExtraArgs are appended via deduplicateArgs.
 var DefaultChromiumLaunchArgs = []string{
 	"--no-sandbox",
