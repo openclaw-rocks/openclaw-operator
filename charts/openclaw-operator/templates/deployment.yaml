@@ -51,6 +51,17 @@ spec:
             {{- else }}
             - --metrics-bind-address=0
             {{- end }}
+            {{- if .Values.otlp.enabled }}
+            {{- if not .Values.otlp.endpoint }}
+            {{- fail "otlp.endpoint is required when otlp.enabled is true" }}
+            {{- end }}
+            - --otlp-endpoint={{ .Values.otlp.endpoint }}
+            {{- if .Values.otlp.insecure }}
+            - --otlp-insecure=true
+            {{- else }}
+            - --otlp-insecure=false
+            {{- end }}
+            {{- end }}
           env:
             - name: POD_NAMESPACE
               valueFrom:

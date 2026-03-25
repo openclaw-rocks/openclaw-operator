@@ -30,12 +30,18 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	otelprom "go.opentelemetry.io/contrib/bridges/prometheus"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
+	otelmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/resource"
+	semconv "go.opentelemetry.io/otel/semconv/v1.30.0"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -45,6 +51,9 @@ import (
 	"github.com/openclawrocks/openclaw-operator/internal/registry"
 	"github.com/openclawrocks/openclaw-operator/internal/skillpacks"
 )
+
+// version is set at build time via ldflags (see .goreleaser.yaml).
+var version = "dev"
 
 var (
 	scheme   = runtime.NewScheme()
@@ -62,6 +71,8 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var otlpEndpoint string
+	var otlpInsecure bool
 	var tlsOpts []func(*tls.Config)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable.")
@@ -69,6 +80,8 @@ func main() {
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false, "Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
 	flag.BoolVar(&secureMetrics, "metrics-secure", true, "If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false, "If set, HTTP/2 will be enabled for the metrics and webhook servers.")
+	flag.StringVar(&otlpEndpoint, "otlp-endpoint", "", "OTLP gRPC endpoint for metrics export (e.g. collector.observability.svc:4317). Also respects OTEL_EXPORTER_OTLP_ENDPOINT env var.")
+	flag.BoolVar(&otlpInsecure, "otlp-insecure", true, "If set, OTLP exporter connects without TLS.")
 
 	opts := zap.Options{
 		Development: true,
@@ -185,9 +198,86 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Set up OTLP metrics export if configured. The flag takes precedence
+	// over the environment variable. OTLP export is supplementary - if setup
+	// fails, the operator continues without it rather than crash-looping.
+	var shutdownOTLP func(context.Context) error
+	if otlpEndpoint == "" {
+		otlpEndpoint = os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	}
+	if otlpEndpoint != "" {
+		var otlpErr error
+		shutdownOTLP, otlpErr = setupOTLPMetrics(otlpEndpoint, otlpInsecure)
+		if otlpErr != nil {
+			setupLog.Error(otlpErr, "unable to set up OTLP metrics exporter, continuing without OTLP")
+		} else {
+			setupLog.Info("OTLP metrics exporter configured", "endpoint", otlpEndpoint, "insecure", otlpInsecure)
+		}
+	}
+
 	setupLog.Info("starting manager")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "problem running manager")
-		os.Exit(1)
 	}
+
+	// Flush remaining OTLP metrics before exit
+	if shutdownOTLP != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if shutdownErr := shutdownOTLP(shutdownCtx); shutdownErr != nil {
+			setupLog.Error(shutdownErr, "error shutting down OTLP metrics exporter")
+		}
+	}
+}
+
+// setupOTLPMetrics configures an OTLP gRPC metrics exporter that bridges all
+// Prometheus metrics registered with controller-runtime's default registry.
+// This includes both built-in controller-runtime metrics (workqueue, client,
+// informer) and custom openclaw_* metrics. Returns a shutdown function that
+// flushes remaining metrics during graceful termination.
+func setupOTLPMetrics(endpoint string, insecure bool) (func(context.Context) error, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	opts := []otlpmetricgrpc.Option{
+		otlpmetricgrpc.WithEndpoint(endpoint),
+	}
+	if insecure {
+		opts = append(opts, otlpmetricgrpc.WithInsecure())
+	}
+
+	exporter, err := otlpmetricgrpc.New(ctx, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("creating OTLP metrics exporter: %w", err)
+	}
+
+	res, err := resource.New(ctx,
+		resource.WithAttributes(
+			semconv.ServiceName("openclaw-operator"),
+			semconv.ServiceVersion(version),
+		),
+		resource.WithTelemetrySDK(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("creating OTel resource: %w", err)
+	}
+
+	// Bridge controller-runtime's Prometheus registry to OTel. All metrics
+	// registered with metrics.Registry are automatically exported via OTLP
+	// alongside the existing Prometheus scrape endpoint.
+	bridge := otelprom.NewMetricProducer(
+		otelprom.WithGatherer(metrics.Registry),
+	)
+
+	provider := otelmetric.NewMeterProvider(
+		otelmetric.WithReader(
+			otelmetric.NewPeriodicReader(exporter,
+				otelmetric.WithInterval(30*time.Second),
+				otelmetric.WithProducer(bridge),
+			),
+		),
+		otelmetric.WithResource(res),
+	)
+
+	return provider.Shutdown, nil
 }

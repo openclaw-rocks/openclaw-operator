@@ -976,6 +976,20 @@ spec:
           release: prometheus
 ```
 
+### OTLP metrics export (operator)
+
+The operator can push its own metrics (reconciliation counters, workqueue stats, client latencies, etc.) to any OTLP-compatible backend via gRPC. This bridges all Prometheus metrics to OpenTelemetry, running alongside the existing Prometheus scrape endpoint.
+
+```yaml
+# values.yaml
+otlp:
+  enabled: true
+  endpoint: "otel-collector.observability.svc:4317"
+  insecure: true  # set to false for TLS
+```
+
+The endpoint can also be configured via the `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable. Metrics are pushed every 30 seconds. If the OTLP endpoint is unreachable, the operator logs a warning and continues operating normally.
+
 ### PrometheusRule (alerts)
 
 Auto-provisions a PrometheusRule with 7 alerts including runbook URLs:
