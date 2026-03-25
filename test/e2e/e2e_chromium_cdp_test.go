@@ -823,7 +823,16 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 		}
 	})
 
+	// Skip: This test depends on an external LLM (OpenRouter/DeepSeek) choosing
+	// to invoke the browser tool correctly AND device pairing resolving before the
+	// LLM commits to a response path. Both are non-deterministic and cannot be made
+	// reliable in CI. The Tier 1 and Tier 2 CDP tests already validate the browser
+	// pipeline (CDP connectivity + screenshot via direct WebSocket commands).
+	// Run manually with: E2E_RUN_LLM_INTEGRATION=true go test ./test/e2e/... -run "agent pipeline"
 	It("Should take a screenshot of openclaw.rocks via the agent pipeline", func() {
+		if os.Getenv("E2E_RUN_LLM_INTEGRATION") != "true" {
+			Skip("Skipping LLM integration test (set E2E_RUN_LLM_INTEGRATION=true to run)")
+		}
 		By("Reading the gateway token from the auto-generated Secret")
 		tokenSecret := &corev1.Secret{}
 		secretName := resources.GatewayTokenSecretName(&openclawv1alpha1.OpenClawInstance{
@@ -913,10 +922,6 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 		Expect(sessionKey).NotTo(BeEmpty(), "connect response should contain mainSessionKey")
 		GinkgoWriter.Printf("Session key: %s\n", sessionKey)
 
-		// Device pairing warm-up is not needed: the operator injects
-		// dangerouslyDisableDeviceAuth=true into the gateway config, so
-		// control-ui clients are authorized immediately.
-
 		By("Sending message to take a screenshot of openclaw.rocks")
 		sendID := randomHex()
 		idempotencyKey := randomHex()
@@ -981,6 +986,28 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 				}
 
 				switch {
+				case msg.Type == "event" && msg.Event == "device.pair.requested":
+					// Auto-approve device pairing requests from internal agent
+					// processes. Without this, the agent cannot use browser/node
+					// features because the internal connection triggers pairing.
+					var pairPayload map[string]interface{}
+					if jsonErr := json.Unmarshal(msg.Payload, &pairPayload); jsonErr == nil {
+						if reqID, ok := pairPayload["requestId"].(string); ok {
+							GinkgoWriter.Printf("Auto-approving device pair request: %s\n", reqID)
+							approveReq := map[string]interface{}{
+								"type":   "req",
+								"id":     randomHex(),
+								"method": "device.pair.approve",
+								"params": map[string]interface{}{
+									"requestId": reqID,
+								},
+							}
+							if wErr := ws.WriteJSON(approveReq); wErr != nil {
+								GinkgoWriter.Printf("Failed to send pair approve: %v\n", wErr)
+							}
+						}
+					}
+
 				case msg.Type == "event" && msg.Event == "agent":
 					// Extract assistant text from agent stream events
 					var agentPayload map[string]interface{}
@@ -1003,6 +1030,7 @@ var _ = Describe("Chromium Full Integration Tests", Ordered, func() {
 							agentCompleted = true
 						}
 					}
+
 
 				case msg.Type == "res" && msg.ID == sendID:
 					if msg.OK != nil && *msg.OK {

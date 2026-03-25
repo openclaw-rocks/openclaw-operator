@@ -2196,6 +2196,40 @@ func TestBuildConfigMapFromBytes_EnrichesExternalConfig(t *testing.T) {
 	}
 }
 
+func TestBuildConfigMapFromBytes_PreservesTrustedProxyMode(t *testing.T) {
+	instance := newTestInstance("trusted-proxy")
+	externalConfig := []byte(`{"gateway":{"auth":{"mode":"trusted-proxy"}},"mcpServers":{"test":{"url":"http://localhost"}}}`)
+
+	cm := BuildConfigMapFromBytes(instance, externalConfig, "my-gateway-token", nil)
+
+	content := cm.Data["openclaw.json"]
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to parse config: %v", err)
+	}
+
+	// User config should be preserved
+	if _, ok := parsed["mcpServers"]; !ok {
+		t.Error("mcpServers should be preserved from external config")
+	}
+
+	// Gateway auth mode should be preserved, token should be injected
+	gw, ok := parsed["gateway"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected gateway key after enrichment")
+	}
+	auth, ok := gw["auth"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected gateway.auth key after enrichment")
+	}
+	if auth["mode"] != "trusted-proxy" {
+		t.Errorf("gateway.auth.mode = %v, want %q (user's mode should be preserved)", auth["mode"], "trusted-proxy")
+	}
+	if auth["token"] != "my-gateway-token" {
+		t.Errorf("gateway.auth.token = %v, want %q (token should still be injected)", auth["token"], "my-gateway-token")
+	}
+}
+
 func TestBuildConfigMapFromBytes_PreservesUserConfig(t *testing.T) {
 	instance := newTestInstance("from-bytes-preserve")
 	externalConfig := []byte(`{
@@ -6216,6 +6250,76 @@ func TestEnrichConfigWithGatewayAuth_InvalidJSON(t *testing.T) {
 	// Should return unchanged
 	if !bytes.Equal(result, configJSON) {
 		t.Errorf("expected unchanged result for invalid JSON, got %s", string(result))
+	}
+}
+
+func TestEnrichConfigWithGatewayAuth_PreservesUserMode(t *testing.T) {
+	configJSON := []byte(`{"gateway":{"auth":{"mode":"trusted-proxy"}}}`)
+	token := "operator-generated-token"
+
+	result, err := enrichConfigWithGatewayAuth(configJSON, token)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(result, &parsed); err != nil {
+		t.Fatalf("failed to parse result: %v", err)
+	}
+
+	gw := parsed["gateway"].(map[string]interface{})
+	auth := gw["auth"].(map[string]interface{})
+
+	// User's mode should be preserved
+	if auth["mode"] != "trusted-proxy" {
+		t.Errorf("gateway.auth.mode = %v, want %q (user's mode should be preserved)", auth["mode"], "trusted-proxy")
+	}
+	// Operator's token should still be injected for internal loopback auth
+	if auth["token"] != token {
+		t.Errorf("gateway.auth.token = %v, want %q (token should be injected for internal auth)", auth["token"], token)
+	}
+}
+
+func TestEnrichConfigWithGatewayAuth_PreservesUserModeAndToken(t *testing.T) {
+	configJSON := []byte(`{"gateway":{"auth":{"mode":"trusted-proxy","token":"user-custom-token"}}}`)
+	token := "operator-generated-token"
+
+	result, err := enrichConfigWithGatewayAuth(configJSON, token)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should be completely unchanged because user set their own token
+	if !bytes.Equal(result, configJSON) {
+		t.Errorf("config should be unchanged when user sets both mode and token\ngot:  %s\nwant: %s", string(result), string(configJSON))
+	}
+}
+
+func TestEnrichConfigWithGatewayAuth_PreservesOtherAuthFields(t *testing.T) {
+	configJSON := []byte(`{"gateway":{"auth":{"mode":"trusted-proxy","allowTailscale":true}}}`)
+	token := "operator-token"
+
+	result, err := enrichConfigWithGatewayAuth(configJSON, token)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(result, &parsed); err != nil {
+		t.Fatalf("failed to parse result: %v", err)
+	}
+
+	gw := parsed["gateway"].(map[string]interface{})
+	auth := gw["auth"].(map[string]interface{})
+
+	if auth["mode"] != "trusted-proxy" {
+		t.Errorf("gateway.auth.mode = %v, want %q", auth["mode"], "trusted-proxy")
+	}
+	if auth["allowTailscale"] != true {
+		t.Errorf("gateway.auth.allowTailscale = %v, want true", auth["allowTailscale"])
+	}
+	if auth["token"] != token {
+		t.Errorf("gateway.auth.token = %v, want %q", auth["token"], token)
 	}
 }
 
