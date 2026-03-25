@@ -1565,10 +1565,20 @@ func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.
 	// Append user-supplied extra env vars
 	chromiumEnv = append(chromiumEnv, instance.Spec.Chromium.ExtraEnv...)
 
+	// Override entrypoint for the default image to fix unquoted $@ in
+	// upstream run.sh that causes word-splitting of args with spaces
+	// (e.g. --user-agent), leading to "Multiple targets are not supported".
+	// Custom images keep their own entrypoint. See #396.
+	var command []string
+	if repo == DefaultChromiumImage {
+		command = ChromiumEntrypointCommand
+	}
+
 	return corev1.Container{
 		Name:                     "chromium",
 		Image:                    image,
 		ImagePullPolicy:          corev1.PullIfNotPresent,
+		Command:                  command,
 		Args:                     ChromiumArgs(instance),
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,

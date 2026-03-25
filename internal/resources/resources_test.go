@@ -487,10 +487,10 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 		t.Errorf("chromium image = %q, want %q", chromium.Image, expectedImage)
 	}
 
-	// Command must be nil - Chrome runs via the image's run.sh entrypoint.
-	// Setting Command bypasses run.sh and breaks CDP on Chrome M136+ (#396).
-	if len(chromium.Command) != 0 {
-		t.Errorf("chromium Command should be nil (use image entrypoint), got %v", chromium.Command)
+	// Command must be the entrypoint wrapper that fixes unquoted $@ in
+	// upstream run.sh, preventing word-splitting of args with spaces (#396).
+	if len(chromium.Command) != len(ChromiumEntrypointCommand) {
+		t.Errorf("chromium Command = %v, want ChromiumEntrypointCommand", chromium.Command)
 	}
 
 	// Container args should include launch flags
@@ -11688,20 +11688,49 @@ func TestBuildStatefulSet_NoChromiumProxy(t *testing.T) {
 	}
 }
 
-// TestBuildStatefulSet_ChromiumNoCommandOverride ensures the chromium container
-// does NOT set a Command override, so the image's own entrypoint (run.sh) is
-// used. Bypassing run.sh breaks CDP on Chrome M136+ because Chrome silently
-// forces --remote-debugging-address to 127.0.0.1 and run.sh has a socat
-// workaround for this. See #396.
-func TestBuildStatefulSet_ChromiumNoCommandOverride(t *testing.T) {
-	instance := newTestInstance("no-cmd")
+// TestBuildStatefulSet_ChromiumEntrypointCommand ensures the default chromium
+// image gets a Command override that fixes unquoted $@ in upstream run.sh.
+// Without this, args containing spaces (e.g. --user-agent=...) get word-split,
+// causing Chrome's "Multiple targets are not supported" error. See #396.
+func TestBuildStatefulSet_ChromiumEntrypointCommand(t *testing.T) {
+	instance := newTestInstance("entrypoint-cmd")
 	instance.Spec.Chromium.Enabled = true
 
 	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	for _, c := range sts.Spec.Template.Spec.InitContainers {
 		if c.Name == "chromium" {
+			if len(c.Command) != len(ChromiumEntrypointCommand) {
+				t.Fatalf("chromium Command length = %d, want %d", len(c.Command), len(ChromiumEntrypointCommand))
+			}
+			for i, arg := range c.Command {
+				if arg != ChromiumEntrypointCommand[i] {
+					t.Errorf("chromium Command[%d] = %q, want %q", i, arg, ChromiumEntrypointCommand[i])
+				}
+			}
+			// Verify the script uses quoted "$@"
+			script := c.Command[2]
+			if !strings.Contains(script, `"$@"`) {
+				t.Error("entrypoint script must use quoted \"$@\" to prevent word-splitting")
+			}
+			return
+		}
+	}
+	t.Fatal("chromium init container not found")
+}
+
+// TestBuildStatefulSet_ChromiumCustomImageNoCommand ensures custom chromium
+// images do NOT get a Command override - they keep their own entrypoint.
+func TestBuildStatefulSet_ChromiumCustomImageNoCommand(t *testing.T) {
+	instance := newTestInstance("custom-img-no-cmd")
+	instance.Spec.Chromium.Enabled = true
+	instance.Spec.Chromium.Image.Repository = "my-registry/my-chrome"
+	instance.Spec.Chromium.Image.Tag = "v1"
+
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
+	for _, c := range sts.Spec.Template.Spec.InitContainers {
+		if c.Name == "chromium" {
 			if len(c.Command) != 0 {
-				t.Errorf("chromium Command should be nil (use image entrypoint), got %v", c.Command)
+				t.Errorf("custom image should have nil Command (keep own entrypoint), got %v", c.Command)
 			}
 			return
 		}
@@ -11727,8 +11756,9 @@ func TestBuildStatefulSet_ChromiumMigratesDeprecatedImage(t *testing.T) {
 			if c.Image != expectedImage {
 				t.Errorf("chromium image = %q, want %q (should migrate deprecated image)", c.Image, expectedImage)
 			}
-			if len(c.Command) != 0 {
-				t.Errorf("chromium Command should be nil after migration, got %v", c.Command)
+			// After migration to default image, should get the entrypoint wrapper
+			if len(c.Command) != len(ChromiumEntrypointCommand) {
+				t.Errorf("chromium Command after migration = %v, want ChromiumEntrypointCommand", c.Command)
 			}
 			return
 		}
@@ -11774,6 +11804,31 @@ func TestChromiumArgs_PersistenceAddsUserDataDir(t *testing.T) {
 
 	if !strings.Contains(argsStr, "--user-data-dir=/chromium-data") {
 		t.Error("persistence should add --user-data-dir=/chromium-data")
+	}
+}
+
+// TestChromiumArgs_ExtraArgsWithSpacesPreserved verifies that ExtraArgs
+// containing spaces (e.g. --user-agent=...) are kept as single elements
+// in the args slice. Combined with ChromiumEntrypointCommand's quoted "$@",
+// this prevents Chrome's "Multiple targets are not supported" error. See #396.
+func TestChromiumArgs_ExtraArgsWithSpacesPreserved(t *testing.T) {
+	instance := newTestInstance("cdp-spaces")
+	instance.Spec.Chromium.Enabled = true
+	userAgent := "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+	instance.Spec.Chromium.ExtraArgs = []string{userAgent}
+
+	args := ChromiumArgs(instance)
+
+	// The user-agent must remain a single element, not split on spaces
+	found := false
+	for _, arg := range args {
+		if arg == userAgent {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("user-agent arg with spaces should be preserved as single element, got args: %v", args)
 	}
 }
 
