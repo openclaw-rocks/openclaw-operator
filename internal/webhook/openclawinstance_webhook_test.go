@@ -379,49 +379,49 @@ func TestValidateCreate_NoWarnPrivilegeEscalationFalse(t *testing.T) {
 	}
 }
 
-func TestValidateCreate_WarnsNoResourceLimits(t *testing.T) {
+func TestValidateCreate_RejectsNoResourceLimits(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
 	instance.Spec.Resources.Limits = openclawv1alpha1.ResourceList{} // empty
 
-	warnings, err := v.ValidateCreate(context.Background(), instance)
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
+	_, err := v.ValidateCreate(context.Background(), instance)
+	if err == nil {
+		t.Fatal("expected error for missing resource limits, got nil")
 	}
-	if !containsWarning(warnings, "Resource limits") {
-		t.Fatalf("expected warning about resource limits, got: %v", warnings)
+	if !strings.Contains(err.Error(), "resource limits are required") {
+		t.Fatalf("expected resource limits error, got: %v", err)
 	}
 }
 
-func TestValidateCreate_WarnsPartialResourceLimits_MissingCPU(t *testing.T) {
+func TestValidateCreate_RejectsPartialResourceLimits_MissingCPU(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
 	instance.Spec.Resources.Limits = openclawv1alpha1.ResourceList{
 		Memory: "4Gi",
 	}
 
-	warnings, err := v.ValidateCreate(context.Background(), instance)
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
+	_, err := v.ValidateCreate(context.Background(), instance)
+	if err == nil {
+		t.Fatal("expected error for missing CPU limit, got nil")
 	}
-	if !containsWarning(warnings, "Resource limits") {
-		t.Fatalf("expected warning about resource limits when CPU missing, got: %v", warnings)
+	if !strings.Contains(err.Error(), "resource limits are required") {
+		t.Fatalf("expected resource limits error, got: %v", err)
 	}
 }
 
-func TestValidateCreate_WarnsPartialResourceLimits_MissingMemory(t *testing.T) {
+func TestValidateCreate_RejectsPartialResourceLimits_MissingMemory(t *testing.T) {
 	v := &OpenClawInstanceValidator{}
 	instance := newTestInstance()
 	instance.Spec.Resources.Limits = openclawv1alpha1.ResourceList{
 		CPU: "2",
 	}
 
-	warnings, err := v.ValidateCreate(context.Background(), instance)
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
+	_, err := v.ValidateCreate(context.Background(), instance)
+	if err == nil {
+		t.Fatal("expected error for missing memory limit, got nil")
 	}
-	if !containsWarning(warnings, "Resource limits") {
-		t.Fatalf("expected warning about resource limits when memory missing, got: %v", warnings)
+	if !strings.Contains(err.Error(), "resource limits are required") {
+		t.Fatalf("expected resource limits error, got: %v", err)
 	}
 }
 
@@ -492,8 +492,11 @@ func TestValidateCreate_MultipleWarnings(t *testing.T) {
 	instance.Spec.Security.ContainerSecurityContext = &openclawv1alpha1.ContainerSecurityContextSpec{
 		AllowPrivilegeEscalation: ptr(true),
 	}
-	// 8. No resource limits
-	instance.Spec.Resources.Limits = openclawv1alpha1.ResourceList{}
+	// 8. Resource limits set (required, not a warning)
+	instance.Spec.Resources.Limits = openclawv1alpha1.ResourceList{
+		CPU:    "2",
+		Memory: "4Gi",
+	}
 	// 9. Latest image tag
 	instance.Spec.Image.Tag = "latest"
 	instance.Spec.Image.Digest = ""
@@ -503,7 +506,7 @@ func TestValidateCreate_MultipleWarnings(t *testing.T) {
 		t.Fatalf("expected no error (only warnings), got: %v", err)
 	}
 
-	expectedCount := 9
+	expectedCount := 8
 	if len(warnings) != expectedCount {
 		t.Fatalf("expected %d warnings, got %d: %v", expectedCount, len(warnings), warnings)
 	}
@@ -517,7 +520,6 @@ func TestValidateCreate_MultipleWarnings(t *testing.T) {
 		"Chromium",
 		"No AI provider API keys",
 		"allowPrivilegeEscalation",
-		"Resource limits",
 		"latest",
 	}
 	for _, sub := range expectedSubstrings {

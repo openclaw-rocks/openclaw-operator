@@ -5489,6 +5489,9 @@ func TestBuildStatefulSet_WithSkills_InitSkillsContainer(t *testing.T) {
 	if sc.RunAsNonRoot == nil || !*sc.RunAsNonRoot {
 		t.Error("init-skills: runAsNonRoot should be true")
 	}
+	if sc.SeccompProfile == nil || sc.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Error("init-skills: seccomp profile should be RuntimeDefault")
+	}
 
 	// NPM_CONFIG_IGNORE_SCRIPTS must be set to mitigate supply chain attacks (#91)
 	if envMap["NPM_CONFIG_IGNORE_SCRIPTS"] != "true" {

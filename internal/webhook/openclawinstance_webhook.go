@@ -188,9 +188,9 @@ func (v *OpenClawInstanceValidator) validate(instance *openclawv1alpha1.OpenClaw
 		warnings = append(warnings, "readOnlyRootFilesystem is disabled - consider enabling for security hardening (the PVC at ~/.openclaw/ and /tmp emptyDir provide writable paths)")
 	}
 
-	// 9. Validate resource limits are set (recommended)
+	// 9. Enforce resource limits (required for production safety)
 	if instance.Spec.Resources.Limits.CPU == "" || instance.Spec.Resources.Limits.Memory == "" {
-		warnings = append(warnings, "Resource limits are not fully configured - consider setting both CPU and memory limits")
+		return nil, fmt.Errorf("resource limits are required - both CPU and memory limits must be set")
 	}
 
 	// 10. Warn if using "latest" image tag without a digest pin
