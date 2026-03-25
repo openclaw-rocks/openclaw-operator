@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.23.2](https://github.com/openclaw-rocks/openclaw-operator/compare/v0.23.1...v0.23.2) (2026-03-25)
+
+
+### Bug Fixes
+
+* **security:** harden pod security contexts and enforce resource limits ([#408](https://github.com/openclaw-rocks/openclaw-operator/issues/408)) ([3b328a2](https://github.com/openclaw-rocks/openclaw-operator/commit/3b328a2c5b8460d1eb4cc2b644902ee1376a1bf9))
+
 ## [0.23.1](https://github.com/openclaw-rocks/openclaw-operator/compare/v0.23.0...v0.23.1) (2026-03-25)
 
 
