@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.24.1](https://github.com/openclaw-rocks/openclaw-operator/compare/v0.24.0...v0.24.1) (2026-03-26)
+
+
+### Bug Fixes
+
+* **chromium:** suppress container permission warnings ([#415](https://github.com/openclaw-rocks/openclaw-operator/issues/415)) ([43741dc](https://github.com/openclaw-rocks/openclaw-operator/commit/43741dc48930bb2711f38e3add76fb44e78e4f0e))
+
 ## [0.24.0](https://github.com/openclaw-rocks/openclaw-operator/compare/v0.23.2...v0.24.0) (2026-03-25)
 
 
