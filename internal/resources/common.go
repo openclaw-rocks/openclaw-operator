@@ -205,6 +205,7 @@ var DefaultChromiumLaunchArgs = []string{
 	"--disable-blink-features=AutomationControlled",
 	"--disable-features=AutomationControlled",
 	"--no-first-run",
+	"--disable-oom-score-adj",
 }
 
 // deduplicateArgs merges default and extra Chrome launch args, removing

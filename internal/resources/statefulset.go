@@ -1548,7 +1548,12 @@ func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.
 		},
 	}
 
-	var chromiumEnv []corev1.EnvVar
+	// Set HOME to /tmp (an emptyDir) so fontconfig and other tools that
+	// need a writable home directory work correctly. The default nobody
+	// user (65534) has home /nonexistent which does not exist.
+	chromiumEnv := []corev1.EnvVar{
+		{Name: "HOME", Value: "/tmp"},
+	}
 
 	// Add CA bundle mount if configured. The certificate file is mounted
 	// into the system CA directory so Chrome picks it up automatically.

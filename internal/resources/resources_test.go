@@ -472,6 +472,8 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 	}
 
 	// Chrome runs directly - no PORT/HOST env vars (those were browserless-specific)
+	// HOME=/tmp is set so fontconfig and other tools find a writable home directory.
+	foundHome := false
 	for _, env := range chromium.Env {
 		if env.Name == "PORT" {
 			t.Error("chromium container should not have PORT env var (no longer using browserless)")
@@ -479,6 +481,12 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 		if env.Name == "HOST" {
 			t.Error("chromium container should not have HOST env var (no longer using browserless)")
 		}
+		if env.Name == "HOME" && env.Value == "/tmp" {
+			foundHome = true
+		}
+	}
+	if !foundHome {
+		t.Error("chromium container should have HOME=/tmp env var")
 	}
 
 	// Chromium image defaults
@@ -498,7 +506,7 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 		t.Fatal("chromium container should have Args with Chrome launch flags")
 	}
 	argsStr := strings.Join(chromium.Args, " ")
-	for _, required := range []string{"--no-sandbox", "--disable-gpu", "--no-first-run"} {
+	for _, required := range []string{"--no-sandbox", "--disable-gpu", "--no-first-run", "--disable-oom-score-adj"} {
 		if !strings.Contains(argsStr, required) {
 			t.Errorf("chromium Args missing %q", required)
 		}
