@@ -43,3 +43,6 @@ charts/**/*.tgz
 
 # Build artifacts
 dist/
+
+# Claude Code worktrees
+.claude/worktrees/
