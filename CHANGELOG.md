@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.24.2](https://github.com/openclaw-rocks/openclaw-operator/compare/v0.24.1...v0.24.2) (2026-03-30)
+
+
+### Bug Fixes
+
+* remove accidental worktree gitlinks breaking kustomize remote refs ([#417](https://github.com/openclaw-rocks/openclaw-operator/issues/417)) ([9a2b5aa](https://github.com/openclaw-rocks/openclaw-operator/commit/9a2b5aa7b32adf4cd73c27dee1dd15f9c2e0f9d0))
+
 ## [0.24.1](https://github.com/openclaw-rocks/openclaw-operator/compare/v0.24.0...v0.24.1) (2026-03-26)
 
 
