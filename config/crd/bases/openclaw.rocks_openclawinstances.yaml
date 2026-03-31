@@ -9276,6 +9276,13 @@ spec:
                         type: string
                     type: object
                 type: object
+              suspended:
+                default: false
+                description: |-
+                  Suspended scales the workload to zero replicas when true.
+                  Non-runtime resources (Service, ConfigMap, RBAC, NetworkPolicy, PVC)
+                  remain fully managed. Set to false to resume normal operation.
+                type: boolean
               tailscale:
                 description: Tailscale configures Tailscale integration for tailnet
                   access and HTTPS
@@ -9781,6 +9788,7 @@ spec:
                 - BackingUp
                 - Restoring
                 - Updating
+                - Suspended
                 type: string
               restoreJobName:
                 description: RestoreJobName is the name of the active restore Job

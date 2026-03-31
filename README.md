@@ -80,6 +80,7 @@ Every request is validated against the instance's allowlist policy. Protected co
 | **Runtime Deps** | pnpm & Python/uv | Built-in init containers install pnpm (via corepack) or Python 3.12 + uv for MCP servers and skills |
 | **Auto-Update** | OCI registry polling | Opt-in version tracking: checks the registry for new semver releases, backs up first, rolls out, and auto-rolls back if the new version fails health checks |
 | **Scalable** | Auto-scaling | HPA integration with CPU and memory metrics, min/max replica bounds, automatic StatefulSet replica management |
+| **Operational** | Instance suspension | Scale to zero with `spec.suspended: true` - all non-runtime resources remain managed, resume instantly with `false` |
 | **Resilient** | Self-healing lifecycle | PodDisruptionBudgets, health probes, automatic config rollouts via content hashing, 5-minute drift detection |
 | **Backup/Restore** | S3-backed snapshots | Automatic backup to S3-compatible storage on deletion, pre-update, and on a cron schedule; restore into a new instance from any snapshot |
 | **Workspace Seeding** | Initial files & dirs | Pre-populate the workspace with files and directories before the agent starts; reference an external ConfigMap for GitOps workflows |
@@ -1049,6 +1050,27 @@ When auto-scaling is combined with persistent storage:
 - PVCs inherit `size`, `storageClass`, and `accessModes` from `spec.storage.persistence`
 - Retention policy is `Retain` for both scale-down and deletion -- data is preserved
 - If auto-scaling is later disabled, per-replica PVCs become orphaned and must be cleaned up manually
+
+### Instance Suspension
+
+Temporarily scale an instance to zero replicas without deleting it:
+
+```yaml
+spec:
+  suspended: true
+```
+
+When suspended:
+
+- The StatefulSet scales to 0 replicas (pods terminate)
+- All non-runtime resources (Service, ConfigMap, RBAC, NetworkPolicy, PVC) remain fully managed
+- Phase becomes `Suspended`, Ready condition becomes `False`
+- Auto-updates are paused until the instance is resumed
+- `openclaw_instance_ready` metric reports `0`
+
+Resume by setting `spec.suspended: false`. The instance returns to `Running` phase through the normal startup lifecycle.
+
+> **Note:** `spec.suspended` and `spec.availability.autoScaling.enabled` are mutually exclusive. Disable auto-scaling before suspending.
 
 ### Topology Spread Constraints
 

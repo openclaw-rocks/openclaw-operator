@@ -288,6 +288,11 @@ func (v *OpenClawInstanceValidator) validate(instance *openclawv1alpha1.OpenClaw
 		}
 	}
 
+	// 21. Reject suspended + HPA auto-scaling (mutually exclusive)
+	if instance.Spec.Suspended && resources.IsHPAEnabled(instance) {
+		return nil, fmt.Errorf("spec.suspended and spec.availability.autoScaling.enabled are mutually exclusive: disable auto-scaling before suspending")
+	}
+
 	return warnings, nil
 }
 

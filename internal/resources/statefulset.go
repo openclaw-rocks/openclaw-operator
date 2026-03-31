@@ -2590,9 +2590,13 @@ func normalizeProbe(p *corev1.Probe) {
 }
 
 // statefulSetReplicas returns the replica count for the StatefulSet.
+// When suspended, replicas is explicitly set to 0.
 // When HPA is enabled, replicas is set to nil so the HPA manages scaling.
 // Otherwise defaults to 1 (single-instance).
 func statefulSetReplicas(instance *openclawv1alpha1.OpenClawInstance) *int32 {
+	if instance.Spec.Suspended {
+		return Ptr(int32(0))
+	}
 	if IsHPAEnabled(instance) {
 		return nil
 	}

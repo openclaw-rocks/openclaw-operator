@@ -169,8 +169,9 @@ func (r *OpenClawInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// Snapshot status before mutations so we can skip no-op status updates
 	savedStatus := instance.Status.DeepCopy()
 
-	// If an auto-update is in progress, drive the state machine
-	if instance.Status.AutoUpdate.PendingVersion != "" {
+	// If an auto-update is in progress, drive the state machine.
+	// Pause the update state machine while suspended - pending version stays in status and resumes on unsuspend.
+	if instance.Status.AutoUpdate.PendingVersion != "" && !instance.Spec.Suspended {
 		result, err := r.reconcileAutoUpdate(ctx, instance)
 		if err != nil {
 			logger.Error(err, "Auto-update error (non-fatal)")
@@ -215,6 +216,33 @@ func (r *OpenClawInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			requeueAfter = 2 * time.Minute
 		}
 		return ctrl.Result{RequeueAfter: requeueAfter}, err
+	}
+
+	// Handle suspended state: override phase and readiness
+	if instance.Spec.Suspended {
+		instance.Status.Phase = openclawv1alpha1.PhaseSuspended
+		meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+			Type:    openclawv1alpha1.ConditionTypeReady,
+			Status:  metav1.ConditionFalse,
+			Reason:  "Suspended",
+			Message: "Instance is suspended (spec.suspended=true), workload scaled to zero",
+		})
+		if instance.Status.ObservedGeneration != instance.Generation {
+			instance.Status.LastReconcileTime = &metav1.Time{Time: time.Now()}
+		}
+		instance.Status.ObservedGeneration = instance.Generation
+
+		statusChanged := !equality.Semantic.DeepEqual(&instance.Status, savedStatus)
+		if statusChanged {
+			if err := r.Status().Update(ctx, instance); err != nil {
+				logger.Error(err, "Failed to update status")
+				return ctrl.Result{}, err
+			}
+			r.Recorder.Event(instance, corev1.EventTypeNormal, "Suspended", "Instance suspended, workload scaled to zero")
+		}
+		reconcileTotal.WithLabelValues(instance.Name, instance.Namespace, "success").Inc()
+		updatePhaseMetric(instance.Name, instance.Namespace, instance.Status.Phase)
+		return ctrl.Result{RequeueAfter: RequeueAfter}, nil
 	}
 
 	// Determine phase based on condition health
@@ -274,7 +302,7 @@ func (r *OpenClawInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 }
 
 func updatePhaseMetric(name, namespace, currentPhase string) {
-	phases := []string{"Pending", "Provisioning", "Running", "Degraded", "Failed", "Terminating", "BackingUp", "Restoring", "Updating"}
+	phases := []string{"Pending", "Provisioning", "Running", "Degraded", "Failed", "Terminating", "BackingUp", "Restoring", "Updating", "Suspended"}
 	for _, phase := range phases {
 		val := float64(0)
 		if phase == currentPhase {
@@ -1230,7 +1258,7 @@ func (r *OpenClawInstanceReconciler) reconcileStatefulSet(ctx context.Context, i
 		// Preserve current replica count when HPA manages scaling
 		existingReplicas := sts.Spec.Replicas
 		sts.Spec = desired.Spec
-		if resources.IsHPAEnabled(instance) && existingReplicas != nil {
+		if resources.IsHPAEnabled(instance) && !instance.Spec.Suspended && existingReplicas != nil {
 			sts.Spec.Replicas = existingReplicas
 		}
 		// Inject secret hash annotation to trigger rollout on secret rotation
@@ -1247,26 +1275,45 @@ func (r *OpenClawInstanceReconciler) reconcileStatefulSet(ctx context.Context, i
 	instance.Status.ManagedResources.StatefulSet = sts.Name
 
 	// Check StatefulSet status
-	ready := sts.Status.ReadyReplicas > 0
-	status := metav1.ConditionFalse
-	reason := "StatefulSetNotReady"
-	message := "StatefulSet is not ready yet"
-	if ready {
-		status = metav1.ConditionTrue
-		reason = "StatefulSetReady"
-		message = "StatefulSet is ready"
+	var ready bool
+	var stsCondStatus metav1.ConditionStatus
+	var stsCondReason, stsCondMessage string
+
+	if instance.Spec.Suspended {
+		// Suspended: desired=0 replicas. Ready once all pods are terminated.
+		ready = sts.Status.Replicas == 0
+		if ready {
+			stsCondStatus = metav1.ConditionTrue
+			stsCondReason = "StatefulSetSuspended"
+			stsCondMessage = "StatefulSet scaled to zero (instance suspended)"
+		} else {
+			stsCondStatus = metav1.ConditionFalse
+			stsCondReason = "StatefulSetScalingDown"
+			stsCondMessage = "StatefulSet is scaling down for suspension"
+		}
+	} else {
+		ready = sts.Status.ReadyReplicas > 0
+		if ready {
+			stsCondStatus = metav1.ConditionTrue
+			stsCondReason = "StatefulSetReady"
+			stsCondMessage = "StatefulSet is ready"
+		} else {
+			stsCondStatus = metav1.ConditionFalse
+			stsCondReason = "StatefulSetNotReady"
+			stsCondMessage = "StatefulSet is not ready yet"
+		}
 	}
 
 	meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
 		Type:    openclawv1alpha1.ConditionTypeStatefulSetReady,
-		Status:  status,
-		Reason:  reason,
-		Message: message,
+		Status:  stsCondStatus,
+		Reason:  stsCondReason,
+		Message: stsCondMessage,
 	})
 
-	// Update instance readiness metric
+	// Update instance readiness metric (0 when suspended - instance is not serving traffic)
 	readyVal := float64(0)
-	if ready {
+	if ready && !instance.Spec.Suspended {
 		readyVal = 1
 	}
 	instanceReady.WithLabelValues(instance.Name, instance.Namespace).Set(readyVal)

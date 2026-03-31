@@ -9904,6 +9904,29 @@ func TestStatefulSetReplicas_HPADisabled(t *testing.T) {
 	}
 }
 
+func TestStatefulSetReplicas_Suspended(t *testing.T) {
+	instance := newTestInstance("my-app")
+	instance.Spec.Suspended = true
+
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
+	if sts.Spec.Replicas == nil || *sts.Spec.Replicas != 0 {
+		t.Errorf("replicas should be 0 when suspended, got %v", sts.Spec.Replicas)
+	}
+}
+
+func TestStatefulSetReplicas_SuspendedOverridesHPA(t *testing.T) {
+	instance := newTestInstance("my-app")
+	instance.Spec.Suspended = true
+	instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+		Enabled: Ptr(true),
+	}
+
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
+	if sts.Spec.Replicas == nil || *sts.Spec.Replicas != 0 {
+		t.Errorf("replicas should be 0 when suspended (even with HPA), got %v", sts.Spec.Replicas)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Metrics port tests
 // ---------------------------------------------------------------------------

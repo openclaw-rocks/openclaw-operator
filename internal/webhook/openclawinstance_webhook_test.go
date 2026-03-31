@@ -1745,3 +1745,54 @@ func TestValidateCreate_AdditionalWorkspaceConfigMapRefEmptyName(t *testing.T) {
 		t.Errorf("expected configMapRef error, got: %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Suspended + HPA mutual exclusivity tests
+// ---------------------------------------------------------------------------
+
+func TestValidateCreate_SuspendedWithHPA(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.Suspended = true
+	instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+		Enabled: ptr(true),
+	}
+
+	_, err := v.ValidateCreate(context.Background(), instance)
+	if err == nil {
+		t.Fatal("expected error when suspended and HPA are both enabled")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("error should mention mutual exclusivity, got: %s", err.Error())
+	}
+}
+
+func TestValidateCreate_SuspendedWithoutHPA(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.Suspended = true
+
+	warnings, err := v.ValidateCreate(context.Background(), instance)
+	if err != nil {
+		t.Errorf("suspended without HPA should be valid, got: %v", err)
+	}
+	_ = warnings
+}
+
+func TestValidateUpdate_SuspendedWithHPA(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	oldInstance := newTestInstance()
+	newInstance := newTestInstance()
+	newInstance.Spec.Suspended = true
+	newInstance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+		Enabled: ptr(true),
+	}
+
+	_, err := v.ValidateUpdate(context.Background(), oldInstance, newInstance)
+	if err == nil {
+		t.Fatal("expected error when suspended and HPA are both enabled on update")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("error should mention mutual exclusivity, got: %s", err.Error())
+	}
+}

@@ -128,6 +128,13 @@ type OpenClawInstanceSpec struct {
 	// +optional
 	Availability AvailabilitySpec `json:"availability,omitempty"`
 
+	// Suspended scales the workload to zero replicas when true.
+	// Non-runtime resources (Service, ConfigMap, RBAC, NetworkPolicy, PVC)
+	// remain fully managed. Set to false to resume normal operation.
+	// +kubebuilder:default=false
+	// +optional
+	Suspended bool `json:"suspended,omitempty"`
+
 	// Backup configures periodic scheduled backups to S3-compatible storage.
 	// Requires the s3-backup-credentials Secret in the operator namespace and persistence enabled.
 	// +optional
@@ -1367,7 +1374,7 @@ type AutoUpdateStatus struct {
 // OpenClawInstanceStatus defines the observed state of OpenClawInstance
 type OpenClawInstanceStatus struct {
 	// Phase represents the current lifecycle phase of the instance
-	// +kubebuilder:validation:Enum=Pending;Provisioning;Running;Degraded;Failed;Terminating;BackingUp;Restoring;Updating
+	// +kubebuilder:validation:Enum=Pending;Provisioning;Running;Degraded;Failed;Terminating;BackingUp;Restoring;Updating;Suspended
 	// +optional
 	Phase string `json:"phase,omitempty"`
 
@@ -1595,4 +1602,5 @@ const (
 	PhaseBackingUp    = "BackingUp"
 	PhaseRestoring    = "Restoring"
 	PhaseUpdating     = "Updating"
+	PhaseSuspended    = "Suspended"
 )

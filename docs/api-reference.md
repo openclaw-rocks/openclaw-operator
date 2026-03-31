@@ -802,6 +802,21 @@ When enabled, the operator:
 - Adds port 6443 egress to the NetworkPolicy for K8s API access
 - Injects `SELFCONFIG.md` (skill documentation) and `selfconfig.sh` (helper script) into the workspace
 
+### spec.suspended
+
+Scales the workload to zero replicas when `true`. Non-runtime resources (Service, ConfigMap, RBAC, NetworkPolicy, PVC) remain fully managed. Set to `false` to resume normal operation.
+
+| Field       | Type   | Default | Description                                                                  |
+|-------------|--------|---------|------------------------------------------------------------------------------|
+| `suspended` | `bool` | `false` | Scale workload to zero replicas when `true`. Mutually exclusive with `spec.availability.autoScaling.enabled`. |
+
+When suspended:
+- StatefulSet replicas are set to 0
+- `status.phase` becomes `Suspended`
+- `Ready` condition is `False` with reason `Suspended`
+- `StatefulSetReady` condition is `True` once all pods terminate (desired state achieved)
+- Auto-updates are paused and resume when unsuspended
+
 ### spec.availability
 
 High availability and scheduling configuration.
