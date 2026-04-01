@@ -482,6 +482,15 @@ func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecre
 		)
 	}
 
+	// Plugin discovery - set NODE_PATH so Node.js module resolution finds
+	// packages installed by the init-plugins container in the PVC (#424)
+	if len(instance.Spec.Plugins) > 0 {
+		env = append(env, corev1.EnvVar{
+			Name:  "NODE_PATH",
+			Value: "/home/openclaw/.openclaw/node_modules",
+		})
+	}
+
 	// Build custom PATH with optional prefixes for runtime deps, Tailscale CLI,
 	// and npm-installed skill binaries (#335)
 	hasRuntimeDeps := instance.Spec.RuntimeDeps.Pnpm || instance.Spec.RuntimeDeps.Python

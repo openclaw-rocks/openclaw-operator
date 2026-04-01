@@ -12548,3 +12548,38 @@ func TestAdditionalWorkspaceCMKey_Roundtrip(t *testing.T) {
 		t.Error("ParseAdditionalWorkspaceCMKey should return false for non-namespaced key")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Plugin NODE_PATH tests (#424)
+// ---------------------------------------------------------------------------
+
+func TestBuildStatefulSet_PluginsNodePath(t *testing.T) {
+	instance := newTestInstance("plugin-env")
+	instance.Spec.Plugins = []string{"@mem0/openclaw-mem0"}
+
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
+
+	mainContainer := sts.Spec.Template.Spec.Containers[0]
+	envMap := map[string]string{}
+	for _, ev := range mainContainer.Env {
+		envMap[ev.Name] = ev.Value
+	}
+
+	want := "/home/openclaw/.openclaw/node_modules"
+	if envMap["NODE_PATH"] != want {
+		t.Errorf("NODE_PATH = %q, want %q", envMap["NODE_PATH"], want)
+	}
+}
+
+func TestBuildStatefulSet_NoPluginsNoNodePath(t *testing.T) {
+	instance := newTestInstance("no-plugin-env")
+
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
+
+	mainContainer := sts.Spec.Template.Spec.Containers[0]
+	for _, ev := range mainContainer.Env {
+		if ev.Name == "NODE_PATH" {
+			t.Error("NODE_PATH should not be set when no plugins are defined")
+		}
+	}
+}
