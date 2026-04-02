@@ -2221,7 +2221,8 @@ func TestBuildConfigMapFromBytes_PreservesTrustedProxyMode(t *testing.T) {
 		t.Error("mcpServers should be preserved from external config")
 	}
 
-	// Gateway auth mode should be preserved, token should be injected
+	// Gateway auth mode should be preserved, token must NOT be injected
+	// (trusted-proxy mode is mutually exclusive with token auth)
 	gw, ok := parsed["gateway"].(map[string]interface{})
 	if !ok {
 		t.Fatal("expected gateway key after enrichment")
@@ -2233,8 +2234,8 @@ func TestBuildConfigMapFromBytes_PreservesTrustedProxyMode(t *testing.T) {
 	if auth["mode"] != "trusted-proxy" {
 		t.Errorf("gateway.auth.mode = %v, want %q (user's mode should be preserved)", auth["mode"], "trusted-proxy")
 	}
-	if auth["token"] != "my-gateway-token" {
-		t.Errorf("gateway.auth.token = %v, want %q (token should still be injected)", auth["token"], "my-gateway-token")
+	if _, hasToken := auth["token"]; hasToken {
+		t.Errorf("gateway.auth.token should not be set in trusted-proxy mode, got %v", auth["token"])
 	}
 }
 
@@ -6273,21 +6274,10 @@ func TestEnrichConfigWithGatewayAuth_PreservesUserMode(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	var parsed map[string]interface{}
-	if err := json.Unmarshal(result, &parsed); err != nil {
-		t.Fatalf("failed to parse result: %v", err)
-	}
-
-	gw := parsed["gateway"].(map[string]interface{})
-	auth := gw["auth"].(map[string]interface{})
-
-	// User's mode should be preserved
-	if auth["mode"] != "trusted-proxy" {
-		t.Errorf("gateway.auth.mode = %v, want %q (user's mode should be preserved)", auth["mode"], "trusted-proxy")
-	}
-	// Operator's token should still be injected for internal loopback auth
-	if auth["token"] != token {
-		t.Errorf("gateway.auth.token = %v, want %q (token should be injected for internal auth)", auth["token"], token)
+	// trusted-proxy mode is mutually exclusive with token auth, so the
+	// config should be returned unchanged (no token injected).
+	if !bytes.Equal(result, configJSON) {
+		t.Errorf("config should be unchanged in trusted-proxy mode\ngot:  %s\nwant: %s", string(result), string(configJSON))
 	}
 }
 
@@ -6315,22 +6305,11 @@ func TestEnrichConfigWithGatewayAuth_PreservesOtherAuthFields(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	var parsed map[string]interface{}
-	if err := json.Unmarshal(result, &parsed); err != nil {
-		t.Fatalf("failed to parse result: %v", err)
-	}
-
-	gw := parsed["gateway"].(map[string]interface{})
-	auth := gw["auth"].(map[string]interface{})
-
-	if auth["mode"] != "trusted-proxy" {
-		t.Errorf("gateway.auth.mode = %v, want %q", auth["mode"], "trusted-proxy")
-	}
-	if auth["allowTailscale"] != true {
-		t.Errorf("gateway.auth.allowTailscale = %v, want true", auth["allowTailscale"])
-	}
-	if auth["token"] != token {
-		t.Errorf("gateway.auth.token = %v, want %q", auth["token"], token)
+	// trusted-proxy mode is mutually exclusive with token auth, so the
+	// config should be returned unchanged (no token injected, other
+	// fields like allowTailscale preserved).
+	if !bytes.Equal(result, configJSON) {
+		t.Errorf("config should be unchanged in trusted-proxy mode\ngot:  %s\nwant: %s", string(result), string(configJSON))
 	}
 }
 

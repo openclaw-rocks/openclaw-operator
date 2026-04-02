@@ -158,13 +158,17 @@ func enrichConfigWithGatewayAuth(configJSON []byte, token string) ([]byte, error
 		return configJSON, nil
 	}
 
+	// trusted-proxy mode is mutually exclusive with token auth - injecting
+	// a token would cause OpenClaw to fail to start.
+	if mode, _ := auth["mode"].(string); mode == "trusted-proxy" {
+		return configJSON, nil
+	}
+
 	// Only set mode to "token" if the user hasn't chosen a mode already.
-	// This preserves user-configured modes like "trusted-proxy" while still
-	// injecting the operator token for internal loopback connections (e.g.
-	// openclaw cron, sessions_spawn).
 	if _, hasMode := auth["mode"]; !hasMode {
 		auth["mode"] = "token" //nolint:goconst // OpenClaw auth mode, not k8s Secret key
 	}
+
 	auth["token"] = token
 	gw["auth"] = auth
 	config["gateway"] = gw
