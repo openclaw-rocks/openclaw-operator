@@ -136,7 +136,7 @@ func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseCo
 // enrichConfigWithGatewayAuth injects the gateway token into the config JSON
 // for internal loopback authentication (cron, sessions_spawn). If the user has
 // not set gateway.auth.mode, it also injects mode=token. If the user has already
-// set gateway.auth.token or gateway.auth.mode is trusted-proxy, the config is 
+// set gateway.auth.token or gateway.auth.mode is trusted-proxy, the config is
 // returned unchanged (user override wins/trusted-proxy is incompatible with tokens).
 func enrichConfigWithGatewayAuth(configJSON []byte, token string) ([]byte, error) {
 	var config map[string]interface{}
