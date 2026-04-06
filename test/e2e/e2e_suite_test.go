@@ -2326,7 +2326,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})
 
-		It("Should preserve trusted-proxy auth mode while injecting token", func() {
+		It("Should preserve trusted-proxy auth mode without injecting token", func() {
 			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
 				Skip("Skipping resource validation in minimal mode")
 			}
@@ -2390,9 +2390,9 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			// Mode should be preserved as trusted-proxy (not overwritten to token)
 			Expect(auth["mode"]).To(Equal("trusted-proxy"),
 				"gateway.auth.mode should be preserved as trusted-proxy")
-			// Token should still be injected for internal loopback auth
-			Expect(auth["token"]).NotTo(BeEmpty(),
-				"gateway.auth.token should be set for internal loopback connections")
+			// Token must NOT be present in trusted-proxy mode
+			Expect(auth).NotTo(HaveKey("token"),
+				"gateway.auth.token must not be set in trusted-proxy mode")
 
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})
