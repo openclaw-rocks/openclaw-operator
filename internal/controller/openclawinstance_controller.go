@@ -595,6 +595,36 @@ func (r *OpenClawInstanceReconciler) reconcileNetworkPolicy(ctx context.Context,
 	return nil
 }
 
+// isGatewayAuthTrustedProxy checks whether the instance's config (inline or
+// external ConfigMap) sets gateway.auth.mode to "trusted-proxy". This mode is
+// mutually exclusive with token-based auth, so the operator must not inject
+// gateway token env vars or config keys when it is active.
+func (r *OpenClawInstanceReconciler) isGatewayAuthTrustedProxy(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) bool {
+	if instance.Spec.Config.ConfigMapRef != nil {
+		ref := instance.Spec.Config.ConfigMapRef
+		externalCM := &corev1.ConfigMap{}
+		if err := r.Get(ctx, types.NamespacedName{
+			Namespace: instance.Namespace,
+			Name:      ref.Name,
+		}, externalCM); err != nil {
+			return false
+		}
+		key := ref.Key
+		if key == "" {
+			key = "openclaw.json"
+		}
+		data, ok := externalCM.Data[key]
+		if !ok {
+			return false
+		}
+		return resources.IsGatewayAuthTrustedProxy([]byte(data))
+	}
+	if instance.Spec.Config.Raw != nil {
+		return resources.IsGatewayAuthTrustedProxy(instance.Spec.Config.Raw.Raw)
+	}
+	return false
+}
+
 // reconcileGatewayTokenSecret ensures a gateway token Secret exists for the instance.
 // If spec.gateway.existingSecret is set, the operator uses that Secret instead of
 // auto-generating one. Otherwise, a random 32-byte hex token is generated and stored.
@@ -1210,9 +1240,11 @@ func (r *OpenClawInstanceReconciler) reconcileStatefulSet(ctx context.Context, i
 		})
 	}
 
-	// Compute gateway token secret name once for both VCT-change detection and CreateOrUpdate
+	// Compute gateway token secret name once for both VCT-change detection and CreateOrUpdate.
+	// trusted-proxy mode is mutually exclusive with token auth - skip injecting the
+	// OPENCLAW_GATEWAY_TOKEN env var when trusted-proxy is configured.
 	var gwSecretName string
-	if gatewayToken != "" {
+	if gatewayToken != "" && !r.isGatewayAuthTrustedProxy(ctx, instance) {
 		if instance.Spec.Gateway.ExistingSecret != "" {
 			gwSecretName = instance.Spec.Gateway.ExistingSecret
 		} else {
