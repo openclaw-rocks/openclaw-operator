@@ -237,6 +237,127 @@ var _ = Describe("OpenClawSelfConfig Controller", func() {
 			Expect(updatedInstance.Spec.Skills).To(ContainElement("@anthropic/mcp-server-fetch"))
 			Expect(updatedInstance.Spec.Skills).To(ContainElement("existing-skill"))
 
+			// Verify that the selfconfig field manager appears in managed fields
+			managedFields := updatedInstance.GetManagedFields()
+			var foundSelfConfigManager bool
+			for _, entry := range managedFields {
+				if entry.Manager == "openclaw-selfconfig" {
+					foundSelfConfigManager = true
+					break
+				}
+			}
+			Expect(foundSelfConfigManager).To(BeTrue(),
+				"openclaw-selfconfig field manager should appear in managed fields after SSA apply")
+
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+
+		It("Should preserve field ownership across multiple SelfConfig applies", func() {
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instanceName := "sc-multi-apply-test"
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					Skills: []string{"bootstrap-skill"},
+					SelfConfigure: openclawv1alpha1.SelfConfigureSpec{
+						Enabled: true,
+						AllowedActions: []openclawv1alpha1.SelfConfigAction{
+							openclawv1alpha1.SelfConfigActionSkills,
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			// Wait for initial reconciliation
+			Eventually(func() string {
+				err := k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName,
+					Namespace: namespace,
+				}, &appsv1.StatefulSet{})
+				if err == nil {
+					return "found"
+				}
+				inst := &openclawv1alpha1.OpenClawInstance{}
+				phase := "unknown"
+				if getErr := k8sClient.Get(ctx, types.NamespacedName{
+					Name: instanceName, Namespace: namespace,
+				}, inst); getErr == nil {
+					phase = inst.Status.Phase
+				}
+				return "not found (instance phase: " + phase + ")"
+			}, timeout, interval).Should(Equal("found"),
+				"StatefulSet should be created by reconcile")
+
+			// First SelfConfig: add skill 1
+			sc1 := &openclawv1alpha1.OpenClawSelfConfig{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "add-skill-1",
+					Namespace: namespace,
+				},
+				Spec: openclawv1alpha1.OpenClawSelfConfigSpec{
+					InstanceRef: instanceName,
+					AddSkills:   []string{"added-skill-1"},
+				},
+			}
+			Expect(k8sClient.Create(ctx, sc1)).Should(Succeed())
+
+			Eventually(func() openclawv1alpha1.SelfConfigPhase {
+				fetched := &openclawv1alpha1.OpenClawSelfConfig{}
+				if err := k8sClient.Get(ctx, types.NamespacedName{
+					Name: "add-skill-1", Namespace: namespace,
+				}, fetched); err != nil {
+					return ""
+				}
+				return fetched.Status.Phase
+			}, timeout, interval).Should(Equal(openclawv1alpha1.SelfConfigPhaseApplied))
+
+			// Second SelfConfig: add skill 2
+			sc2 := &openclawv1alpha1.OpenClawSelfConfig{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "add-skill-2",
+					Namespace: namespace,
+				},
+				Spec: openclawv1alpha1.OpenClawSelfConfigSpec{
+					InstanceRef: instanceName,
+					AddSkills:   []string{"added-skill-2"},
+				},
+			}
+			Expect(k8sClient.Create(ctx, sc2)).Should(Succeed())
+
+			Eventually(func() openclawv1alpha1.SelfConfigPhase {
+				fetched := &openclawv1alpha1.OpenClawSelfConfig{}
+				if err := k8sClient.Get(ctx, types.NamespacedName{
+					Name: "add-skill-2", Namespace: namespace,
+				}, fetched); err != nil {
+					return ""
+				}
+				return fetched.Status.Phase
+			}, timeout, interval).Should(Equal(openclawv1alpha1.SelfConfigPhaseApplied))
+
+			// Verify all three skills coexist
+			updatedInstance := &openclawv1alpha1.OpenClawInstance{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: instanceName, Namespace: namespace,
+			}, updatedInstance)).To(Succeed())
+			Expect(updatedInstance.Spec.Skills).To(ContainElement("bootstrap-skill"))
+			Expect(updatedInstance.Spec.Skills).To(ContainElement("added-skill-1"))
+			Expect(updatedInstance.Spec.Skills).To(ContainElement("added-skill-2"))
+
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})
 
