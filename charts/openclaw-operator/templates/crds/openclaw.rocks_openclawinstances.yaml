@@ -1736,6 +1736,9 @@ spec:
                   - name
                   type: object
                 type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               envFrom:
                 description: |-
                   EnvFrom is a list of sources to populate environment variables from
@@ -9242,6 +9245,7 @@ spec:
                   type: string
                 maxItems: 20
                 type: array
+                x-kubernetes-list-type: set
               storage:
                 description: Storage specifies persistent storage configuration
                 properties:
