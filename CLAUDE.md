@@ -4,9 +4,9 @@
 
 Go-based Kubernetes operator for managing OpenClaw instances, built with controller-runtime (kubebuilder). CRD API group is `openclaw.rocks`, version `v1alpha1`.
 
-- **Module:** `github.com/openclawrocks/k8s-operator`
+- **Module:** `github.com/openclawrocks/openclaw-operator`
 - **Go version:** 1.24
-- **GitHub:** `openclaw-rocks/k8s-operator` (GHCR org: `openclaw-rocks`)
+- **GitHub:** `openclaw-rocks/openclaw-operator` (GHCR org: `openclaw-rocks`)
 
 ## Commands
 
@@ -128,9 +128,9 @@ Merged branches are auto-deleted. Always delete stale remote branches.
 Always use `git worktree` when working on a separate branch to avoid switching branches and disrupting local state. Never use `git checkout` or `git switch` to change branches in the main working directory:
 
 ```bash
-git worktree add ../k8s-operator-<suffix> -b <branch> main
+git worktree add ../openclaw-operator-<suffix> -b <branch> main
 # work in the worktree directory, then clean up:
-git worktree remove ../k8s-operator-<suffix>
+git worktree remove ../openclaw-operator-<suffix>
 ```
 
 ### CRD API changes

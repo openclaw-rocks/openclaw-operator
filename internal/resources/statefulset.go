@@ -26,22 +26,22 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1alpha1 "github.com/openclawrocks/openclaw-operator/api/v1alpha1"
 )
 
 // BuildStatefulSet creates a StatefulSet for the OpenClawInstance.
 // If gatewayTokenSecretName is non-empty and the user hasn't already set
 // OPENCLAW_GATEWAY_TOKEN in spec.env, the env var is injected via SecretKeyRef.
-func BuildStatefulSet(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecretName string, skillPacks *ResolvedSkillPacks) *appsv1.StatefulSet {
+// externalWorkspaceFiles are the resolved contents of spec.workspace.configMapRef (may be nil).
+// additionalExternalFiles maps workspace name to resolved configMapRef contents (may be nil).
+func BuildStatefulSet(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecretName string, skillPacks *ResolvedSkillPacks, externalWorkspaceFiles map[string]string, additionalExternalFiles map[string]map[string]string) *appsv1.StatefulSet {
 	labels := Labels(instance)
 	selectorLabels := SelectorLabels(instance)
-
-	// Calculate config hash for rollout trigger
-	configHash := calculateConfigHash(instance)
 
 	gwSecretName := gatewayTokenSecretName
 
@@ -68,23 +68,22 @@ func BuildStatefulSet(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenS
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: labels,
-					Annotations: map[string]string{
-						"openclaw.rocks/config-hash": configHash,
-					},
+					Labels:      labels,
+					Annotations: buildPodAnnotations(instance, externalWorkspaceFiles, additionalExternalFiles),
 				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName:            ServiceAccountName(instance),
 					DeprecatedServiceAccount:      ServiceAccountName(instance),
 					AutomountServiceAccountToken:  Ptr(instance.Spec.SelfConfigure.Enabled || instance.Spec.Tailscale.Enabled),
 					SecurityContext:               buildPodSecurityContext(instance),
-					InitContainers:                buildInitContainers(instance, skillPacks),
+					InitContainers:                buildInitContainers(instance, externalWorkspaceFiles, additionalExternalFiles, skillPacks),
 					Containers:                    buildContainers(instance, gwSecretName),
 					Volumes:                       buildVolumes(instance, skillPacks),
 					NodeSelector:                  instance.Spec.Availability.NodeSelector,
 					Tolerations:                   instance.Spec.Availability.Tolerations,
 					Affinity:                      instance.Spec.Availability.Affinity,
 					TopologySpreadConstraints:     instance.Spec.Availability.TopologySpreadConstraints,
+					RuntimeClassName:              instance.Spec.Availability.RuntimeClassName,
 					RestartPolicy:                 corev1.RestartPolicyAlways,
 					DNSPolicy:                     corev1.DNSClusterFirst,
 					SchedulerName:                 corev1.DefaultSchedulerName,
@@ -100,7 +99,45 @@ func BuildStatefulSet(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenS
 		instance.Spec.Image.PullSecrets...,
 	)
 
+	// When persistence is enabled with HPA (multi-replica), use VolumeClaimTemplates
+	// so each replica gets its own PVC instead of sharing a single static PVC.
+	if IsPersistenceEnabled(instance) && IsHPAEnabled(instance) {
+		size := ParseQuantity(instance.Spec.Storage.Persistence.Size, "10Gi")
+		accessModes := instance.Spec.Storage.Persistence.AccessModes
+		if len(accessModes) == 0 {
+			accessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
+		}
+		vct := corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:   "data",
+				Labels: labels,
+			},
+			Spec: corev1.PersistentVolumeClaimSpec{
+				AccessModes: accessModes,
+				Resources: corev1.VolumeResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceStorage: size,
+					},
+				},
+			},
+		}
+		if instance.Spec.Storage.Persistence.StorageClass != nil {
+			vct.Spec.StorageClassName = instance.Spec.Storage.Persistence.StorageClass
+		}
+		sts.Spec.VolumeClaimTemplates = []corev1.PersistentVolumeClaim{vct}
+	}
+
 	return sts
+}
+
+// buildPodAnnotations builds the pod annotations for the pod template
+func buildPodAnnotations(instance *openclawv1alpha1.OpenClawInstance, externalWorkspaceFiles map[string]string, additionalExternalFiles map[string]map[string]string) map[string]string {
+	annotations := make(map[string]string, len(instance.Spec.PodAnnotations)+1)
+	for k, v := range instance.Spec.PodAnnotations {
+		annotations[k] = v
+	}
+	annotations["openclaw.rocks/config-hash"] = calculateConfigHash(instance, externalWorkspaceFiles, additionalExternalFiles)
+	return annotations
 }
 
 // buildPodSecurityContext creates the pod-level security context
@@ -197,7 +234,11 @@ func buildContainerSecurityContext(instance *openclawv1alpha1.OpenClawInstance) 
 func buildContainers(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecretName string) []corev1.Container {
 	containers := []corev1.Container{
 		buildMainContainer(instance, gatewayTokenSecretName),
-		buildGatewayProxyContainer(instance),
+	}
+
+	// Add gateway proxy sidecar if enabled (default: true)
+	if IsGatewayProxyEnabled(instance) {
+		containers = append(containers, buildGatewayProxyContainer(instance))
 	}
 
 	// Add Tailscale sidecar if enabled
@@ -218,6 +259,13 @@ func buildContainers(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSe
 		containers = append(containers, buildWebTerminalContainer(instance))
 	}
 
+	// Add OTel Collector sidecar when metrics are enabled.
+	// The collector receives OTLP metrics from OpenClaw and exposes a
+	// Prometheus scrape endpoint on the configured metrics port.
+	if IsMetricsEnabled(instance) {
+		containers = append(containers, buildOTelCollectorContainer(instance))
+	}
+
 	// Add custom sidecars
 	containers = append(containers, instance.Spec.Sidecars...)
 
@@ -225,9 +273,11 @@ func buildContainers(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSe
 }
 
 // buildMainContainerPorts returns the container ports for the main container.
-// Always includes gateway and canvas; conditionally adds metrics when enabled.
+// Always includes gateway and canvas. The metrics port is on the OTel
+// Collector sidecar, not the main container.
 func buildMainContainerPorts(instance *openclawv1alpha1.OpenClawInstance) []corev1.ContainerPort {
-	ports := []corev1.ContainerPort{
+	_ = instance // signature kept for consistency
+	return []corev1.ContainerPort{
 		{
 			Name:          "gateway",
 			ContainerPort: GatewayPort,
@@ -239,16 +289,6 @@ func buildMainContainerPorts(instance *openclawv1alpha1.OpenClawInstance) []core
 			Protocol:      corev1.ProtocolTCP,
 		},
 	}
-
-	if IsMetricsEnabled(instance) {
-		ports = append(ports, corev1.ContainerPort{
-			Name:          "metrics",
-			ContainerPort: MetricsPort(instance),
-			Protocol:      corev1.ProtocolTCP,
-		})
-	}
-
-	return ports
 }
 
 // buildMainContainer creates the main OpenClaw container
@@ -323,6 +363,16 @@ func buildMainContainer(instance *openclawv1alpha1.OpenClawInstance, gatewayToke
 	// Add extra volume mounts from spec
 	container.VolumeMounts = append(container.VolumeMounts, instance.Spec.ExtraVolumeMounts...)
 
+	// Mount PVC-backed skills directory at /app/skills so ClawHub-installed
+	// skills persist and are visible to the main container (#313).
+	if hasClawHubSkills(FilterNonPackSkills(instance.Spec.Skills)) {
+		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+			Name:      "data",
+			MountPath: "/app/skills",
+			SubPath:   "skills",
+		})
+	}
+
 	// Mount the config volume read-only so the postStart hook can restore
 	// operator-managed config on every container start (init containers only
 	// run on pod creation, not on container restarts within the same pod).
@@ -360,6 +410,12 @@ func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecre
 		{Name: "HOME", Value: "/home/openclaw"},
 		// mDNS/Bonjour pairing is unusable in Kubernetes — always disable it
 		{Name: "OPENCLAW_DISABLE_BONJOUR", Value: "1"},
+		// OpenClaw v2026.3.12 reduced the WebSocket handshake timeout from
+		// ~10s to 3s (GHSA-jv4g-m82p-2j93), which is too short for K8s where
+		// plugin loading adds container startup overhead. Inject a safe
+		// default via env var (config key is not yet supported upstream).
+		// See: https://github.com/openclaw/openclaw/issues/46892
+		{Name: "OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS", Value: fmt.Sprintf("%d", DefaultHandshakeTimeoutMs)},
 		// npm: redirect global installs to the writable PVC subpath at ~/.local
 		{Name: "NPM_CONFIG_PREFIX", Value: "/home/openclaw/.local"},
 		// npm/npx: redirect cache to the writable PVC subpath at ~/.cache
@@ -374,19 +430,17 @@ func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecre
 		// A non-loopback address triggers OpenClaw's remote/attach mode so
 		// the browser control service connects to the existing sidecar
 		// instead of trying to launch a local browser process.
-		// Using DNS instead of pod IP avoids IPv6 URL formatting issues
-		// (IPv6 addresses need brackets in URLs but Kubernetes env var
-		// interpolation cannot add them conditionally) and is stable
-		// across pod restarts (unlike status.podIP).
+		// Using DNS instead of pod IP avoids IPv6 URL formatting issues.
 		// The headless CDP Service has publishNotReadyAddresses=true so the
 		// endpoint resolves before the pod is fully Ready, avoiding a race
 		// where OpenClaw checks CDP during startup before the main Service
-		// has endpoints.
-		cdpSvcDNS := fmt.Sprintf("%s.%s.svc", ChromiumCDPServiceName(instance), instance.Namespace)
+		// has endpoints. Use localhost because the chromium sidecar shares the
+		// pod network. Non-localhost addresses trigger OpenClaw's remote browser
+		// pairing flow which requires device identity.
 		env = append(env,
 			corev1.EnvVar{
 				Name:  "OPENCLAW_CHROMIUM_CDP",
-				Value: fmt.Sprintf("http://%s:%d", cdpSvcDNS, ChromiumPort),
+				Value: fmt.Sprintf("http://127.0.0.1:%d", ChromiumPort),
 			},
 		)
 	}
@@ -428,16 +482,27 @@ func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecre
 		)
 	}
 
-	// Build custom PATH with optional prefixes for runtime deps and Tailscale CLI
+	// Plugin discovery - set NODE_PATH so Node.js module resolution finds
+	// packages installed by the init-plugins container in the PVC (#424)
+	if len(instance.Spec.Plugins) > 0 {
+		env = append(env, corev1.EnvVar{
+			Name:  "NODE_PATH",
+			Value: "/home/openclaw/.openclaw/node_modules",
+		})
+	}
+
+	// Build custom PATH with optional prefixes for runtime deps, Tailscale CLI,
+	// and npm-installed skill binaries (#335)
 	hasRuntimeDeps := instance.Spec.RuntimeDeps.Pnpm || instance.Spec.RuntimeDeps.Python
 	hasTailscale := instance.Spec.Tailscale.Enabled
-	if hasRuntimeDeps || hasTailscale {
+	hasNpmBins := hasNpmSkills(instance.Spec.Skills)
+	if hasRuntimeDeps || hasTailscale || hasNpmBins {
 		basePath := "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 		var prefixes []string
 		if hasTailscale {
 			prefixes = append(prefixes, TailscaleBinPath)
 		}
-		if hasRuntimeDeps {
+		if hasRuntimeDeps || hasNpmBins {
 			prefixes = append(prefixes, RuntimeDepsLocalBin)
 		}
 		env = append(env, corev1.EnvVar{
@@ -463,11 +528,11 @@ func hasUserEnv(instance *openclawv1alpha1.OpenClawInstance, name string) bool {
 // files into the data volume. Config is always overwritten (operator-managed),
 // while workspace files use seed-once semantics (only copied if not present).
 // Skills are installed via a separate init container using the OpenClaw image.
-func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance, skillPacks *ResolvedSkillPacks) []corev1.Container {
+func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance, externalWorkspaceFiles map[string]string, additionalExternalFiles map[string]map[string]string, skillPacks *ResolvedSkillPacks) []corev1.Container {
 	var initContainers []corev1.Container
 
 	// Config/workspace init container (only if there's something to do)
-	if script := BuildInitScript(instance, skillPacks); script != "" {
+	if script := BuildInitScript(instance, externalWorkspaceFiles, additionalExternalFiles, skillPacks); script != "" {
 		mounts := []corev1.VolumeMount{
 			{Name: "data", MountPath: "/data"},
 		}
@@ -491,7 +556,7 @@ func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance, skillPacks
 		// overwrite mode uses busybox (lightweight, only needs cp).
 		// Note: ghcr.io/jqlang/jq and ghcr.io/astral-sh/uv base tags are
 		// distroless (no shell), so we cannot use them with "sh -c".
-		initImage := "busybox:1.37"
+		initImage := ApplyRegistryOverride("busybox:1.37", instance.Spec.Registry)
 		if instance.Spec.Config.MergeMode == ConfigMergeModeMerge || instance.Spec.Config.Format == ConfigFormatJSON5 {
 			initImage = GetImage(instance)
 		}
@@ -541,7 +606,7 @@ func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance, skillPacks
 	// - init-uv: copies uv binary so agents can "uv tool install" CLI tools
 	// - init-pip: bootstraps pip via ensurepip so agents can "pip install <pkg>"
 	//   (PIP_USER=1 makes pip write to the writable ~/.local/ PVC subpath)
-	initContainers = append(initContainers, buildUvInitContainer(), buildPipInitContainer(instance))
+	initContainers = append(initContainers, buildUvInitContainer(instance), buildPipInitContainer(instance))
 
 	// Runtime dependency init containers (run before skills so skills can use pnpm/python)
 	if instance.Spec.RuntimeDeps.Pnpm {
@@ -556,6 +621,11 @@ func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance, skillPacks
 		initContainers = append(initContainers, *skillsContainer)
 	}
 
+	// Plugins init container (only if plugins are defined)
+	if pluginsContainer := buildPluginsInitContainer(instance); pluginsContainer != nil {
+		initContainers = append(initContainers, *pluginsContainer)
+	}
+
 	// Ollama model-pulling init container (only if enabled and models are specified)
 	if instance.Spec.Ollama.Enabled && len(instance.Spec.Ollama.Models) > 0 {
 		initContainers = append(initContainers, buildOllamaModelPullInitContainer(instance))
@@ -568,17 +638,14 @@ func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance, skillPacks
 	// CDP URL before the Service has endpoints and cache "unreachable"
 	// permanently (see #270).
 	//
-	// The chromium-proxy sidecar is ordered AFTER browserless so it starts
-	// only once browserless is healthy. It injects anti-bot Chrome launch
-	// args into every WebSocket connection via the `launch` query parameter.
+	// Chrome runs via run.sh which handles --remote-debugging-port=9222
+	// internally (no browserless proxy layer). This avoids session lifecycle
+	// issues where browserless kills Chrome when the WebSocket client
+	// disconnects between tool calls (see #360).
 	if instance.Spec.Chromium.Enabled {
 		chromium := buildChromiumContainer(instance)
 		chromium.RestartPolicy = Ptr(corev1.ContainerRestartPolicyAlways)
 		initContainers = append(initContainers, chromium)
-
-		proxy := buildChromiumProxyContainer(instance)
-		proxy.RestartPolicy = Ptr(corev1.ContainerRestartPolicyAlways)
-		initContainers = append(initContainers, proxy)
 	}
 
 	// Custom init containers (user-defined, run after operator-managed ones)
@@ -597,7 +664,7 @@ func shellQuote(s string) string {
 // It handles config copy or merge, directory creation (idempotent),
 // workspace file seeding (only if not present), and skill pack file mapping.
 // Returns "" if there is nothing to do.
-func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance, skillPacks *ResolvedSkillPacks) string {
+func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance, externalWorkspaceFiles map[string]string, additionalExternalFiles map[string]map[string]string, skillPacks *ResolvedSkillPacks) string {
 	var lines []string
 
 	// 1. Config handling — overwrite or merge, with optional JSON5 conversion
@@ -655,13 +722,18 @@ func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance, skillPacks *Re
 	hasFiles := hasWorkspaceFiles(instance, skillPacks)
 	if hasFiles {
 		allFiles := make(map[string]bool)
+		// External configMapRef files
+		for name := range externalWorkspaceFiles {
+			allFiles[name] = true
+		}
 		if ws != nil {
 			for name := range ws.InitialFiles {
 				allFiles[name] = true
 			}
 		}
-		// Always inject environment documentation
+		// Always inject operator files
 		allFiles["ENVIRONMENT.md"] = true
+		allFiles["BOOTSTRAP.md"] = true
 		if instance.Spec.SelfConfigure.Enabled {
 			allFiles["SELFCONFIG.md"] = true
 			allFiles["selfconfig.sh"] = true
@@ -695,12 +767,73 @@ func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance, skillPacks *Re
 		}
 	}
 
+	// Additional workspaces - create dirs and seed files for each
+	if ws != nil {
+		// Sort additional workspaces for deterministic output
+		addlWs := make([]openclawv1alpha1.AdditionalWorkspace, len(ws.AdditionalWorkspaces))
+		copy(addlWs, ws.AdditionalWorkspaces)
+		sort.Slice(addlWs, func(i, j int) bool { return addlWs[i].Name < addlWs[j].Name })
+
+		for _, aw := range addlWs {
+			wsDir := fmt.Sprintf("workspace-%s", aw.Name)
+
+			// Create the workspace directory
+			lines = append(lines, fmt.Sprintf("mkdir -p /data/%s", shellQuote(wsDir)))
+
+			// Create initialDirectories
+			dirs := make([]string, len(aw.InitialDirectories))
+			copy(dirs, aw.InitialDirectories)
+			sort.Strings(dirs)
+			for _, dir := range dirs {
+				lines = append(lines, fmt.Sprintf("mkdir -p /data/%s/%s", shellQuote(wsDir), shellQuote(dir)))
+			}
+
+			// Collect all file names for this workspace
+			awFiles := make(map[string]bool)
+
+			// External configMapRef files
+			if extFiles, ok := additionalExternalFiles[aw.Name]; ok {
+				for name := range extFiles {
+					awFiles[name] = true
+				}
+			}
+			// Inline initialFiles
+			for name := range aw.InitialFiles {
+				awFiles[name] = true
+			}
+			// Operator-injected ENVIRONMENT.md
+			awFiles["ENVIRONMENT.md"] = true
+
+			// Seed files (only if not present)
+			sorted := make([]string, 0, len(awFiles))
+			for name := range awFiles {
+				sorted = append(sorted, name)
+			}
+			sort.Strings(sorted)
+			for _, name := range sorted {
+				cmKey := AdditionalWorkspaceCMKey(aw.Name, name)
+				lines = append(lines, fmt.Sprintf("[ -f /data/%s/%s ] || cp /workspace-init/%s /data/%s/%s",
+					shellQuote(wsDir), shellQuote(name),
+					shellQuote(cmKey),
+					shellQuote(wsDir), shellQuote(name)))
+			}
+		}
+	}
+
 	if len(lines) == 0 {
 		return ""
 	}
 
 	return strings.Join(lines, "\n")
 }
+
+// clawHubSkillsSetup prepares a PVC-backed skills directory in the init
+// container. It seeds built-in skills from the container image on first run
+// (cp -rn = no-clobber), then redirects /app/skills to the PVC via symlink
+// so clawhub install writes to persistent storage (#313).
+const clawHubSkillsSetup = `mkdir -p /home/openclaw/.openclaw/skills
+cp -rn /app/skills/. /home/openclaw/.openclaw/skills/ 2>/dev/null || true
+rm -rf /app/skills && ln -s /home/openclaw/.openclaw/skills /app/skills`
 
 // skillInstallWrapper is a shell function that wraps `clawhub install` to
 // tolerate "Already installed" errors, making the init container idempotent
@@ -717,21 +850,47 @@ const skillInstallWrapper = `_install_skill() {
   fi
 }`
 
+// normalizeClawHubSlug strips the @owner/ prefix from ClawHub skill identifiers.
+// ClawHub CLI expects bare skill names (e.g. "mcp-server-fetch"), but users and
+// documentation sometimes use "@owner/skill-name" format from the ClawHub website URL.
+func normalizeClawHubSlug(entry string) string {
+	// npm: and pack: prefixes are not ClawHub slugs
+	if strings.HasPrefix(entry, "npm:") || strings.HasPrefix(entry, "pack:") {
+		return entry
+	}
+	slug := strings.TrimPrefix(entry, "@")
+	if i := strings.LastIndex(slug, "/"); i >= 0 {
+		slug = slug[i+1:]
+	}
+	return slug
+}
+
 // parseSkillEntry returns the shell command to install a single skill entry.
-// Entries prefixed with "npm:" are installed via `npm install` into the PVC
-// node_modules. All other entries use the _install_skill wrapper around
-// `npx -y clawhub install`.
+// Entries prefixed with "npm:" are installed globally via `npm install -g`
+// so that binaries land in ~/.local/bin (via NPM_CONFIG_PREFIX) alongside
+// uv, pnpm, and other tools (#335). All other entries use the _install_skill
+// wrapper around `npx -y clawhub install`.
 func parseSkillEntry(entry string) string {
 	if pkg, ok := strings.CutPrefix(entry, "npm:"); ok {
-		return fmt.Sprintf("cd /home/openclaw/.openclaw && npm install %s", shellQuote(pkg))
+		return fmt.Sprintf("npm install -g %s", shellQuote(pkg))
 	}
-	return fmt.Sprintf("_install_skill %s", shellQuote(entry))
+	return fmt.Sprintf("_install_skill %s", shellQuote(normalizeClawHubSlug(entry)))
 }
 
 // hasClawHubSkills returns true if any entry is a ClawHub skill (not npm-prefixed).
 func hasClawHubSkills(skills []string) bool {
 	for _, s := range skills {
 		if !strings.HasPrefix(s, "npm:") {
+			return true
+		}
+	}
+	return false
+}
+
+// hasNpmSkills returns true if any entry is an npm-prefixed skill.
+func hasNpmSkills(skills []string) bool {
+	for _, s := range skills {
+		if strings.HasPrefix(s, "npm:") {
 			return true
 		}
 	}
@@ -755,7 +914,7 @@ func BuildSkillsScript(instance *openclawv1alpha1.OpenClawInstance) string {
 	var lines []string
 	lines = append(lines, "set -e")
 	if hasClawHubSkills(skills) {
-		lines = append(lines, skillInstallWrapper)
+		lines = append(lines, clawHubSkillsSetup, skillInstallWrapper)
 	}
 	for _, skill := range skills {
 		lines = append(lines, parseSkillEntry(skill))
@@ -780,6 +939,11 @@ func buildSkillsInitContainer(instance *openclawv1alpha1.OpenClawInstance) *core
 	env := []corev1.EnvVar{
 		{Name: "HOME", Value: "/tmp"},
 		{Name: "NPM_CONFIG_CACHE", Value: "/tmp/.npm"},
+		// Redirect npm global installs to the PVC so binaries land in
+		// ~/.openclaw/.local/bin (same physical dir as ~/.local/bin in the
+		// main container via subpath mount). This keeps npm skill binaries
+		// alongside uv, pnpm, and other tools (#335).
+		{Name: "NPM_CONFIG_PREFIX", Value: "/home/openclaw/.openclaw/.local"},
 		// Disable npm lifecycle scripts for all npm operations in this
 		// container tree (clawhub install + npm install). This mitigates
 		// supply chain attacks via malicious preinstall/postinstall scripts.
@@ -805,17 +969,126 @@ func buildSkillsInitContainer(instance *openclawv1alpha1.OpenClawInstance) *core
 		})
 	}
 
+	// Append user-supplied env vars after hardcoded defaults so that
+	// credentials like CLAWHUB_TOKEN are available during skill installation.
+	// Hardcoded vars (HOME, NPM_CONFIG_CACHE, NPM_CONFIG_IGNORE_SCRIPTS)
+	// take precedence because they appear first.
+	env = append(env, instance.Spec.Env...)
+
 	return &corev1.Container{
 		Name:                     "init-skills",
 		Image:                    GetImage(instance),
 		Command:                  []string{"sh", "-c", script},
 		ImagePullPolicy:          getPullPolicy(instance),
 		Env:                      env,
+		EnvFrom:                  instance.Spec.EnvFrom,
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: Ptr(false),
 			ReadOnlyRootFilesystem:   Ptr(false), // npx needs to write to node_modules
+			RunAsNonRoot:             Ptr(podRunAsNonRoot(instance)),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+			SeccompProfile: &corev1.SeccompProfile{
+				Type: corev1.SeccompProfileTypeRuntimeDefault,
+			},
+		},
+		VolumeMounts: mounts,
+	}
+}
+
+// parsePluginEntry returns the shell command to install a single plugin entry.
+// Entries are npm package names. An optional "npm:" prefix is stripped.
+// Installs into the PVC-backed ~/.openclaw/ node_modules via `npm install`.
+func parsePluginEntry(entry string) string {
+	pkg := entry
+	if after, ok := strings.CutPrefix(entry, "npm:"); ok {
+		pkg = after
+	}
+	return fmt.Sprintf("cd /home/openclaw/.openclaw && npm install %s", shellQuote(pkg))
+}
+
+// BuildPluginsScript generates the shell script for the plugins init container.
+// Each entry produces an `npm install` command.
+// Entries are sorted for determinism. Returns "" if no plugins are defined.
+func BuildPluginsScript(instance *openclawv1alpha1.OpenClawInstance) string {
+	plugins := instance.Spec.Plugins
+	if len(plugins) == 0 {
+		return ""
+	}
+
+	sorted := make([]string, len(plugins))
+	copy(sorted, plugins)
+	sort.Strings(sorted)
+
+	var lines []string
+	lines = append(lines, "set -e")
+	for _, plugin := range sorted {
+		lines = append(lines, parsePluginEntry(plugin))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// buildPluginsInitContainer creates the init container that installs plugins.
+// npm lifecycle scripts are disabled globally via NPM_CONFIG_IGNORE_SCRIPTS.
+func buildPluginsInitContainer(instance *openclawv1alpha1.OpenClawInstance) *corev1.Container {
+	script := BuildPluginsScript(instance)
+	if script == "" {
+		return nil
+	}
+
+	mounts := []corev1.VolumeMount{
+		{Name: "data", MountPath: "/home/openclaw/.openclaw"},
+		{Name: "plugins-tmp", MountPath: "/tmp"},
+	}
+
+	env := []corev1.EnvVar{
+		{Name: "HOME", Value: "/tmp"},
+		{Name: "NPM_CONFIG_CACHE", Value: "/tmp/.npm"},
+		// Disable npm lifecycle scripts for all npm operations in this
+		// container. This mitigates supply chain attacks via malicious
+		// preinstall/postinstall scripts.
+		{Name: "NPM_CONFIG_IGNORE_SCRIPTS", Value: "true"},
+	}
+
+	// CA bundle for plugin install (makes network calls)
+	if cab := instance.Spec.Security.CABundle; cab != nil {
+		key := cab.Key
+		if key == "" {
+			key = DefaultCABundleKey
+		}
+		mounts = append(mounts, corev1.VolumeMount{
+			Name:      "ca-bundle",
+			MountPath: "/etc/ssl/certs/custom-ca-bundle.crt",
+			SubPath:   key,
+			ReadOnly:  true,
+		})
+		env = append(env, corev1.EnvVar{
+			Name:  "NODE_EXTRA_CA_CERTS",
+			Value: "/etc/ssl/certs/custom-ca-bundle.crt",
+		})
+	}
+
+	// Append user-supplied env vars after hardcoded defaults so that
+	// credentials are available during plugin installation.
+	// Hardcoded vars (HOME, NPM_CONFIG_CACHE, NPM_CONFIG_IGNORE_SCRIPTS)
+	// take precedence because they appear first.
+	env = append(env, instance.Spec.Env...)
+
+	return &corev1.Container{
+		Name:                     "init-plugins",
+		Image:                    GetImage(instance),
+		Command:                  []string{"sh", "-c", script},
+		ImagePullPolicy:          getPullPolicy(instance),
+		Env:                      env,
+		EnvFrom:                  instance.Spec.EnvFrom,
+		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
+		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: Ptr(false),
+			ReadOnlyRootFilesystem:   Ptr(false), // npm needs to write to node_modules
 			RunAsNonRoot:             Ptr(podRunAsNonRoot(instance)),
 			Capabilities: &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
@@ -891,7 +1164,7 @@ pnpm --version`
 // access to "uv pip install" for Python packages and "uv tool install" for CLI
 // tools without any manual bootstrapping. The check is idempotent - subsequent
 // pod starts skip the copy if uv is already present.
-func buildUvInitContainer() corev1.Container {
+func buildUvInitContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
 	script := `set -e
 if [ -x /home/openclaw/.local/bin/uv ]; then echo "uv already installed"; exit 0; fi
 mkdir -p /home/openclaw/.local/bin
@@ -900,7 +1173,7 @@ echo "uv $(/home/openclaw/.local/bin/uv --version) installed"`
 
 	return corev1.Container{
 		Name:                     "init-uv",
-		Image:                    UvImage,
+		Image:                    ApplyRegistryOverride(UvImage, instance.Spec.Registry),
 		Command:                  []string{"sh", "-c", script},
 		ImagePullPolicy:          corev1.PullIfNotPresent,
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
@@ -1003,7 +1276,7 @@ uv --version`
 
 	return corev1.Container{
 		Name:                     "init-python",
-		Image:                    UvImage,
+		Image:                    ApplyRegistryOverride(UvImage, instance.Spec.Registry),
 		Command:                  []string{"sh", "-c", script},
 		ImagePullPolicy:          corev1.PullIfNotPresent,
 		Env:                      env,
@@ -1025,7 +1298,7 @@ uv --version`
 }
 
 // hasWorkspaceFiles returns true if the instance has workspace files to seed.
-// Always returns true because the operator always injects ENVIRONMENT.md.
+// Always returns true because the operator always injects ENVIRONMENT.md and BOOTSTRAP.md.
 func hasWorkspaceFiles(_ *openclawv1alpha1.OpenClawInstance, _ *ResolvedSkillPacks) bool {
 	return true
 }
@@ -1170,10 +1443,10 @@ func buildTailscaleBinInitContainer(instance *openclawv1alpha1.OpenClawInstance)
 
 // buildGatewayProxyContainer creates the nginx reverse proxy sidecar that
 // exposes the loopback-bound gateway and canvas ports for external access.
-func buildGatewayProxyContainer(_ *openclawv1alpha1.OpenClawInstance) corev1.Container {
+func buildGatewayProxyContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
 	return corev1.Container{
 		Name:            "gateway-proxy",
-		Image:           DefaultGatewayProxyImage,
+		Image:           ApplyRegistryOverride(DefaultGatewayProxyImage, instance.Spec.Registry),
 		ImagePullPolicy: corev1.PullIfNotPresent,
 		Ports: []corev1.ContainerPort{
 			{
@@ -1226,91 +1499,48 @@ func buildGatewayProxyContainer(_ *openclawv1alpha1.OpenClawInstance) corev1.Con
 	}
 }
 
-// buildChromiumProxyContainer creates the nginx CDP proxy sidecar that
-// injects Chrome launch args (anti-bot flags + ExtraArgs) into every
-// browserless request. It runs as a native sidecar after the browserless
-// container to guarantee startup ordering.
-func buildChromiumProxyContainer(_ *openclawv1alpha1.OpenClawInstance) corev1.Container {
-	return corev1.Container{
-		Name:            "chromium-proxy",
-		Image:           DefaultGatewayProxyImage,
-		ImagePullPolicy: corev1.PullIfNotPresent,
-		Ports: []corev1.ContainerPort{
-			{
-				Name:          "cdp-proxy",
-				ContainerPort: ChromiumProxyPort,
-				Protocol:      corev1.ProtocolTCP,
-			},
-		},
-		VolumeMounts: []corev1.VolumeMount{
-			{
-				Name:      "config",
-				MountPath: "/etc/nginx/nginx.conf",
-				SubPath:   ChromiumProxyNginxConfigKey,
-				ReadOnly:  true,
-			},
-			{
-				Name:      "chromium-proxy-tmp",
-				MountPath: "/tmp",
-			},
-		},
-		Resources: corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("10m"),
-				corev1.ResourceMemory: resource.MustParse("16Mi"),
-			},
-			Limits: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("100m"),
-				corev1.ResourceMemory: resource.MustParse("64Mi"),
-			},
-		},
-		SecurityContext: &corev1.SecurityContext{
-			AllowPrivilegeEscalation: Ptr(false),
-			ReadOnlyRootFilesystem:   Ptr(true),
-			RunAsNonRoot:             Ptr(true),
-			RunAsUser:                Ptr(int64(101)), // nginx user in alpine
-			Capabilities: &corev1.Capabilities{
-				Drop: []corev1.Capability{"ALL"},
-			},
-			SeccompProfile: &corev1.SeccompProfile{
-				Type: corev1.SeccompProfileTypeRuntimeDefault,
-			},
-		},
-		// Startup probe verifies the proxy can reach browserless via /json/version.
-		// This gates the next init container / regular containers from starting.
-		StartupProbe: &corev1.Probe{
-			ProbeHandler: corev1.ProbeHandler{
-				HTTPGet: &corev1.HTTPGetAction{
-					Path: "/json/version",
-					Port: intstr.FromInt32(ChromiumProxyPort),
-				},
-			},
-			PeriodSeconds:    1,
-			FailureThreshold: 30,
-			SuccessThreshold: 1,
-			TimeoutSeconds:   2,
-		},
-		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
-		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
-	}
-}
-
-// buildChromiumContainer creates the Chromium sidecar container
+// buildChromiumContainer creates the Chromium sidecar container.
+// Chrome runs via run.sh which handles --remote-debugging-port=9222
+// internally (no browserless proxy layer). This avoids session lifecycle
+// issues where browserless kills Chrome when the WebSocket client
+// disconnects between tool calls (see #360). Additional launch args
+// (anti-bot flags + user ExtraArgs) are passed as container args to run.sh.
 func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
 	repo := instance.Spec.Chromium.Image.Repository
 	if repo == "" {
-		repo = "ghcr.io/browserless/chromium"
+		repo = DefaultChromiumImage
+	}
+
+	// Migrate instances created before v0.22.1 that have the old browserless
+	// image stored via kubebuilder defaults. The old image no longer exists
+	// on GHCR, and even if it did, its entrypoint is incompatible with the
+	// Chrome launch flags we pass as container args (#396).
+	if repo == DeprecatedChromiumImage {
+		rLog.Info("migrating deprecated chromium image to default",
+			"old", repo, "new", DefaultChromiumImage)
+		repo = DefaultChromiumImage
 	}
 
 	tag := instance.Spec.Chromium.Image.Tag
 	if tag == "" {
-		tag = DefaultImageTag
+		if repo == DefaultChromiumImage {
+			tag = DefaultChromiumTag
+		} else {
+			tag = DefaultImageTag
+		}
+	}
+
+	// The old browserless image defaulted to "latest"; normalize to "stable"
+	// when migrating to the new image.
+	if repo == DefaultChromiumImage && tag == "latest" {
+		tag = DefaultChromiumTag
 	}
 
 	image := repo + ":" + tag
 	if instance.Spec.Chromium.Image.Digest != "" {
 		image = repo + "@" + instance.Spec.Chromium.Image.Digest
 	}
+	image = ApplyRegistryOverride(image, instance.Spec.Registry)
 
 	chromiumMounts := []corev1.VolumeMount{
 		{
@@ -1327,16 +1557,15 @@ func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.
 		},
 	}
 
-	// Override the default listening port (3000) to avoid conflicting with
-	// the OpenClaw gateway's built-in browser control service on port 3000.
-	// HOST=:: enables dual-stack listening so the sidecar is reachable on
-	// both IPv4 (127.0.0.1) and IPv6 (::1) loopback addresses.
+	// Set HOME to /tmp (an emptyDir) so fontconfig and other tools that
+	// need a writable home directory work correctly. The default nobody
+	// user (65534) has home /nonexistent which does not exist.
 	chromiumEnv := []corev1.EnvVar{
-		{Name: "PORT", Value: fmt.Sprintf("%d", ChromiumPort)},
-		{Name: "HOST", Value: "::"},
+		{Name: "HOME", Value: "/tmp"},
 	}
 
-	// Add CA bundle mount and env if configured
+	// Add CA bundle mount if configured. The certificate file is mounted
+	// into the system CA directory so Chrome picks it up automatically.
 	if cab := instance.Spec.Security.CABundle; cab != nil {
 		key := cab.Key
 		if key == "" {
@@ -1348,42 +1577,33 @@ func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.
 			SubPath:   key,
 			ReadOnly:  true,
 		})
-		chromiumEnv = append(chromiumEnv, corev1.EnvVar{
-			Name:  "NODE_EXTRA_CA_CERTS",
-			Value: "/etc/ssl/certs/custom-ca-bundle.crt",
-		})
-	}
-
-	// NOTE: DEFAULT_LAUNCH_ARGS was deprecated in browserless v2.0.0 and is
-	// fully ignored. Chrome launch args are injected by the chromium-proxy
-	// nginx sidecar which appends DefaultChromiumLaunchArgs + ExtraArgs via
-	// the `launch` query parameter on every request to browserless.
-
-	// When persistence is enabled, direct Chromium to store its profile data
-	// on the persistent volume so cookies, localStorage, and session tokens
-	// survive pod restarts. USER_DATA_DIR is the browserless v2 env var for
-	// the default Chrome user data directory.
-	if instance.Spec.Chromium.Persistence.Enabled {
-		chromiumEnv = append(chromiumEnv, corev1.EnvVar{
-			Name:  "DATA_DIR",
-			Value: "/chromium-data",
-		})
 	}
 
 	// Append user-supplied extra env vars
 	chromiumEnv = append(chromiumEnv, instance.Spec.Chromium.ExtraEnv...)
 
+	// Override entrypoint for the default image to fix unquoted $@ in
+	// upstream run.sh that causes word-splitting of args with spaces
+	// (e.g. --user-agent), leading to "Multiple targets are not supported".
+	// Custom images keep their own entrypoint. See #396.
+	var command []string
+	if repo == DefaultChromiumImage {
+		command = ChromiumEntrypointCommand
+	}
+
 	return corev1.Container{
 		Name:                     "chromium",
 		Image:                    image,
 		ImagePullPolicy:          corev1.PullIfNotPresent,
+		Command:                  command,
+		Args:                     ChromiumArgs(instance),
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: Ptr(false),
 			ReadOnlyRootFilesystem:   Ptr(false), // Chromium needs writable dirs for profiles, cache, crash dumps
 			RunAsNonRoot:             Ptr(true),
-			RunAsUser:                Ptr(int64(999)), // browserless built-in user (blessuser)
+			RunAsUser:                Ptr(int64(65534)), // nobody - headless-shell has no pre-created users
 			Capabilities: &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
 			},
@@ -1401,10 +1621,8 @@ func buildChromiumContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.
 		Resources:    buildChromiumResourceRequirements(instance),
 		Env:          chromiumEnv,
 		VolumeMounts: chromiumMounts,
-		// Startup probe ensures browserless is ready to accept CDP connections
-		// before the pod is marked Ready. Without this, the first browser tool
-		// call from the main container may time out because browserless has not
-		// finished starting yet.
+		// Startup probe ensures Chrome is ready to accept CDP connections
+		// before the pod is marked Ready.
 		StartupProbe: &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
 				HTTPGet: &corev1.HTTPGetAction{
@@ -1437,6 +1655,7 @@ func buildOllamaContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Co
 	if instance.Spec.Ollama.Image.Digest != "" {
 		image = repo + "@" + instance.Spec.Ollama.Image.Digest
 	}
+	image = ApplyRegistryOverride(image, instance.Spec.Registry)
 
 	container := corev1.Container{
 		Name:                     "ollama",
@@ -1491,11 +1710,16 @@ func buildWebTerminalContainer(instance *openclawv1alpha1.OpenClawInstance) core
 	if instance.Spec.WebTerminal.Image.Digest != "" {
 		image = repo + "@" + instance.Spec.WebTerminal.Image.Digest
 	}
+	image = ApplyRegistryOverride(image, instance.Spec.Registry)
 
 	// Build ttyd command flags
 	var flags []string
 	if instance.Spec.WebTerminal.ReadOnly {
 		flags = append(flags, "-R")
+	} else {
+		// ttyd defaults to read-only when --writable/-W is not passed.
+		// Explicitly pass -W so that ReadOnly: false results in an interactive terminal.
+		flags = append(flags, "-W")
 	}
 	if instance.Spec.WebTerminal.Credential != nil {
 		flags = append(flags, `-c "${TTYD_USERNAME}:${TTYD_PASSWORD}"`)
@@ -1598,6 +1822,59 @@ func buildWebTerminalResourceRequirements(instance *openclawv1alpha1.OpenClawIns
 	return req
 }
 
+// buildOTelCollectorContainer creates the OpenTelemetry Collector sidecar.
+// It receives OTLP metrics from OpenClaw and exposes a Prometheus scrape
+// endpoint on the configured metrics port.
+func buildOTelCollectorContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
+	image := DefaultOTelCollectorImage + ":" + DefaultOTelCollectorTag
+	image = ApplyRegistryOverride(image, instance.Spec.Registry)
+
+	return corev1.Container{
+		Name:                     "otel-collector",
+		Image:                    image,
+		ImagePullPolicy:          corev1.PullIfNotPresent,
+		Args:                     []string{"--config=/etc/otel-collector/config.yaml"},
+		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
+		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: Ptr(false),
+			ReadOnlyRootFilesystem:   Ptr(true),
+			RunAsNonRoot:             Ptr(true),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+			SeccompProfile: &corev1.SeccompProfile{
+				Type: corev1.SeccompProfileTypeRuntimeDefault,
+			},
+		},
+		Ports: []corev1.ContainerPort{
+			{
+				Name:          "metrics",
+				ContainerPort: MetricsPort(instance),
+				Protocol:      corev1.ProtocolTCP,
+			},
+		},
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    ParseQuantity("", "25m"),
+				corev1.ResourceMemory: ParseQuantity("", "32Mi"),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    ParseQuantity("", "100m"),
+				corev1.ResourceMemory: ParseQuantity("", "128Mi"),
+			},
+		},
+		VolumeMounts: []corev1.VolumeMount{
+			{
+				Name:      "config",
+				MountPath: "/etc/otel-collector/config.yaml",
+				SubPath:   OTelCollectorConfigKey,
+				ReadOnly:  true,
+			},
+		},
+	}
+}
+
 // buildOllamaResourceRequirements creates resource requirements for the Ollama container
 func buildOllamaResourceRequirements(instance *openclawv1alpha1.OpenClawInstance) corev1.ResourceRequirements {
 	req := corev1.ResourceRequirements{
@@ -1644,6 +1921,7 @@ func buildOllamaModelPullInitContainer(instance *openclawv1alpha1.OpenClawInstan
 	if instance.Spec.Ollama.Image.Digest != "" {
 		image = repo + "@" + instance.Spec.Ollama.Image.Digest
 	}
+	image = ApplyRegistryOverride(image, instance.Spec.Registry)
 
 	return corev1.Container{
 		Name:                     "init-ollama",
@@ -1679,8 +1957,11 @@ func buildVolumes(instance *openclawv1alpha1.OpenClawInstance, skillPacks *Resol
 	volumes := []corev1.Volume{}
 
 	// Data volume (PVC or emptyDir)
-	persistenceEnabled := instance.Spec.Storage.Persistence.Enabled == nil || *instance.Spec.Storage.Persistence.Enabled
-	if persistenceEnabled {
+	switch {
+	case IsPersistenceEnabled(instance) && IsHPAEnabled(instance):
+		// VolumeClaimTemplates handle per-replica PVCs - the StatefulSet
+		// controller auto-creates a volume named "data" for each pod.
+	case IsPersistenceEnabled(instance):
 		pvcName := PVCName(instance)
 		if instance.Spec.Storage.Persistence.ExistingClaim != "" {
 			pvcName = instance.Spec.Storage.Persistence.ExistingClaim
@@ -1693,7 +1974,7 @@ func buildVolumes(instance *openclawv1alpha1.OpenClawInstance, skillPacks *Resol
 				},
 			},
 		})
-	} else {
+	default:
 		volumes = append(volumes, corev1.Volume{
 			Name: "data",
 			VolumeSource: corev1.VolumeSource{
@@ -1743,6 +2024,16 @@ func buildVolumes(instance *openclawv1alpha1.OpenClawInstance, skillPacks *Resol
 		})
 	}
 
+	// Plugins-tmp volume for plugins init container
+	if len(instance.Spec.Plugins) > 0 {
+		volumes = append(volumes, corev1.Volume{
+			Name: "plugins-tmp",
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		})
+	}
+
 	// Runtime dep tmp volumes
 	if instance.Spec.RuntimeDeps.Pnpm {
 		volumes = append(volumes, corev1.Volume{
@@ -1771,8 +2062,7 @@ func buildVolumes(instance *openclawv1alpha1.OpenClawInstance, skillPacks *Resol
 		})
 	}
 
-	// Tmp volumes: main container (read-only rootfs needs writable /tmp)
-	// and gateway proxy (nginx pid file)
+	// Tmp volume: main container (read-only rootfs needs writable /tmp)
 	volumes = append(volumes,
 		corev1.Volume{
 			Name: "tmp",
@@ -1780,13 +2070,17 @@ func buildVolumes(instance *openclawv1alpha1.OpenClawInstance, skillPacks *Resol
 				EmptyDir: &corev1.EmptyDirVolumeSource{},
 			},
 		},
-		corev1.Volume{
+	)
+
+	// Gateway proxy tmp volume (nginx pid file) — only when proxy is enabled
+	if IsGatewayProxyEnabled(instance) {
+		volumes = append(volumes, corev1.Volume{
 			Name: "gateway-proxy-tmp",
 			VolumeSource: corev1.VolumeSource{
 				EmptyDir: &corev1.EmptyDirVolumeSource{},
 			},
-		},
-	)
+		})
+	}
 
 	// Tailscale volumes (state lives under /tmp so no separate state volume)
 	if instance.Spec.Tailscale.Enabled {
@@ -1817,12 +2111,6 @@ func buildVolumes(instance *openclawv1alpha1.OpenClawInstance, skillPacks *Resol
 		volumes = append(volumes,
 			corev1.Volume{
 				Name: "chromium-tmp",
-				VolumeSource: corev1.VolumeSource{
-					EmptyDir: &corev1.EmptyDirVolumeSource{},
-				},
-			},
-			corev1.Volume{
-				Name: "chromium-proxy-tmp",
 				VolumeSource: corev1.VolumeSource{
 					EmptyDir: &corev1.EmptyDirVolumeSource{},
 				},
@@ -1969,16 +2257,19 @@ func buildChromiumResourceRequirements(instance *openclawv1alpha1.OpenClawInstan
 	return req
 }
 
-// buildHTTPProbeHandler returns an HTTP GET probe handler that hits the
-// given path on the nginx proxy sidecar port. The gateway exposes /healthz
-// (liveness) and /readyz (readiness) on 127.0.0.1:18789; the proxy sidecar
-// forwards traffic from 0.0.0.0:18790, making the endpoints reachable by
-// the kubelet.
-func buildHTTPProbeHandler(path string) corev1.ProbeHandler {
+// buildHTTPProbeHandler returns an HTTP GET probe handler. When the gateway
+// proxy sidecar is enabled, probes target the proxy port (18790) which
+// forwards to the gateway on loopback. When disabled, probes hit the
+// gateway directly on port 18789.
+func buildHTTPProbeHandler(path string, instance *openclawv1alpha1.OpenClawInstance) corev1.ProbeHandler {
+	port := int32(GatewayPort)
+	if IsGatewayProxyEnabled(instance) {
+		port = GatewayProxyPort
+	}
 	return corev1.ProbeHandler{
 		HTTPGet: &corev1.HTTPGetAction{
 			Path:   path,
-			Port:   intstr.FromInt32(GatewayProxyPort),
+			Port:   intstr.FromInt32(port),
 			Scheme: corev1.URISchemeHTTP,
 		},
 	}
@@ -1995,7 +2286,7 @@ func buildLivenessProbe(instance *openclawv1alpha1.OpenClawInstance) *corev1.Pro
 	}
 
 	probe := &corev1.Probe{
-		ProbeHandler:        buildHTTPProbeHandler("/healthz"),
+		ProbeHandler:        buildHTTPProbeHandler("/healthz", instance),
 		InitialDelaySeconds: 30,
 		PeriodSeconds:       10,
 		TimeoutSeconds:      5,
@@ -2032,7 +2323,7 @@ func buildReadinessProbe(instance *openclawv1alpha1.OpenClawInstance) *corev1.Pr
 	}
 
 	probe := &corev1.Probe{
-		ProbeHandler:        buildHTTPProbeHandler("/readyz"),
+		ProbeHandler:        buildHTTPProbeHandler("/readyz", instance),
 		InitialDelaySeconds: 5,
 		PeriodSeconds:       5,
 		TimeoutSeconds:      3,
@@ -2069,12 +2360,12 @@ func buildStartupProbe(instance *openclawv1alpha1.OpenClawInstance) *corev1.Prob
 	}
 
 	probe := &corev1.Probe{
-		ProbeHandler:        buildHTTPProbeHandler("/healthz"),
-		InitialDelaySeconds: 0,
+		ProbeHandler:        buildHTTPProbeHandler("/healthz", instance),
+		InitialDelaySeconds: 5,
 		PeriodSeconds:       5,
 		TimeoutSeconds:      3,
 		SuccessThreshold:    1,
-		FailureThreshold:    30, // 30 * 5s = 150s startup time
+		FailureThreshold:    60, // 60 * 5s = 300s startup time
 	}
 
 	if spec != nil {
@@ -2142,19 +2433,22 @@ func getPullPolicy(instance *openclawv1alpha1.OpenClawInstance) corev1.PullPolic
 	return corev1.PullIfNotPresent
 }
 
-// calculateConfigHash computes a hash of the config, workspace, and skills for rollout detection.
-// Changes to any of these trigger a pod restart.
-func calculateConfigHash(instance *openclawv1alpha1.OpenClawInstance) string {
+// calculateConfigHash computes a hash of the config, skills, plugins, and
+// runtime settings for rollout detection. Changes to any of these trigger a
+// pod restart. Workspace files are intentionally excluded because they are
+// delivered via a projected ConfigMap volume that the kubelet updates in-place
+// without requiring a pod restart.
+func calculateConfigHash(instance *openclawv1alpha1.OpenClawInstance, _ map[string]string, _ map[string]map[string]string) string {
 	h := sha256.New()
 	configData, _ := json.Marshal(instance.Spec.Config)
 	h.Write(configData)
-	if instance.Spec.Workspace != nil {
-		wsData, _ := json.Marshal(instance.Spec.Workspace)
-		h.Write(wsData)
-	}
 	if len(instance.Spec.Skills) > 0 {
 		skillsData, _ := json.Marshal(instance.Spec.Skills)
 		h.Write(skillsData)
+	}
+	if len(instance.Spec.Plugins) > 0 {
+		pluginsData, _ := json.Marshal(instance.Spec.Plugins)
+		h.Write(pluginsData)
 	}
 	if len(instance.Spec.InitContainers) > 0 {
 		icData, _ := json.Marshal(instance.Spec.InitContainers)
@@ -2193,6 +2487,23 @@ func NormalizeStatefulSet(sts *appsv1.StatefulSet) {
 	}
 	for i := range spec.Containers {
 		normalizeContainer(&spec.Containers[i])
+	}
+
+	// K8s defaults UpdateStrategy.RollingUpdate to &{} when Type == RollingUpdate.
+	// Without this, CreateOrUpdate sees nil vs &{} on every reconcile, issues an
+	// unnecessary Update, increments the StatefulSet resourceVersion, fires a watch
+	// event, and causes a continuous reconcile loop.
+	// Mirrors: k8s.io/kubernetes/pkg/apis/apps/v1/defaults.go SetDefaults_StatefulSetSpec
+	if sts.Spec.UpdateStrategy.Type == appsv1.RollingUpdateStatefulSetStrategyType && sts.Spec.UpdateStrategy.RollingUpdate == nil {
+		sts.Spec.UpdateStrategy.RollingUpdate = &appsv1.RollingUpdateStatefulSetStrategy{}
+	}
+
+	// K8s defaults VolumeMode to Filesystem on VolumeClaimTemplates
+	filesystemMode := corev1.PersistentVolumeFilesystem
+	for i := range sts.Spec.VolumeClaimTemplates {
+		if sts.Spec.VolumeClaimTemplates[i].Spec.VolumeMode == nil {
+			sts.Spec.VolumeClaimTemplates[i].Spec.VolumeMode = &filesystemMode
+		}
 	}
 }
 
@@ -2253,11 +2564,35 @@ func normalizeProbe(p *corev1.Probe) {
 }
 
 // statefulSetReplicas returns the replica count for the StatefulSet.
+// When suspended, replicas is explicitly set to 0.
 // When HPA is enabled, replicas is set to nil so the HPA manages scaling.
 // Otherwise defaults to 1 (single-instance).
 func statefulSetReplicas(instance *openclawv1alpha1.OpenClawInstance) *int32 {
+	if instance.Spec.Suspended {
+		return Ptr(int32(0))
+	}
 	if IsHPAEnabled(instance) {
 		return nil
 	}
 	return Ptr(int32(1))
+}
+
+// VolumeClaimTemplatesEqual compares two VolumeClaimTemplate slices by name
+// and spec. Both name and spec are immutable on existing StatefulSets, so any
+// change requires a delete+recreate. The caller must normalize the desired VCTs
+// (e.g. via NormalizeStatefulSet) before comparing so that API server defaults
+// like VolumeMode don't cause false negatives.
+func VolumeClaimTemplatesEqual(a, b []corev1.PersistentVolumeClaim) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Name != b[i].Name {
+			return false
+		}
+		if !apiequality.Semantic.DeepEqual(a[i].Spec, b[i].Spec) {
+			return false
+		}
+	}
+	return true
 }

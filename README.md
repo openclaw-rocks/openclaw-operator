@@ -5,8 +5,8 @@
 # OpenClaw Kubernetes Operator
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Go Report Card](https://goreportcard.com/badge/github.com/OpenClaw-rocks/k8s-operator)](https://goreportcard.com/report/github.com/OpenClaw-rocks/k8s-operator)
-[![CI](https://github.com/OpenClaw-rocks/k8s-operator/actions/workflows/ci.yaml/badge.svg)](https://github.com/OpenClaw-rocks/k8s-operator/actions/workflows/ci.yaml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/OpenClaw-rocks/openclaw-operator)](https://goreportcard.com/report/github.com/OpenClaw-rocks/openclaw-operator)
+[![CI](https://github.com/OpenClaw-rocks/openclaw-operator/actions/workflows/ci.yaml/badge.svg)](https://github.com/OpenClaw-rocks/openclaw-operator/actions/workflows/ci.yaml)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-1.28%2B-326CE5?logo=kubernetes&logoColor=white)](https://kubernetes.io)
 [![Go](https://img.shields.io/badge/Go-1.24-00ADD8?logo=go&logoColor=white)](https://go.dev)
 
@@ -63,6 +63,8 @@ spec:
 
 Every request is validated against the instance's allowlist policy. Protected config keys cannot be overwritten, and denied requests are logged with a reason. See [Self-configure](#self-configure) for details.
 
+> **Note:** Without `selfConfigure` enabled, config or skill changes made by the agent inside the container won't trigger a pod restart. You'll need to restart the pod manually (e.g. `kubectl delete pod <pod-name>`) for changes to take effect.
+
 ## Features
 
 | | Feature | Details |
@@ -74,12 +76,14 @@ Every request is validated against the instance's allowlist policy. Protected co
 | **Flexible** | Provider-agnostic config | Use any AI provider (Anthropic, OpenAI, or others) via environment variables and inline or external config |
 | **Config Modes** | Merge or overwrite | `overwrite` replaces config on restart; `merge` deep-merges with PVC config, preserving runtime changes. Config is restored on every container restart via init container. |
 | **Skills** | Declarative install | Install ClawHub skills, npm packages, or GitHub-hosted skill packs via `spec.skills` - supports `npm:` and `pack:` prefixes |
+| **Plugins** | Declarative install | Install OpenClaw plugins via `spec.plugins` - npm packages installed in a secure init container |
 | **Runtime Deps** | pnpm & Python/uv | Built-in init containers install pnpm (via corepack) or Python 3.12 + uv for MCP servers and skills |
 | **Auto-Update** | OCI registry polling | Opt-in version tracking: checks the registry for new semver releases, backs up first, rolls out, and auto-rolls back if the new version fails health checks |
 | **Scalable** | Auto-scaling | HPA integration with CPU and memory metrics, min/max replica bounds, automatic StatefulSet replica management |
+| **Operational** | Instance suspension | Scale to zero with `spec.suspended: true` - all non-runtime resources remain managed, resume instantly with `false` |
 | **Resilient** | Self-healing lifecycle | PodDisruptionBudgets, health probes, automatic config rollouts via content hashing, 5-minute drift detection |
 | **Backup/Restore** | S3-backed snapshots | Automatic backup to S3-compatible storage on deletion, pre-update, and on a cron schedule; restore into a new instance from any snapshot |
-| **Workspace Seeding** | Initial files & dirs | Pre-populate the workspace with files and directories before the agent starts |
+| **Workspace Seeding** | Initial files & dirs | Pre-populate the workspace with files and directories before the agent starts; reference an external ConfigMap for GitOps workflows |
 | **Gateway Auth** | Auto-generated tokens | Automatic gateway token Secret per instance, bypassing mDNS pairing (unusable in k8s) |
 | **Tailscale** | Tailnet access | Expose via Tailscale Serve or Funnel with SSO auth - no Ingress needed |
 | **Extensible** | Sidecars & init containers | Chromium for browser automation, Ollama for local LLMs, Tailscale for tailnet access, plus custom init containers and sidecars |
@@ -229,6 +233,17 @@ spec:
 
 Config changes are detected via SHA-256 hashing and automatically trigger a rolling update. No manual restart needed.
 
+### Gateway proxy
+
+By default, each pod includes an nginx reverse proxy sidecar that forwards traffic to the OpenClaw gateway on loopback. Set `spec.gateway.enabled: false` to disable it:
+
+- Health probes and Service ports target the gateway directly on port 18789
+- `gateway.bind` is set to `0.0.0.0` instead of loopback
+- The `gateway-proxy` container and its tmp volume are omitted from the pod
+- To replace the built-in proxy with your own (e.g., Envoy, a signing proxy), disable it and add your proxy via `spec.sidecars`
+- **Warning:** Do not set `gateway.bind: loopback` in your config JSON when the proxy is disabled - the gateway will only listen on `127.0.0.1` with nothing forwarding external traffic, making the pod unreachable. The operator emits a `GatewayBindConflict` warning event if this misconfiguration is detected.
+- **TLS:** When the proxy is disabled, the gateway serves plaintext `ws://` on `0.0.0.0`. Ensure your replacement proxy or Ingress handles TLS termination to avoid exposing unencrypted WebSocket traffic (CWE-319).
+
 ### Gateway authentication
 
 The operator automatically generates a gateway token Secret for each instance and injects it into both the config JSON (`gateway.auth.mode: token`) and the `OPENCLAW_GATEWAY_TOKEN` env var. This bypasses Bonjour/mDNS pairing, which is unusable in Kubernetes.
@@ -237,6 +252,8 @@ The operator automatically generates a gateway token Secret for each instance an
 - If you set `gateway.auth.token` in your config or `OPENCLAW_GATEWAY_TOKEN` in `spec.env`, your value takes precedence
 - To bring your own token Secret, set `spec.gateway.existingSecret` - the operator will use it instead of auto-generating one (the Secret must have a key named `token`)
 - The operator automatically sets `gateway.controlUi.dangerouslyDisableDeviceAuth: true` - device pairing is incompatible with Kubernetes (users cannot approve pairing from inside a container, connections are always proxied, and mDNS is unavailable)
+- **Do not set `gateway.mode: local`** in your config - this mode is for desktop installs and enforces device identity checks that cannot work behind a reverse proxy in Kubernetes
+- When connecting to the Control UI through an Ingress, pass the gateway token in the URL fragment: `https://openclaw.example.com/#token=<your-token>`
 - Since v2026.2.24, OpenClaw restricts `gateway.allowedOrigins` to same-origin by default - if accessing via a non-default hostname (e.g. Ingress), set `gateway.allowedOrigins: ["*"]` in your config
 
 ### Control UI allowed origins
@@ -258,8 +275,8 @@ spec:
   chromium:
     enabled: true
     image:
-      repository: ghcr.io/browserless/chromium
-      tag: "v2.0.0"
+      repository: chromedp/headless-shell  # default
+      tag: "stable"
     resources:
       requests:
         cpu: "250m"
@@ -272,8 +289,8 @@ spec:
       - "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     # Inject extra environment variables into the sidecar
     extraEnv:
-      - name: DEFAULT_STEALTH
-        value: "true"
+      - name: DISPLAY
+        value: ":99"
 ```
 
 When enabled, the operator automatically:
@@ -406,6 +423,8 @@ spec:
             primary: "anthropic/claude-sonnet-4-20250514"
 ```
 
+**Caveat:** In merge mode, removing a key from the CR does not remove it from the PVC config - the old value persists because deep-merge only adds or updates keys. If you need to remove stale config keys (e.g., after removing `gateway.mode: local`), temporarily switch to `mergeMode: overwrite`, apply, wait for the pod to restart, then switch back to `merge`.
+
 ### Skill installation
 
 Install skills declaratively. The operator runs an init container that fetches each skill before the agent starts. Entries use ClawHub by default, or prefix with `npm:` to install from npmjs.com. ClawHub installs are idempotent - if a skill is already installed (e.g., when using persistent storage), it is skipped rather than failing:
@@ -447,6 +466,142 @@ Each pack directory must contain a `skillpack.json` manifest:
 ```
 
 The operator resolves packs via the GitHub Contents API (cached for 5 minutes), seeds files into the workspace via the init container, and injects config entries into `config.raw.skills.entries` (user overrides take precedence). Set `GITHUB_TOKEN` on the operator deployment for private repo access.
+
+### Plugin installation
+
+Install plugins declaratively. The operator runs a dedicated init container that installs each plugin via `npm install` before the agent starts:
+
+```yaml
+spec:
+  plugins:
+    - "@martian-engineering/lossless-claw"
+    - "some-other-plugin"
+```
+
+npm lifecycle scripts are disabled globally on the init container (`NPM_CONFIG_IGNORE_SCRIPTS=true`) to mitigate supply chain attacks. Plugins are installed into the PVC-backed `~/.openclaw/node_modules` directory and persist across pod restarts.
+
+### Workspace seeding
+
+Pre-populate the agent workspace with files and directories before the agent starts. Files can be provided inline or referenced from an external ConfigMap -- ideal for GitOps workflows where workspace content is managed alongside your manifests.
+
+**Inline files:**
+
+```yaml
+spec:
+  workspace:
+    initialDirectories:
+      - tools/scripts
+    initialFiles:
+      README.md: |
+        # My Workspace
+        This workspace is managed by OpenClaw.
+```
+
+**External ConfigMap reference:**
+
+```yaml
+spec:
+  workspace:
+    configMapRef:
+      name: my-workspace-files      # all keys become workspace files
+    initialFiles:                    # inline files (override configMapRef)
+      EXTRA.md: "additional content"
+```
+
+All keys in the referenced ConfigMap are written as files into the workspace directory. When both `configMapRef` and `initialFiles` are specified, inline files take precedence over ConfigMap entries with the same filename.
+
+**Merge priority** (highest wins): operator-injected files > inline `initialFiles` > external `configMapRef` > skill packs.
+
+The operator sets a `WorkspaceReady` status condition to `False` when the referenced ConfigMap is missing or contains invalid filenames, and `True` once workspace files are seeded successfully. The controller watches external ConfigMaps for changes and re-reconciles automatically.
+
+**How it works:** Workspace files are seeded once via an init container. The init container copies files from a read-only ConfigMap volume to the PVC. The main container only sees the PVC (writable), so agents can modify their workspace files and changes persist across pod restarts. ConfigMaps are never mounted directly on the main container.
+
+**GitOps example with Kustomize:**
+
+```yaml
+# kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: my-namespace              # must match the instance namespace
+
+generatorOptions:
+  disableNameSuffixHash: true        # required - operator looks up by exact name
+
+configMapGenerator:
+  - name: my-workspace-files
+    files:
+      - workspace/SOUL.md
+      - workspace/AGENT.md
+```
+
+> **Important:** Two kustomize settings are required when using `configMapGenerator` with `configMapRef`:
+> - **`disableNameSuffixHash: true`** -- The operator looks up ConfigMaps by exact name. Kustomize's default hash suffix (e.g. `-57k7g4dthc`) would cause a `ConfigMapNotFound` error.
+> - **`namespace`** -- Generated ConfigMaps must be in the same namespace as the instance. Without this, kustomize creates them in the `default` namespace.
+
+**Additional workspaces (multi-agent):**
+
+When running multiple agents with isolated workspaces, use `additionalWorkspaces` to seed files for each agent. Each entry seeds to `~/.openclaw/workspace-<name>/` -- set matching paths in `spec.config.raw.agents.list[].workspace`.
+
+```yaml
+spec:
+  workspace:
+    configMapRef:
+      name: main-agent-workspace
+    additionalWorkspaces:
+      - name: scheduler
+        configMapRef:
+          name: scheduler-workspace
+        initialFiles:
+          SOUL.md: "I am the scheduler agent"
+        initialDirectories:
+          - tools
+  config:
+    raw:
+      agents:
+        list:
+          - id: main
+            name: "Main Agent"
+          - id: scheduler
+            name: "Scheduler Agent"
+      bindings:
+        - agentId: scheduler
+          match:
+            channel: discord
+            peer:
+              kind: channel
+              id: "123456789"        # bind to a specific channel
+```
+
+Each additional workspace supports the same `configMapRef`, `initialFiles`, and `initialDirectories` as the default workspace. Operator-injected `ENVIRONMENT.md` is included; `BOOTSTRAP.md` is not (only the default agent runs onboarding). Max 10 additional workspaces.
+
+> **Seed-once behavior:** Workspace files (both default and additional) are only written on first boot when they don't already exist on the PVC. If an agent modifies its own SOUL.md or AGENT.md at runtime, those changes persist across pod restarts and are never overwritten by the ConfigMap content. To re-seed a file, delete it from the PVC first.
+
+**Full GitOps example with multiple agents:**
+
+```yaml
+# kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: my-namespace
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+resources:
+  - instance.yaml
+
+configMapGenerator:
+  - name: main-agent-workspace
+    files:
+      - agents/main/SOUL.md
+      - agents/main/AGENT.md
+  - name: scheduler-workspace
+    files:
+      - agents/scheduler/SOUL.md
+      - agents/scheduler/TOOLS.md
+```
 
 ### Self-configure
 
@@ -547,7 +702,7 @@ spec:
         secretName: cloud-sql-proxy-sa
 ```
 
-Reserved init container names (`init-config`, `init-pnpm`, `init-python`, `init-skills`, `init-ollama`) are rejected by the webhook.
+Reserved init container names (`init-config`, `init-pnpm`, `init-python`, `init-skills`, `init-ollama`) are rejected by the webhook. If your sidecar replaces the built-in gateway proxy, set `spec.gateway.enabled: false` to avoid running both.
 
 ### Extra volumes and mounts
 
@@ -676,12 +831,15 @@ metadata:
 stringData:
   S3_ENDPOINT: "https://s3.us-east-1.amazonaws.com"
   S3_BUCKET: "my-openclaw-backups"
-  S3_ACCESS_KEY_ID: "<key-id>"
-  S3_SECRET_ACCESS_KEY: "<secret-key>"
+  S3_ACCESS_KEY_ID: "<key-id>"            # optional - omit for workload identity
+  S3_SECRET_ACCESS_KEY: "<secret-key>"    # optional - omit for workload identity
+  # S3_PROVIDER: "Other"    # optional - set to "AWS", "GCS", etc. for native credential chains
   # S3_REGION: "us-east-1"  # optional - needed for MinIO or providers with custom regions
 ```
 
 Compatible with AWS S3, Backblaze B2, Cloudflare R2, MinIO, Wasabi, and any S3-compatible API.
+
+**Cloud workload identity:** Omit `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` and set `S3_PROVIDER` (e.g., `AWS`, `GCS`) to use the provider's native credential chain. Set `spec.backup.serviceAccountName` to a workload identity-enabled ServiceAccount (IRSA, GKE Workload Identity, AKS Workload Identity) so backup Jobs inherit the cloud IAM role. See the [Workload Identity section](docs/api-reference.md#workload-identity-cloud-native-auth) in the API reference for a full example.
 
 **When backups run automatically:**
 
@@ -697,12 +855,14 @@ If the Secret does not exist, backups are silently skipped and operations procee
 spec:
   backup:
     schedule: "0 2 * * *"   # Daily at 2 AM UTC
+    retentionDays: 7         # Keep 7 days of daily snapshots (default)
     historyLimit: 3          # Successful job runs to retain (default: 3)
     failedHistoryLimit: 1    # Failed job runs to retain (default: 1)
     timeout: "30m"           # Max time for pre-delete backup (default: 30m, min: 5m, max: 24h)
+    serviceAccountName: ""   # Optional: IRSA/Pod Identity SA for backup Jobs
 ```
 
-The operator creates a Kubernetes CronJob that runs rclone to sync PVC data to S3. The CronJob mounts the PVC read-only (hot backup - no downtime) and uses pod affinity to co-locate on the same node as the StatefulSet pod (required for RWO PVCs). Each run stores data under a unique timestamped path: `backups/<tenantId>/<instanceName>/periodic/<timestamp>`.
+The operator creates a Kubernetes CronJob that runs rclone to sync PVC data to S3. The CronJob uses pod affinity to co-locate on the same node as the StatefulSet pod (required for RWO PVCs). Backups use an incremental sync strategy: data is synced to a fixed `latest` path (only changed files uploaded), a daily snapshot is taken, and snapshots older than `retentionDays` are automatically pruned.
 
 **Restoring from backup:**
 
@@ -714,6 +874,8 @@ spec:
 
 The operator runs a restore job to populate the PVC before starting the StatefulSet, then clears `restoreFrom` automatically. Backup paths follow the format `backups/<tenantId>/<instanceName>/<timestamp>`.
 
+**Clone / migrate an instance:** `restoreFrom` works on both existing and brand-new instances. To clone an instance across namespaces, create a new `OpenClawInstance` with `spec.restoreFrom` pointing to the source's backup path - the operator creates the PVC, runs the restore Job, then starts the StatefulSet. The new instance gets a fresh gateway token; the source is unaffected. The restore Job uses `spec.backup.serviceAccountName` when set, so workload identity (IRSA/Pod Identity) works for cross-namespace clones. For ArgoCD users, add `spec.restoreFrom` to `ignoreDifferences` since the operator auto-clears it after restore.
+
 For full details see the [Backup and Restore section](docs/api-reference.md#backup-and-restore) in the API reference.
 
 ### What the operator manages automatically
@@ -722,9 +884,10 @@ These behaviors are always applied - no configuration needed:
 
 | Behavior | Details |
 |----------|---------|
-| `gateway.bind=loopback` | Always injected into config; an nginx reverse proxy sidecar exposes the gateway and canvas ports for external access |
+| `gateway.bind` | When the gateway proxy sidecar is enabled (default), binds to loopback and an nginx reverse proxy handles external access. When disabled (`spec.gateway.enabled: false`), binds to `0.0.0.0` so the gateway is reachable directly. |
 | Gateway auth token | Auto-generated Secret per instance; injected into config and env |
 | Control UI origins | `gateway.controlUi.allowedOrigins` auto-injected from localhost + ingress hosts + `spec.gateway.controlUiOrigins` |
+| `OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS` | `10000` (10s) to work around upstream timeout regression in v2026.3.12 ([#46892](https://github.com/openclaw/openclaw/issues/46892)) |
 | `OPENCLAW_DISABLE_BONJOUR=1` | Always set (mDNS does not work in Kubernetes) |
 | Browser profiles | When Chromium is enabled, `"default"` and `"chrome"` profiles are auto-configured with the sidecar's CDP endpoint |
 | Tailscale serve config | When Tailscale is enabled, a `tailscale-serve.json` key is added to the ConfigMap for the sidecar's `TS_SERVE_CONFIG` |
@@ -798,6 +961,8 @@ The operator follows a **secure-by-default** philosophy. Every instance ships wi
 | `openclaw_autoupdate_applied_total` | Counter | Successful auto-updates applied |
 | `openclaw_autoupdate_rollbacks_total` | Counter | Auto-update rollbacks triggered |
 
+When `metrics.enabled: true` (the default), the operator automatically configures a full metrics pipeline: it injects `diagnostics.otel` config into OpenClaw to push OTLP metrics to a lightweight OTel Collector sidecar (`otel/opentelemetry-collector`), which exposes a Prometheus scrape endpoint on the configured port (default 9090). No manual OpenClaw configuration is needed. If you already set `diagnostics.otel` in your instance config, the operator preserves your settings.
+
 ### ServiceMonitor
 
 ```yaml
@@ -811,6 +976,20 @@ spec:
         labels:
           release: prometheus
 ```
+
+### OTLP metrics export (operator)
+
+The operator can push its own metrics (reconciliation counters, workqueue stats, client latencies, etc.) to any OTLP-compatible backend via gRPC. This bridges all Prometheus metrics to OpenTelemetry, running alongside the existing Prometheus scrape endpoint.
+
+```yaml
+# values.yaml
+otlp:
+  enabled: true
+  endpoint: "otel-collector.observability.svc:4317"
+  insecure: true  # set to false for TLS
+```
+
+The endpoint can also be configured via the `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable. Metrics are pushed every 30 seconds. If the OTLP endpoint is unreachable, the operator logs a warning and continues operating normally.
 
 ### PrometheusRule (alerts)
 
@@ -865,6 +1044,34 @@ spec:
 
 When enabled, the operator creates a `HorizontalPodAutoscaler` targeting the StatefulSet and sets the StatefulSet's replica count to nil so the HPA manages scaling. The HPA is deleted when auto-scaling is disabled.
 
+When auto-scaling is combined with persistent storage:
+
+- Each replica gets its own PVC via StatefulSet `VolumeClaimTemplates` (named `data-<instance>-<ordinal>`)
+- PVCs inherit `size`, `storageClass`, and `accessModes` from `spec.storage.persistence`
+- Retention policy is `Retain` for both scale-down and deletion -- data is preserved
+- If auto-scaling is later disabled, per-replica PVCs become orphaned and must be cleaned up manually
+
+### Instance Suspension
+
+Temporarily scale an instance to zero replicas without deleting it:
+
+```yaml
+spec:
+  suspended: true
+```
+
+When suspended:
+
+- The StatefulSet scales to 0 replicas (pods terminate)
+- All non-runtime resources (Service, ConfigMap, RBAC, NetworkPolicy, PVC) remain fully managed
+- Phase becomes `Suspended`, Ready condition becomes `False`
+- Auto-updates are paused until the instance is resumed
+- `openclaw_instance_ready` metric reports `0`
+
+Resume by setting `spec.suspended: false`. The instance returns to `Running` phase through the normal startup lifecycle.
+
+> **Note:** `spec.suspended` and `spec.availability.autoScaling.enabled` are mutually exclusive. Disable auto-scaling before suspending.
+
 ### Topology Spread Constraints
 
 Spread pods across topology domains (zones, nodes) for improved availability:
@@ -879,6 +1086,30 @@ spec:
         labelSelector:
           matchLabels:
             app.kubernetes.io/instance: my-instance
+```
+
+### Runtime Class
+
+Schedule pods on alternative container runtimes (Kata Containers, gVisor, etc.) for VM-level isolation or security hardening:
+
+```yaml
+spec:
+  availability:
+    runtimeClassName: kata-fc
+```
+
+A matching `RuntimeClass` resource must exist in the cluster. If unset, the default container runtime is used.
+
+### Pod Annotations
+
+Merge extra annotations into the StatefulSet pod template. Operator-managed keys (`openclaw.rocks/config-hash`, `openclaw.rocks/secret-hash`) always take precedence and cannot be overridden.
+
+Useful for cloud-provider hints, such as preventing GKE Autopilot from evicting long-running agent pods:
+
+```yaml
+spec:
+  podAnnotations:
+    cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
 ```
 
 Phases: `Pending` -> `Restoring` -> `Provisioning` -> `Running` | `Updating` | `BackingUp` | `Degraded` | `Failed` | `Terminating`
@@ -896,8 +1127,8 @@ Platform-specific deployment guides are available for:
 
 ```bash
 # Clone and set up
-git clone https://github.com/OpenClaw-rocks/k8s-operator.git
-cd k8s-operator
+git clone https://github.com/OpenClaw-rocks/openclaw-operator.git
+cd openclaw-operator
 go mod download
 
 # Generate code and manifests

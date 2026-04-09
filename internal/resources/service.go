@@ -21,7 +21,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1alpha1 "github.com/openclawrocks/openclaw-operator/api/v1alpha1"
 )
 
 // BuildService creates a Service for the OpenClawInstance
@@ -75,17 +75,26 @@ func buildServicePorts(instance *openclawv1alpha1.OpenClawInstance) []corev1.Ser
 		return ports
 	}
 
+	// When the gateway proxy is enabled, route through the proxy ports.
+	// When disabled, target the gateway and canvas ports directly.
+	gwTarget := int32(GatewayProxyPort)
+	canvasTarget := int32(CanvasProxyPort)
+	if !IsGatewayProxyEnabled(instance) {
+		gwTarget = int32(GatewayPort)
+		canvasTarget = int32(CanvasPort)
+	}
+
 	ports := []corev1.ServicePort{
 		{
 			Name:       "gateway",
 			Port:       int32(GatewayPort),
-			TargetPort: intstr.FromInt32(int32(GatewayProxyPort)),
+			TargetPort: intstr.FromInt32(gwTarget),
 			Protocol:   corev1.ProtocolTCP,
 		},
 		{
 			Name:       "canvas",
 			Port:       int32(CanvasPort),
-			TargetPort: intstr.FromInt32(int32(CanvasProxyPort)),
+			TargetPort: intstr.FromInt32(canvasTarget),
 			Protocol:   corev1.ProtocolTCP,
 		},
 	}
@@ -124,12 +133,11 @@ func buildServicePorts(instance *openclawv1alpha1.OpenClawInstance) []corev1.Ser
 // BuildChromiumCDPService creates a headless Service for the Chromium CDP
 // endpoint with publishNotReadyAddresses=true. This ensures the CDP URL
 // resolves even before the pod is fully Ready, which is critical because the
-// main container (OpenClaw) checks CDP connectivity during startup — before
+// main container (OpenClaw) checks CDP connectivity during startup - before
 // its own readiness probe has passed. Without this, the main ClusterIP Service
 // has no endpoints and the CDP health check fails permanently.
 //
-// Traffic is routed to the chromium CDP proxy (ChromiumProxyPort) which
-// injects anti-bot Chrome launch args before forwarding to browserless.
+// Traffic is routed directly to Chrome on ChromiumPort (9222).
 func BuildChromiumCDPService(instance *openclawv1alpha1.OpenClawInstance) *corev1.Service {
 	labels := Labels(instance)
 	selectorLabels := SelectorLabels(instance)
@@ -149,7 +157,7 @@ func BuildChromiumCDPService(instance *openclawv1alpha1.OpenClawInstance) *corev
 				{
 					Name:       "cdp",
 					Port:       int32(ChromiumPort),
-					TargetPort: intstr.FromInt32(int32(ChromiumProxyPort)),
+					TargetPort: intstr.FromInt32(int32(ChromiumPort)),
 					Protocol:   corev1.ProtocolTCP,
 				},
 			},

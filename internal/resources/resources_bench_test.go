@@ -23,7 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1alpha1 "github.com/openclawrocks/openclaw-operator/api/v1alpha1"
 )
 
 // newBenchInstance creates a minimal instance for benchmarking.
@@ -136,7 +136,7 @@ func BenchmarkBuildStatefulSet_Minimal(b *testing.B) {
 	instance := newBenchInstance()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		BuildStatefulSet(instance, "", nil)
+		BuildStatefulSet(instance, "", nil, nil, nil)
 	}
 }
 
@@ -144,7 +144,7 @@ func BenchmarkBuildStatefulSet_FullyLoaded(b *testing.B) {
 	instance := newFullBenchInstance()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		BuildStatefulSet(instance, "", nil)
+		BuildStatefulSet(instance, "", nil, nil, nil)
 	}
 }
 

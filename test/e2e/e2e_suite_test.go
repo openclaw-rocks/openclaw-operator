@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,6 +33,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -40,8 +42,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
-	"github.com/openclawrocks/k8s-operator/internal/resources"
+	openclawv1alpha1 "github.com/openclawrocks/openclaw-operator/api/v1alpha1"
+	"github.com/openclawrocks/openclaw-operator/internal/resources"
 )
 
 var (
@@ -170,9 +172,23 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				}, service)
 			}, timeout, interval).Should(Succeed())
 
-			// Verify the StatefulSet has main + gateway-proxy containers
-			Expect(statefulSet.Spec.Template.Spec.Containers).To(HaveLen(2))
+			// Verify the StatefulSet has main + gateway-proxy + otel-collector containers
+			Expect(statefulSet.Spec.Template.Spec.Containers).To(HaveLen(3))
 			Expect(statefulSet.Spec.Template.Spec.Containers[0].Image).To(Equal("ghcr.io/openclaw/openclaw:latest"))
+
+			// Verify handshake timeout env var is injected (workaround for upstream #46892)
+			mainContainer := statefulSet.Spec.Template.Spec.Containers[0]
+			var foundHandshakeTimeout bool
+			for _, env := range mainContainer.Env {
+				if env.Name == "OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS" {
+					foundHandshakeTimeout = true
+					Expect(env.Value).To(Equal(fmt.Sprintf("%d", resources.DefaultHandshakeTimeoutMs)),
+						"handshake timeout should be set to DefaultHandshakeTimeoutMs")
+					break
+				}
+			}
+			Expect(foundHandshakeTimeout).To(BeTrue(),
+				"OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS env var should be injected for K8s startup overhead")
 
 			// Clean up
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
@@ -267,6 +283,98 @@ var _ = Describe("OpenClawInstance Controller", func() {
 
 			Expect(configMap.Data).To(HaveKey(resources.NginxConfigKey),
 				"ConfigMap should contain nginx.conf key")
+
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+
+		It("Should skip gateway proxy sidecar when disabled", func() {
+			instanceName := "proxy-disabled-instance"
+
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					Gateway: openclawv1alpha1.GatewaySpec{
+						Enabled: resources.Ptr(false),
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			// Verify StatefulSet has no gateway-proxy container
+			statefulSet := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName,
+					Namespace: namespace,
+				}, statefulSet)
+			}, timeout, interval).Should(Succeed())
+
+			for _, c := range statefulSet.Spec.Template.Spec.Containers {
+				Expect(c.Name).NotTo(Equal("gateway-proxy"),
+					"StatefulSet should not have gateway-proxy container when disabled")
+			}
+
+			// Verify probes target the gateway directly
+			mainContainer := statefulSet.Spec.Template.Spec.Containers[0]
+			Expect(mainContainer.LivenessProbe.HTTPGet.Port.IntValue()).To(Equal(int(resources.GatewayPort)),
+				"liveness probe should target gateway port directly")
+			Expect(mainContainer.ReadinessProbe.HTTPGet.Port.IntValue()).To(Equal(int(resources.GatewayPort)),
+				"readiness probe should target gateway port directly")
+
+			// Verify Service targetPort points to direct ports
+			service := &corev1.Service{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName,
+					Namespace: namespace,
+				}, service)
+			}, timeout, interval).Should(Succeed())
+
+			for _, port := range service.Spec.Ports {
+				if port.Name == "gateway" {
+					Expect(port.TargetPort.IntValue()).To(Equal(int(resources.GatewayPort)),
+						"gateway targetPort should point to direct port")
+				}
+				if port.Name == "canvas" {
+					Expect(port.TargetPort.IntValue()).To(Equal(int(resources.CanvasPort)),
+						"canvas targetPort should point to direct port")
+				}
+			}
+
+			// Verify ConfigMap does not have nginx.conf key
+			configMap := &corev1.ConfigMap{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.ConfigMapName(instance),
+					Namespace: namespace,
+				}, configMap)
+			}, timeout, interval).Should(Succeed())
+
+			Expect(configMap.Data).NotTo(HaveKey(resources.NginxConfigKey),
+				"ConfigMap should not contain nginx.conf key when proxy is disabled")
+
+			// Verify gateway.bind is 0.0.0.0 in openclaw.json
+			var parsed map[string]interface{}
+			Expect(json.Unmarshal([]byte(configMap.Data["openclaw.json"]), &parsed)).Should(Succeed())
+			gw, ok := parsed["gateway"].(map[string]interface{})
+			Expect(ok).To(BeTrue(), "config should have gateway key")
+			Expect(gw["bind"]).To(Equal(resources.GatewayBindAllInterfaces),
+				"gateway.bind should be 0.0.0.0 when proxy is disabled")
 
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})
@@ -522,6 +630,48 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			Expect(tsc.TopologyKey).To(Equal("topology.kubernetes.io/zone"))
 			Expect(tsc.MaxSkew).To(Equal(int32(1)))
 			Expect(tsc.WhenUnsatisfiable).To(Equal(corev1.DoNotSchedule))
+
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+
+		It("Should apply runtimeClassName", func() {
+			instanceName := "rtc-instance"
+
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					Availability: openclawv1alpha1.AvailabilitySpec{
+						RuntimeClassName: resources.Ptr("kata-fc"),
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			statefulSet := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName,
+					Namespace: namespace,
+				}, statefulSet)
+			}, timeout, interval).Should(Succeed())
+
+			Expect(statefulSet.Spec.Template.Spec.RuntimeClassName).ToNot(BeNil())
+			Expect(*statefulSet.Spec.Template.Spec.RuntimeClassName).To(Equal("kata-fc"))
 
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})
@@ -1312,7 +1462,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})
 
-		It("Should create chromium sidecar on port 9222 to avoid port 3000 conflict", func() {
+		It("Should create chromium sidecar running Chrome directly on port 9222", func() {
 			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
 				Skip("Skipping resource validation in minimal mode")
 			}
@@ -1349,7 +1499,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				}, statefulSet)
 			}, timeout, interval).Should(Succeed())
 
-			// Verify chromium container exists as native sidecar init container with correct port
+			// Verify chromium container exists as native sidecar init container
 			var chromiumContainer *corev1.Container
 			for i := range statefulSet.Spec.Template.Spec.InitContainers {
 				if statefulSet.Spec.Template.Spec.InitContainers[i].Name == "chromium" {
@@ -1358,37 +1508,40 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				}
 			}
 			Expect(chromiumContainer).NotTo(BeNil(), "chromium sidecar init container should exist")
-			Expect(chromiumContainer.Image).To(Equal("ghcr.io/browserless/chromium:latest"))
+			Expect(chromiumContainer.Image).To(Equal(resources.DefaultChromiumImage + ":" + resources.DefaultChromiumTag))
 			Expect(chromiumContainer.Ports).To(HaveLen(1))
 			Expect(chromiumContainer.Ports[0].ContainerPort).To(Equal(int32(resources.ChromiumPort)))
 
-			// Verify chromium container has PORT env var to override default (3000)
-			var foundPortEnv bool
-			for _, env := range chromiumContainer.Env {
-				if env.Name == "PORT" {
-					foundPortEnv = true
-					Expect(env.Value).To(Equal(fmt.Sprintf("%d", resources.ChromiumPort)),
-						"PORT env should override browserless default to avoid conflict with OpenClaw browser control service")
-					break
-				}
-			}
-			Expect(foundPortEnv).To(BeTrue(), "chromium container should have PORT env var")
+			// Command must be the entrypoint wrapper that fixes unquoted $@
+			// in upstream run.sh, preventing word-splitting of args with spaces (#396).
+			Expect(chromiumContainer.Command).To(Equal(resources.ChromiumEntrypointCommand),
+				"chromium Command must be the entrypoint wrapper with quoted \"$@\" (#396)")
 
-			// Verify main container has OPENCLAW_CHROMIUM_CDP using service DNS name
+			// Args should contain launch flags passed to run.sh
+			Expect(chromiumContainer.Args).NotTo(BeEmpty(), "chromium should have Args with launch flags")
+			argsStr := strings.Join(chromiumContainer.Args, " ")
+			Expect(argsStr).To(ContainSubstring("--no-sandbox"))
+
+			// No chromium-proxy container should exist
+			for _, c := range statefulSet.Spec.Template.Spec.InitContainers {
+				Expect(c.Name).NotTo(Equal("chromium-proxy"),
+					"chromium-proxy should not exist - Chrome runs via run.sh")
+			}
+
+			// Verify main container has OPENCLAW_CHROMIUM_CDP using localhost
 			mainContainer := statefulSet.Spec.Template.Spec.Containers[0]
 			var foundChromiumCDP bool
-			expectedCDP := fmt.Sprintf("http://%s.%s.svc:%d",
-				resources.ChromiumCDPServiceName(instance), instance.Namespace, resources.ChromiumPort)
+			expectedCDP := fmt.Sprintf("http://127.0.0.1:%d", resources.ChromiumPort)
 			for _, env := range mainContainer.Env {
 				if env.Name == "OPENCLAW_CHROMIUM_CDP" {
 					foundChromiumCDP = true
 					Expect(env.Value).To(Equal(expectedCDP),
-						"OPENCLAW_CHROMIUM_CDP should use service DNS name")
+						"OPENCLAW_CHROMIUM_CDP should use localhost (sidecar shares pod network)")
 				}
 			}
 			Expect(foundChromiumCDP).To(BeTrue(), "OPENCLAW_CHROMIUM_CDP env var should be set")
 
-			// Verify ConfigMap has browser profiles with cdpUrl on port 9222
+			// Verify ConfigMap has browser profiles with cdpUrl
 			configMap := &corev1.ConfigMap{}
 			Eventually(func() error {
 				return k8sClient.Get(ctx, types.NamespacedName{
@@ -1402,19 +1555,18 @@ var _ = Describe("OpenClawInstance Controller", func() {
 
 			browser, ok := parsed["browser"].(map[string]interface{})
 			Expect(ok).To(BeTrue(), "config should have browser key")
-
-			// attachOnly should NOT be injected by the operator
-			_, hasAttachOnly := browser["attachOnly"]
-			Expect(hasAttachOnly).To(BeFalse(), "browser.attachOnly should not be injected by operator")
+			Expect(browser["attachOnly"]).To(BeTrue(), "browser.attachOnly should be true")
+			Expect(browser["remoteCdpTimeoutMs"]).To(BeNumerically("==", 30000),
+				"browser.remoteCdpTimeoutMs should be 30000")
 
 			profiles, ok := browser["profiles"].(map[string]interface{})
 			Expect(ok).To(BeTrue(), "browser should have profiles key")
 
-			// cdpUrl uses env var reference resolved at runtime to service DNS
+			expectedCDPURL := "${OPENCLAW_CHROMIUM_CDP}"
 			for _, profileName := range []string{"default", "chrome"} {
 				profile, ok := profiles[profileName].(map[string]interface{})
 				Expect(ok).To(BeTrue(), "profiles should have %s key", profileName)
-				Expect(profile["cdpUrl"]).To(Equal("${OPENCLAW_CHROMIUM_CDP}"),
+				Expect(profile["cdpUrl"]).To(Equal(expectedCDPURL),
 					"browser.profiles.%s.cdpUrl should use env var reference", profileName)
 			}
 
@@ -1436,6 +1588,86 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				}
 			}
 			Expect(foundChromiumPort).To(BeTrue(), "Service should have chromium port")
+
+			// ConfigMap should NOT contain chromium proxy config (no proxy needed)
+			_, hasProxyConfig := configMap.Data["chromium-proxy-nginx.conf"]
+			Expect(hasProxyConfig).To(BeFalse(),
+				"ConfigMap should not contain chromium proxy config - Chrome runs directly")
+
+			// Clean up
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+
+		// Regression test for #396: instances created before v0.22.1 have the
+		// deprecated ghcr.io/browserless/chromium image stored via kubebuilder
+		// defaults. The operator must normalize it to chromedp/headless-shell
+		// and must NOT set a Command override (which bypasses run.sh and breaks
+		// CDP on Chrome M136+).
+		It("Should migrate deprecated browserless image to current default", func() {
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instanceName := "chromium-migrate-test"
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					Chromium: openclawv1alpha1.ChromiumSpec{
+						Enabled: true,
+						Image: openclawv1alpha1.ChromiumImageSpec{
+							// Simulate a pre-v0.22.1 instance with old kubebuilder defaults
+							Repository: resources.DeprecatedChromiumImage,
+							Tag:        "latest",
+						},
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			statefulSet := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      instanceName,
+					Namespace: namespace,
+				}, statefulSet)
+			}, timeout, interval).Should(Succeed())
+
+			// Find chromium init container
+			var chromiumContainer *corev1.Container
+			for i := range statefulSet.Spec.Template.Spec.InitContainers {
+				if statefulSet.Spec.Template.Spec.InitContainers[i].Name == "chromium" {
+					chromiumContainer = &statefulSet.Spec.Template.Spec.InitContainers[i]
+					break
+				}
+			}
+			Expect(chromiumContainer).NotTo(BeNil(), "chromium sidecar should exist")
+
+			// Image must be normalized to current default
+			expectedImage := resources.DefaultChromiumImage + ":" + resources.DefaultChromiumTag
+			Expect(chromiumContainer.Image).To(Equal(expectedImage),
+				"deprecated browserless image should be migrated to %s", expectedImage)
+
+			// Command must be the entrypoint wrapper with quoted "$@" (#396)
+			Expect(chromiumContainer.Command).To(Equal(resources.ChromiumEntrypointCommand),
+				"chromium Command must be the entrypoint wrapper with quoted \"$@\" (#396)")
+
+			// Args should still contain launch flags
+			Expect(chromiumContainer.Args).NotTo(BeEmpty(),
+				"chromium should have Args with launch flags")
+			argsStr := strings.Join(chromiumContainer.Args, " ")
+			Expect(argsStr).To(ContainSubstring("--no-sandbox"))
 
 			// Clean up
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
@@ -1494,7 +1726,7 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			Expect(dataVol.PersistentVolumeClaim).NotTo(BeNil(), "chromium-data should be a PVC when persistence is enabled")
 			Expect(dataVol.PersistentVolumeClaim.ClaimName).To(Equal(instanceName + "-chromium-data"))
 
-			// Verify chromium container has DATA_DIR env var for persistence
+			// Verify chromium container has --user-data-dir in Args for persistence
 			var chromiumContainer *corev1.Container
 			for i := range statefulSet.Spec.Template.Spec.InitContainers {
 				if statefulSet.Spec.Template.Spec.InitContainers[i].Name == "chromium" {
@@ -1504,15 +1736,9 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			}
 			Expect(chromiumContainer).NotTo(BeNil(), "chromium sidecar init container should exist")
 
-			var dataDir string
-			for _, env := range chromiumContainer.Env {
-				if env.Name == "DATA_DIR" {
-					dataDir = env.Value
-					break
-				}
-			}
-			Expect(dataDir).To(Equal("/chromium-data"),
-				"DATA_DIR should be set to /chromium-data when persistence is enabled")
+			argsStr := strings.Join(chromiumContainer.Args, " ")
+			Expect(argsStr).To(ContainSubstring("--user-data-dir=/chromium-data"),
+				"persistence should add --user-data-dir=/chromium-data to Args")
 
 			// Verify chromium container has chromium-data volume mount
 			var foundDataMount bool
@@ -1700,15 +1926,112 @@ var _ = Describe("OpenClawInstance Controller", func() {
 
 			// Script should contain npm install for npm: prefixed skill
 			script := skillsContainer.Command[2]
-			Expect(script).To(ContainSubstring("npm install '@openclaw/matrix'"),
-				"npm: prefixed skill should use npm install")
+			Expect(script).To(ContainSubstring("npm install -g '@openclaw/matrix'"),
+				"npm: prefixed skill should use global npm install")
 			// Script should also contain clawhub for non-prefixed skill
-			Expect(script).To(ContainSubstring("_install_skill '@anthropic/mcp-server-fetch'"),
-				"non-prefixed skill should use _install_skill wrapper")
+			Expect(script).To(ContainSubstring("_install_skill 'mcp-server-fetch'"),
+				"non-prefixed skill should use _install_skill wrapper with normalized slug")
+			// Script should redirect /app/skills to PVC (#313)
+			Expect(script).To(ContainSubstring("mkdir -p /home/openclaw/.openclaw/skills"),
+				"script should create PVC-backed skills directory")
+			Expect(script).To(ContainSubstring("ln -s /home/openclaw/.openclaw/skills /app/skills"),
+				"script should symlink /app/skills to PVC")
 
 			// NPM_CONFIG_IGNORE_SCRIPTS should be set (#91)
 			envMap := map[string]string{}
 			for _, e := range skillsContainer.Env {
+				envMap[e.Name] = e.Value
+			}
+			Expect(envMap["NPM_CONFIG_IGNORE_SCRIPTS"]).To(Equal("true"),
+				"NPM_CONFIG_IGNORE_SCRIPTS should be true for supply chain security")
+
+			// Main container should mount PVC at /app/skills (#313)
+			var mainContainer *corev1.Container
+			for i := range statefulSet.Spec.Template.Spec.Containers {
+				if statefulSet.Spec.Template.Spec.Containers[i].Name == "openclaw" {
+					mainContainer = &statefulSet.Spec.Template.Spec.Containers[i]
+					break
+				}
+			}
+			Expect(mainContainer).NotTo(BeNil(), "main container should exist")
+			var hasSkillsMount bool
+			for _, m := range mainContainer.VolumeMounts {
+				if m.MountPath == "/app/skills" && m.Name == "data" && m.SubPath == "skills" {
+					hasSkillsMount = true
+					break
+				}
+			}
+			Expect(hasSkillsMount).To(BeTrue(),
+				"main container should mount PVC subpath 'skills' at /app/skills")
+
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+	})
+
+	Context("When creating an instance with plugins (issue #372)", func() {
+		var namespace string
+
+		BeforeEach(func() {
+			namespace = "test-plugins-" + time.Now().Format("20060102150405")
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+			Expect(k8sClient.Create(ctx, ns)).Should(Succeed())
+		})
+
+		AfterEach(func() {
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+			_ = k8sClient.Delete(ctx, ns)
+		})
+
+		It("Should produce an init-plugins container with npm install for plugins", func() {
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instanceName := "plugins-test"
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					Plugins: []string{"@martian-engineering/lossless-claw"},
+				},
+			}
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			statefulSet := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.StatefulSetName(instance),
+					Namespace: namespace,
+				}, statefulSet)
+			}, 60*time.Second, 2*time.Second).Should(Succeed())
+
+			var pluginsContainer *corev1.Container
+			for i := range statefulSet.Spec.Template.Spec.InitContainers {
+				if statefulSet.Spec.Template.Spec.InitContainers[i].Name == "init-plugins" {
+					pluginsContainer = &statefulSet.Spec.Template.Spec.InitContainers[i]
+					break
+				}
+			}
+			Expect(pluginsContainer).NotTo(BeNil(), "init-plugins container should exist")
+
+			// Script should contain npm install for plugin
+			script := pluginsContainer.Command[2]
+			Expect(script).To(ContainSubstring("npm install '@martian-engineering/lossless-claw'"),
+				"plugin should use npm install")
+
+			// NPM_CONFIG_IGNORE_SCRIPTS should be set
+			envMap := map[string]string{}
+			for _, e := range pluginsContainer.Env {
 				envMap[e.Name] = e.Value
 			}
 			Expect(envMap["NPM_CONFIG_IGNORE_SCRIPTS"]).To(Equal("true"),
@@ -1785,12 +2108,18 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			}, 5*time.Minute, 5*time.Second).Should(BeTrue(),
 				"openclaw container should be Running")
 
-			// Verify config was written by the postStart hook
-			out, err := kubectlExec(namespace, podName,
-				"cat", "/home/openclaw/.openclaw/openclaw.json")
-			Expect(err).NotTo(HaveOccurred(), "should read config file: %s", out)
-			Expect(out).To(ContainSubstring(`"loopback"`),
-				"config should contain gateway.bind=loopback from operator enrichment")
+			// Verify config was written by the postStart hook.
+			// Use Eventually because kubectl exec may briefly fail even after
+			// the container status shows Running.
+			var out string
+			var err error
+			Eventually(func(g Gomega) {
+				out, err = kubectlExec(namespace, podName,
+					"cat", "/home/openclaw/.openclaw/openclaw.json")
+				g.Expect(err).NotTo(HaveOccurred(), "should read config file: %s", out)
+				g.Expect(out).To(ContainSubstring(`"loopback"`),
+					"config should contain gateway.bind=loopback from operator enrichment")
+			}, 1*time.Minute, 2*time.Second).Should(Succeed())
 
 			// Corrupt the config file on the PVC
 			_, err = kubectlExec(namespace, podName,
@@ -1865,15 +2194,19 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			}, 2*time.Minute, 2*time.Second).Should(BeTrue(),
 				"openclaw container should be Running after restart")
 
-			// Verify the postStart hook restored the config
-			out, err = kubectlExec(namespace, podName,
-				"cat", "/home/openclaw/.openclaw/openclaw.json")
-			Expect(err).NotTo(HaveOccurred(),
-				"should read config after restart: %s", out)
-			Expect(out).To(ContainSubstring(`"loopback"`),
-				"gateway.bind=loopback should be restored by postStart hook")
-			Expect(out).NotTo(ContainSubstring("corrupted"),
-				"corrupted content should be overwritten by postStart hook")
+			// Verify the postStart hook restored the config.
+			// Use Eventually because kubectl exec may briefly fail after a
+			// container restart even though the status already shows Running.
+			Eventually(func(g Gomega) {
+				out, err = kubectlExec(namespace, podName,
+					"cat", "/home/openclaw/.openclaw/openclaw.json")
+				g.Expect(err).NotTo(HaveOccurred(),
+					"should read config after restart: %s", out)
+				g.Expect(out).To(ContainSubstring(`"loopback"`),
+					"gateway.bind=loopback should be restored by postStart hook")
+				g.Expect(out).NotTo(ContainSubstring("corrupted"),
+					"corrupted content should be overwritten by postStart hook")
+			}, 1*time.Minute, 2*time.Second).Should(Succeed())
 
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})
@@ -1992,6 +2325,92 @@ var _ = Describe("OpenClawInstance Controller", func() {
 
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})
+
+		It("Should preserve trusted-proxy auth mode without injecting token", func() {
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instanceName := "cmref-trusted-proxy"
+
+			// Create external ConfigMap with trusted-proxy auth mode
+			externalCM := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "trusted-proxy-config",
+					Namespace: namespace,
+				},
+				Data: map[string]string{
+					"openclaw.json": `{"gateway":{"auth":{"mode":"trusted-proxy"}}}`,
+				},
+			}
+			Expect(k8sClient.Create(ctx, externalCM)).Should(Succeed())
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					Config: openclawv1alpha1.ConfigSpec{
+						ConfigMapRef: &openclawv1alpha1.ConfigMapKeySelector{
+							Name: "trusted-proxy-config",
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			// Verify operator-managed ConfigMap preserves the auth mode
+			cm := &corev1.ConfigMap{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.ConfigMapName(instance),
+					Namespace: namespace,
+				}, cm)
+			}, timeout, interval).Should(Succeed())
+
+			configContent, ok := cm.Data["openclaw.json"]
+			Expect(ok).To(BeTrue(), "operator-managed ConfigMap should have openclaw.json key")
+
+			var parsed map[string]interface{}
+			Expect(json.Unmarshal([]byte(configContent), &parsed)).To(Succeed())
+
+			gw, ok := parsed["gateway"].(map[string]interface{})
+			Expect(ok).To(BeTrue(), "config should have gateway key")
+			auth, ok := gw["auth"].(map[string]interface{})
+			Expect(ok).To(BeTrue(), "gateway should have auth key")
+
+			// Mode should be preserved as trusted-proxy (not overwritten to token)
+			Expect(auth["mode"]).To(Equal("trusted-proxy"),
+				"gateway.auth.mode should be preserved as trusted-proxy")
+			// Token must NOT be present in trusted-proxy mode
+			Expect(auth).NotTo(HaveKey("token"),
+				"gateway.auth.token must not be set in trusted-proxy mode")
+
+			// OPENCLAW_GATEWAY_TOKEN env var must NOT be present on the StatefulSet
+			sts := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.StatefulSetName(instance),
+					Namespace: namespace,
+				}, sts)
+			}, timeout, interval).Should(Succeed())
+
+			mainContainer := sts.Spec.Template.Spec.Containers[0]
+			for _, env := range mainContainer.Env {
+				Expect(env.Name).NotTo(Equal("OPENCLAW_GATEWAY_TOKEN"),
+					"OPENCLAW_GATEWAY_TOKEN env var must not be set in trusted-proxy mode")
+			}
+
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
 	})
 
 	Context("When creating an instance with auto-scaling enabled", func() {
@@ -2041,6 +2460,72 @@ var _ = Describe("OpenClawInstance Controller", func() {
 					Namespace: hpaTestNs,
 				}, sts)
 			}, 60*time.Second, 2*time.Second).Should(Succeed())
+
+			// Cleanup
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+	})
+
+	Context("When creating an instance with auto-scaling and persistence enabled", func() {
+		const vctTestName = "e2e-vct-test"
+		const vctTestNs = "default"
+
+		It("Should use VolumeClaimTemplates for per-replica PVCs", func() {
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      vctTestName,
+					Namespace: vctTestNs,
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Availability: openclawv1alpha1.AvailabilitySpec{
+						AutoScaling: &openclawv1alpha1.AutoScalingSpec{
+							Enabled:              resources.Ptr(true),
+							MinReplicas:          resources.Ptr(int32(1)),
+							MaxReplicas:          resources.Ptr(int32(3)),
+							TargetCPUUtilization: resources.Ptr(int32(70)),
+						},
+					},
+					Storage: openclawv1alpha1.StorageSpec{
+						Persistence: openclawv1alpha1.PersistenceSpec{
+							Size: "5Gi",
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			// Verify StatefulSet uses VolumeClaimTemplates
+			sts := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.StatefulSetName(instance),
+					Namespace: vctTestNs,
+				}, sts)
+			}, 60*time.Second, 2*time.Second).Should(Succeed())
+
+			Expect(sts.Spec.VolumeClaimTemplates).To(HaveLen(1))
+			vct := sts.Spec.VolumeClaimTemplates[0]
+			Expect(vct.Name).To(Equal("data"))
+			Expect(vct.Spec.AccessModes).To(ContainElement(corev1.ReadWriteOnce))
+			Expect(vct.Spec.Resources.Requests[corev1.ResourceStorage]).To(Equal(resource.MustParse("5Gi")))
+
+			// No static "data" volume in pod spec (VCT auto-provides it)
+			var dataVol *corev1.Volume
+			for i := range sts.Spec.Template.Spec.Volumes {
+				if sts.Spec.Template.Spec.Volumes[i].Name == "data" {
+					dataVol = &sts.Spec.Template.Spec.Volumes[i]
+					break
+				}
+			}
+			Expect(dataVol).To(BeNil(), "static data volume should not be present when VCTs are used")
+
+			// No standalone PVC should be created
+			pvc := &corev1.PersistentVolumeClaim{}
+			err := k8sClient.Get(ctx, types.NamespacedName{
+				Name:      resources.PVCName(instance),
+				Namespace: vctTestNs,
+			}, pvc)
+			Expect(apierrors.IsNotFound(err)).To(BeTrue(), "standalone PVC should not exist when VCTs are used")
 
 			// Cleanup
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
@@ -2333,6 +2818,81 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			}, deployment)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(deployment.Status.AvailableReplicas).To(BeNumerically(">=", 1))
+		})
+	})
+
+	// Smoke test: verify an OpenClaw instance with default settings boots
+	// successfully. This catches config injection bugs like #373 where
+	// invalid keys in openclaw.json crash the application on startup.
+	Context("When deploying an instance with default config (smoke test)", func() {
+		var namespace string
+
+		BeforeEach(func() {
+			namespace = "test-smoke-" + time.Now().Format("20060102150405")
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+			Expect(k8sClient.Create(ctx, ns)).Should(Succeed())
+		})
+
+		AfterEach(func() {
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+			_ = k8sClient.Delete(ctx, ns)
+		})
+
+		It("Should have the pod become Ready with injected config", func() {
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping smoke test in minimal mode")
+			}
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "smoke-test",
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			// Wait for the StatefulSet to have at least 1 Ready replica.
+			// This verifies that:
+			// 1. The injected config (openclaw.json) passes OpenClaw's strict validation
+			// 2. All containers (including sidecars) start successfully
+			// 3. Readiness probes pass (gateway is serving traffic)
+			sts := &appsv1.StatefulSet{}
+			Eventually(func() int32 {
+				if err := k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.StatefulSetName(instance),
+					Namespace: namespace,
+				}, sts); err != nil {
+					return 0
+				}
+				return sts.Status.ReadyReplicas
+			}, 5*time.Minute, 5*time.Second).Should(BeNumerically(">=", 1),
+				"StatefulSet should have at least 1 Ready replica - if this fails, "+
+					"check pod logs for config validation errors or container crashes")
+
+			// If the pod is not becoming Ready, capture pod events for debugging
+			if sts.Status.ReadyReplicas < 1 {
+				podList := &corev1.PodList{}
+				_ = k8sClient.List(ctx, podList, client.InNamespace(namespace))
+				for _, pod := range podList.Items {
+					for _, cs := range pod.Status.ContainerStatuses {
+						if cs.State.Waiting != nil {
+							GinkgoWriter.Printf("Container %s waiting: %s - %s\n",
+								cs.Name, cs.State.Waiting.Reason, cs.State.Waiting.Message)
+						}
+					}
+				}
+			}
+
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})
 	})
 })

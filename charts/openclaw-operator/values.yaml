@@ -86,6 +86,24 @@ metrics:
   enabled: true
   bindAddress: ":8443"
   secure: true
+  # Service for operator metrics endpoint
+  service:
+    port: 8443
+    annotations: {}
+  # ServiceMonitor for Prometheus Operator scraping
+  serviceMonitor:
+    enabled: false
+    interval: ""
+    scrapeTimeout: ""
+    labels: {}
+
+# OTLP metrics export configuration (operator-level metrics).
+# Bridges all Prometheus metrics to an OTLP-compatible backend via gRPC.
+# Both Prometheus scraping and OTLP push can be active simultaneously.
+otlp:
+  enabled: false
+  endpoint: ""  # e.g. "otel-collector.observability.svc:4317"
+  insecure: true
 
 # Webhook configuration (optional)
 webhook:

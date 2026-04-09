@@ -99,8 +99,8 @@ spec:
   chromium:
     enabled: true
     image:
-      repository: ghcr.io/browserless/chromium
-      tag: "v2.0.0"
+      repository: chromedp/headless-shell
+      tag: "stable"
       # Recommended: pin to a specific digest
       # digest: "sha256:abc123..."
     resources:

@@ -49,10 +49,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
-	"github.com/openclawrocks/k8s-operator/internal/registry"
-	"github.com/openclawrocks/k8s-operator/internal/resources"
-	"github.com/openclawrocks/k8s-operator/internal/skillpacks"
+	openclawv1alpha1 "github.com/openclawrocks/openclaw-operator/api/v1alpha1"
+	"github.com/openclawrocks/openclaw-operator/internal/registry"
+	"github.com/openclawrocks/openclaw-operator/internal/resources"
+	"github.com/openclawrocks/openclaw-operator/internal/skillpacks"
 )
 
 const (
@@ -101,7 +101,7 @@ type OpenClawInstanceReconciler struct {
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=pods,verbs=list
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=prometheusrules,verbs=get;list;watch;create;update;patch;delete
@@ -169,8 +169,9 @@ func (r *OpenClawInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// Snapshot status before mutations so we can skip no-op status updates
 	savedStatus := instance.Status.DeepCopy()
 
-	// If an auto-update is in progress, drive the state machine
-	if instance.Status.AutoUpdate.PendingVersion != "" {
+	// If an auto-update is in progress, drive the state machine.
+	// Pause the update state machine while suspended - pending version stays in status and resumes on unsuspend.
+	if instance.Status.AutoUpdate.PendingVersion != "" && !instance.Spec.Suspended {
 		result, err := r.reconcileAutoUpdate(ctx, instance)
 		if err != nil {
 			logger.Error(err, "Auto-update error (non-fatal)")
@@ -215,6 +216,33 @@ func (r *OpenClawInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			requeueAfter = 2 * time.Minute
 		}
 		return ctrl.Result{RequeueAfter: requeueAfter}, err
+	}
+
+	// Handle suspended state: override phase and readiness
+	if instance.Spec.Suspended {
+		instance.Status.Phase = openclawv1alpha1.PhaseSuspended
+		meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+			Type:    openclawv1alpha1.ConditionTypeReady,
+			Status:  metav1.ConditionFalse,
+			Reason:  "Suspended",
+			Message: "Instance is suspended (spec.suspended=true), workload scaled to zero",
+		})
+		if instance.Status.ObservedGeneration != instance.Generation {
+			instance.Status.LastReconcileTime = &metav1.Time{Time: time.Now()}
+		}
+		instance.Status.ObservedGeneration = instance.Generation
+
+		statusChanged := !equality.Semantic.DeepEqual(&instance.Status, savedStatus)
+		if statusChanged {
+			if err := r.Status().Update(ctx, instance); err != nil {
+				logger.Error(err, "Failed to update status")
+				return ctrl.Result{}, err
+			}
+			r.Recorder.Event(instance, corev1.EventTypeNormal, "Suspended", "Instance suspended, workload scaled to zero")
+		}
+		reconcileTotal.WithLabelValues(instance.Name, instance.Namespace, "success").Inc()
+		updatePhaseMetric(instance.Name, instance.Namespace, instance.Status.Phase)
+		return ctrl.Result{RequeueAfter: RequeueAfter}, nil
 	}
 
 	// Determine phase based on condition health
@@ -274,7 +302,7 @@ func (r *OpenClawInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 }
 
 func updatePhaseMetric(name, namespace, currentPhase string) {
-	phases := []string{"Pending", "Provisioning", "Running", "Degraded", "Failed", "Terminating", "BackingUp", "Restoring", "Updating"}
+	phases := []string{"Pending", "Provisioning", "Running", "Degraded", "Failed", "Terminating", "BackingUp", "Restoring", "Updating", "Suspended"}
 	for _, phase := range phases {
 		val := float64(0)
 		if phase == currentPhase {
@@ -309,7 +337,8 @@ func (r *OpenClawInstanceReconciler) reconcileResources(ctx context.Context, ins
 
 	// 2c. Reconcile Tailscale state Secret (must precede StatefulSet)
 	if instance.Spec.Tailscale.Enabled {
-		if err := r.reconcileTailscaleStateSecret(ctx, instance); err != nil {
+		err = r.reconcileTailscaleStateSecret(ctx, instance)
+		if err != nil {
 			return fmt.Errorf("failed to reconcile Tailscale state secret: %w", err)
 		}
 		logger.V(1).Info("Tailscale state secret reconciled")
@@ -319,7 +348,8 @@ func (r *OpenClawInstanceReconciler) reconcileResources(ctx context.Context, ins
 	var skillPacks *resources.ResolvedSkillPacks
 	packNames := resources.ExtractPackSkills(instance.Spec.Skills)
 	if len(packNames) > 0 && r.SkillPackResolver != nil {
-		resolved, err := r.SkillPackResolver.Resolve(ctx, packNames)
+		var resolved *resources.ResolvedSkillPacks
+		resolved, err = r.SkillPackResolver.Resolve(ctx, packNames)
 		if err != nil {
 			logger.Error(err, "Failed to resolve skill packs, continuing without them", "packs", packNames)
 			r.Recorder.Event(instance, corev1.EventTypeWarning, "SkillPackResolutionFailed",
@@ -346,13 +376,20 @@ func (r *OpenClawInstanceReconciler) reconcileResources(ctx context.Context, ins
 	}
 
 	// 3. Reconcile ConfigMap (always - enrichment pipeline runs on all config sources)
-	if err := r.reconcileConfigMap(ctx, instance, gatewayToken, skillPacks); err != nil {
+	err = r.reconcileConfigMap(ctx, instance, gatewayToken, skillPacks)
+	if err != nil {
 		return fmt.Errorf("failed to reconcile ConfigMap: %w", err)
 	}
 	logger.V(1).Info("ConfigMap reconciled")
 
+	if resources.HasGatewayBindConflict(instance) {
+		r.Recorder.Event(instance, corev1.EventTypeWarning, "GatewayBindConflict",
+			"gateway.enabled is false but config sets gateway.bind to loopback - the pod will be unreachable because no proxy is running on the external interface")
+	}
+
 	// 3b. Reconcile Workspace ConfigMap (seed files for workspace)
-	if err := r.reconcileWorkspaceConfigMap(ctx, instance, skillPacks); err != nil {
+	wsFiles, err := r.reconcileWorkspaceConfigMap(ctx, instance, skillPacks)
+	if err != nil {
 		return fmt.Errorf("failed to reconcile Workspace ConfigMap: %w", err)
 	}
 	logger.V(1).Info("Workspace ConfigMap reconciled")
@@ -396,7 +433,7 @@ func (r *OpenClawInstanceReconciler) reconcileResources(ctx context.Context, ins
 	if err := r.migrateDeploymentToStatefulSet(ctx, instance); err != nil {
 		return fmt.Errorf("failed to migrate Deployment to StatefulSet: %w", err)
 	}
-	if err := r.reconcileStatefulSet(ctx, instance, gatewayToken, skillPacks); err != nil {
+	if err := r.reconcileStatefulSet(ctx, instance, gatewayToken, skillPacks, wsFiles); err != nil {
 		return fmt.Errorf("failed to reconcile StatefulSet: %w", err)
 	}
 	logger.V(1).Info("StatefulSet reconciled")
@@ -556,6 +593,36 @@ func (r *OpenClawInstanceReconciler) reconcileNetworkPolicy(ctx context.Context,
 	})
 
 	return nil
+}
+
+// isGatewayAuthTrustedProxy checks whether the instance's config (inline or
+// external ConfigMap) sets gateway.auth.mode to "trusted-proxy". This mode is
+// mutually exclusive with token-based auth, so the operator must not inject
+// gateway token env vars or config keys when it is active.
+func (r *OpenClawInstanceReconciler) isGatewayAuthTrustedProxy(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) bool {
+	if instance.Spec.Config.ConfigMapRef != nil {
+		ref := instance.Spec.Config.ConfigMapRef
+		externalCM := &corev1.ConfigMap{}
+		if err := r.Get(ctx, types.NamespacedName{
+			Namespace: instance.Namespace,
+			Name:      ref.Name,
+		}, externalCM); err != nil {
+			return false
+		}
+		key := ref.Key
+		if key == "" {
+			key = "openclaw.json"
+		}
+		data, ok := externalCM.Data[key]
+		if !ok {
+			return false
+		}
+		return resources.IsGatewayAuthTrustedProxy([]byte(data))
+	}
+	if instance.Spec.Config.Raw != nil {
+		return resources.IsGatewayAuthTrustedProxy(instance.Spec.Config.Raw.Raw)
+	}
+	return false
 }
 
 // reconcileGatewayTokenSecret ensures a gateway token Secret exists for the instance.
@@ -723,18 +790,157 @@ func (r *OpenClawInstanceReconciler) reconcileConfigMap(ctx context.Context, ins
 
 // reconcileWorkspaceConfigMap reconciles the ConfigMap containing workspace seed files.
 // If the instance has no workspace files, any existing workspace ConfigMap is cleaned up.
-func (r *OpenClawInstanceReconciler) reconcileWorkspaceConfigMap(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance, skillPacks *resources.ResolvedSkillPacks) error {
-	desired := resources.BuildWorkspaceConfigMap(instance, skillPacks)
+// Returns the resolved external workspace files so callers (e.g. reconcileStatefulSet)
+// can use them for config hash calculation and init script generation.
+// resolvedWorkspaceFiles holds the resolved external files for default and additional workspaces.
+type resolvedWorkspaceFiles struct {
+	// defaultFiles are the resolved contents of spec.workspace.configMapRef.
+	defaultFiles map[string]string
+	// additionalFiles maps workspace name to resolved configMapRef contents.
+	additionalFiles map[string]map[string]string
+}
+
+func (r *OpenClawInstanceReconciler) reconcileWorkspaceConfigMap(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance, skillPacks *resources.ResolvedSkillPacks) (*resolvedWorkspaceFiles, error) {
+	logger := log.FromContext(ctx)
+	resolved := &resolvedWorkspaceFiles{}
+	hasConfigMapRef := false
+	degraded := false
+
+	// Resolve external workspace ConfigMap if referenced
+	if instance.Spec.Workspace != nil && instance.Spec.Workspace.ConfigMapRef != nil {
+		hasConfigMapRef = true
+		ref := instance.Spec.Workspace.ConfigMapRef
+		extCM := &corev1.ConfigMap{}
+		if err := r.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: instance.Namespace}, extCM); err != nil {
+			if apierrors.IsNotFound(err) {
+				meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+					Type:               openclawv1alpha1.ConditionTypeWorkspaceReady,
+					Status:             metav1.ConditionFalse,
+					Reason:             "ConfigMapNotFound",
+					Message:            fmt.Sprintf("Workspace ConfigMap %q not found", ref.Name),
+					ObservedGeneration: instance.Generation,
+				})
+				r.Recorder.Eventf(instance, corev1.EventTypeWarning, "WorkspaceConfigMapNotFound",
+					"Workspace ConfigMap %q referenced by spec.workspace.configMapRef not found", ref.Name)
+				logger.Info("Workspace configMapRef not found, continuing without default workspace files", "configMap", ref.Name)
+				degraded = true
+			} else {
+				return nil, fmt.Errorf("fetching workspace configMapRef %q: %w", ref.Name, err)
+			}
+		} else {
+			resolved.defaultFiles = extCM.Data
+			// Validate all keys from the external ConfigMap
+			for key := range extCM.Data {
+				vErr := resources.ValidateWorkspaceFilename(key)
+				if vErr == nil {
+					continue
+				}
+				meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+					Type:               openclawv1alpha1.ConditionTypeWorkspaceReady,
+					Status:             metav1.ConditionFalse,
+					Reason:             "InvalidFilename",
+					Message:            fmt.Sprintf("Workspace ConfigMap %q key %q: %v", ref.Name, key, vErr),
+					ObservedGeneration: instance.Generation,
+				})
+				r.Recorder.Eventf(instance, corev1.EventTypeWarning, "InvalidWorkspaceFilename",
+					"Workspace ConfigMap %q key %q: %v", ref.Name, key, vErr)
+				logger.Info("Workspace configMapRef has invalid filename, continuing without default workspace files", "configMap", ref.Name, "key", key)
+				resolved.defaultFiles = nil
+				degraded = true
+				break
+			}
+			if resolved.defaultFiles != nil {
+				logger.V(1).Info("Resolved external workspace ConfigMap", "configMap", ref.Name, "keys", len(resolved.defaultFiles))
+			}
+		}
+	}
+
+	// Resolve additional workspace ConfigMaps
+	if instance.Spec.Workspace != nil {
+		for i := range instance.Spec.Workspace.AdditionalWorkspaces {
+			aw := &instance.Spec.Workspace.AdditionalWorkspaces[i]
+			if aw.ConfigMapRef == nil {
+				continue
+			}
+			hasConfigMapRef = true
+			extCM := &corev1.ConfigMap{}
+			if err := r.Get(ctx, types.NamespacedName{Name: aw.ConfigMapRef.Name, Namespace: instance.Namespace}, extCM); err != nil {
+				if apierrors.IsNotFound(err) {
+					meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+						Type:               openclawv1alpha1.ConditionTypeWorkspaceReady,
+						Status:             metav1.ConditionFalse,
+						Reason:             "ConfigMapNotFound",
+						Message:            fmt.Sprintf("Additional workspace %q ConfigMap %q not found", aw.Name, aw.ConfigMapRef.Name),
+						ObservedGeneration: instance.Generation,
+					})
+					r.Recorder.Eventf(instance, corev1.EventTypeWarning, "WorkspaceConfigMapNotFound",
+						"Additional workspace %q ConfigMap %q not found", aw.Name, aw.ConfigMapRef.Name)
+					logger.Info("Additional workspace configMapRef not found, skipping", "workspace", aw.Name, "configMap", aw.ConfigMapRef.Name)
+					degraded = true
+					continue
+				}
+				return nil, fmt.Errorf("fetching additional workspace %q configMapRef %q: %w", aw.Name, aw.ConfigMapRef.Name, err)
+			}
+
+			// Validate all keys
+			valid := true
+			for key := range extCM.Data {
+				vErr := resources.ValidateWorkspaceFilename(key)
+				if vErr == nil {
+					continue
+				}
+				meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+					Type:               openclawv1alpha1.ConditionTypeWorkspaceReady,
+					Status:             metav1.ConditionFalse,
+					Reason:             "InvalidFilename",
+					Message:            fmt.Sprintf("Additional workspace %q ConfigMap %q key %q: %v", aw.Name, aw.ConfigMapRef.Name, key, vErr),
+					ObservedGeneration: instance.Generation,
+				})
+				r.Recorder.Eventf(instance, corev1.EventTypeWarning, "InvalidWorkspaceFilename",
+					"Additional workspace %q ConfigMap %q key %q: %v", aw.Name, aw.ConfigMapRef.Name, key, vErr)
+				logger.Info("Additional workspace configMapRef has invalid filename, skipping", "workspace", aw.Name, "configMap", aw.ConfigMapRef.Name, "key", key)
+				degraded = true
+				valid = false
+				break
+			}
+			if !valid {
+				continue
+			}
+
+			if resolved.additionalFiles == nil {
+				resolved.additionalFiles = make(map[string]map[string]string)
+			}
+			resolved.additionalFiles[aw.Name] = extCM.Data
+			logger.V(1).Info("Resolved additional workspace ConfigMap", "workspace", aw.Name, "configMap", aw.ConfigMapRef.Name, "keys", len(extCM.Data))
+		}
+	}
+
+	// Set WorkspaceReady=True when any configMapRef is used and all resolved successfully
+	if hasConfigMapRef && !degraded {
+		totalFiles := len(resolved.defaultFiles)
+		for _, files := range resolved.additionalFiles {
+			totalFiles += len(files)
+		}
+		meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+			Type:               openclawv1alpha1.ConditionTypeWorkspaceReady,
+			Status:             metav1.ConditionTrue,
+			Reason:             "Resolved",
+			Message:            fmt.Sprintf("All workspace ConfigMaps resolved with %d total file(s)", totalFiles),
+			ObservedGeneration: instance.Generation,
+		})
+	}
+
+	desired := resources.BuildWorkspaceConfigMap(instance, resolved.defaultFiles, resolved.additionalFiles, skillPacks)
 
 	if desired == nil {
-		// No workspace files — clean up existing ConfigMap if present
+		// No workspace files - clean up existing ConfigMap if present
 		existing := &corev1.ConfigMap{}
 		existing.Name = resources.WorkspaceConfigMapName(instance)
 		existing.Namespace = instance.Namespace
 		if err := r.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
-			return err
+			return nil, err
 		}
-		return nil
+		return resolved, nil
 	}
 
 	cm := &corev1.ConfigMap{
@@ -748,19 +954,47 @@ func (r *OpenClawInstanceReconciler) reconcileWorkspaceConfigMap(ctx context.Con
 		cm.Data = desired.Data
 		return controllerutil.SetControllerReference(instance, cm, r.Scheme)
 	}); err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return resolved, nil
 }
 
 // reconcilePVC reconciles the PersistentVolumeClaim
 func (r *OpenClawInstanceReconciler) reconcilePVC(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) error {
 	// Check if persistence is enabled
-	enabled := instance.Spec.Storage.Persistence.Enabled == nil || *instance.Spec.Storage.Persistence.Enabled
-
-	if !enabled {
+	if !resources.IsPersistenceEnabled(instance) {
 		instance.Status.ManagedResources.PVC = ""
+		return nil
+	}
+
+	// When HPA is enabled, VolumeClaimTemplates on the StatefulSet handle
+	// per-replica PVCs - skip creating the standalone PVC.
+	if resources.IsHPAEnabled(instance) {
+		// Log when existingClaim is set but ignored due to HPA (config choice, not operational issue)
+		if instance.Spec.Storage.Persistence.ExistingClaim != "" {
+			log.FromContext(ctx).V(1).Info("existingClaim ignored when autoScaling is enabled - each replica gets its own PVC via VolumeClaimTemplates",
+				"existingClaim", instance.Spec.Storage.Persistence.ExistingClaim)
+		}
+		// Warn if a standalone PVC exists that is now orphaned by the switch to VCTs.
+		// Only check when status still references the PVC to avoid a needless API call every reconcile.
+		if instance.Status.ManagedResources.PVC != "" {
+			orphanedPVC := &corev1.PersistentVolumeClaim{}
+			pvcName := resources.PVCName(instance)
+			if err := r.Get(ctx, types.NamespacedName{Name: pvcName, Namespace: instance.Namespace}, orphanedPVC); err == nil {
+				r.Recorder.Eventf(instance, corev1.EventTypeWarning, "OrphanedPVC",
+					"Standalone PVC %q is no longer used - per-replica PVCs are now managed by StatefulSet VolumeClaimTemplates. Delete the orphaned PVC manually if no longer needed.",
+					pvcName)
+			}
+			instance.Status.ManagedResources.PVC = ""
+		}
+		meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+			Type:               openclawv1alpha1.ConditionTypeStorageReady,
+			Status:             metav1.ConditionTrue,
+			Reason:             "ManagedByVolumeClaimTemplates",
+			Message:            "Per-replica PVCs managed by StatefulSet VolumeClaimTemplates",
+			ObservedGeneration: instance.Generation,
+		})
 		return nil
 	}
 
@@ -977,7 +1211,7 @@ func (r *OpenClawInstanceReconciler) migrateDeploymentToStatefulSet(ctx context.
 }
 
 // reconcileStatefulSet reconciles the StatefulSet
-func (r *OpenClawInstanceReconciler) reconcileStatefulSet(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance, gatewayToken string, skillPacks *resources.ResolvedSkillPacks) error {
+func (r *OpenClawInstanceReconciler) reconcileStatefulSet(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance, gatewayToken string, skillPacks *resources.ResolvedSkillPacks, wsFiles *resolvedWorkspaceFiles) error {
 	// Compute secret hash for rollout trigger on secret rotation
 	secretHash, missingSecrets, err := r.computeSecretHash(ctx, instance)
 	if err != nil {
@@ -1006,29 +1240,57 @@ func (r *OpenClawInstanceReconciler) reconcileStatefulSet(ctx context.Context, i
 		})
 	}
 
+	// Compute gateway token secret name once for both VCT-change detection and CreateOrUpdate.
+	// trusted-proxy mode is mutually exclusive with token auth - skip injecting the
+	// OPENCLAW_GATEWAY_TOKEN env var when trusted-proxy is configured.
+	var gwSecretName string
+	if gatewayToken != "" && !r.isGatewayAuthTrustedProxy(ctx, instance) {
+		if instance.Spec.Gateway.ExistingSecret != "" {
+			gwSecretName = instance.Spec.Gateway.ExistingSecret
+		} else {
+			gwSecretName = resources.GatewayTokenSecretName(instance)
+		}
+	}
+
+	// Build the desired StatefulSet once and reuse for both VCT comparison
+	// and the CreateOrUpdate mutate func.
+	desired := resources.BuildStatefulSet(instance, gwSecretName, skillPacks, wsFiles.defaultFiles, wsFiles.additionalFiles)
+	resources.NormalizeStatefulSet(desired)
+
 	sts := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      resources.StatefulSetName(instance),
 			Namespace: instance.Namespace,
 		},
 	}
-	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sts, func() error {
-		// Pass the gateway token secret name so the env var can be injected
-		var gwSecretName string
-		if gatewayToken != "" {
-			if instance.Spec.Gateway.ExistingSecret != "" {
-				gwSecretName = instance.Spec.Gateway.ExistingSecret
-			} else {
-				gwSecretName = resources.GatewayTokenSecretName(instance)
+
+	// VolumeClaimTemplates are immutable on existing StatefulSets. Detect
+	// transitions (e.g. enabling/disabling HPA with persistence) and
+	// delete+recreate the StatefulSet when VCTs need to change.
+	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(sts), sts); err == nil {
+		if !resources.VolumeClaimTemplatesEqual(sts.Spec.VolumeClaimTemplates, desired.Spec.VolumeClaimTemplates) {
+			log.FromContext(ctx).Info("VolumeClaimTemplates changed, recreating StatefulSet")
+			if err := r.Client.Delete(ctx, sts); err != nil {
+				return fmt.Errorf("deleting StatefulSet for VCT change: %w", err)
 			}
+			// Returning an error triggers exponential backoff; the next reconcile recreates the StatefulSet
+			return fmt.Errorf("StatefulSet deleted for VolumeClaimTemplate change, will recreate on next reconcile")
 		}
-		desired := resources.BuildStatefulSet(instance, gwSecretName, skillPacks)
-		resources.NormalizeStatefulSet(desired)
+	}
+
+	// Reset sts to a clean object for CreateOrUpdate (the Get above may have populated it)
+	sts = &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      resources.StatefulSetName(instance),
+			Namespace: instance.Namespace,
+		},
+	}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sts, func() error {
 		sts.Labels = desired.Labels
 		// Preserve current replica count when HPA manages scaling
 		existingReplicas := sts.Spec.Replicas
 		sts.Spec = desired.Spec
-		if resources.IsHPAEnabled(instance) && existingReplicas != nil {
+		if resources.IsHPAEnabled(instance) && !instance.Spec.Suspended && existingReplicas != nil {
 			sts.Spec.Replicas = existingReplicas
 		}
 		// Inject secret hash annotation to trigger rollout on secret rotation
@@ -1045,26 +1307,45 @@ func (r *OpenClawInstanceReconciler) reconcileStatefulSet(ctx context.Context, i
 	instance.Status.ManagedResources.StatefulSet = sts.Name
 
 	// Check StatefulSet status
-	ready := sts.Status.ReadyReplicas > 0
-	status := metav1.ConditionFalse
-	reason := "StatefulSetNotReady"
-	message := "StatefulSet is not ready yet"
-	if ready {
-		status = metav1.ConditionTrue
-		reason = "StatefulSetReady"
-		message = "StatefulSet is ready"
+	var ready bool
+	var stsCondStatus metav1.ConditionStatus
+	var stsCondReason, stsCondMessage string
+
+	if instance.Spec.Suspended {
+		// Suspended: desired=0 replicas. Ready once all pods are terminated.
+		ready = sts.Status.Replicas == 0
+		if ready {
+			stsCondStatus = metav1.ConditionTrue
+			stsCondReason = "StatefulSetSuspended"
+			stsCondMessage = "StatefulSet scaled to zero (instance suspended)"
+		} else {
+			stsCondStatus = metav1.ConditionFalse
+			stsCondReason = "StatefulSetScalingDown"
+			stsCondMessage = "StatefulSet is scaling down for suspension"
+		}
+	} else {
+		ready = sts.Status.ReadyReplicas > 0
+		if ready {
+			stsCondStatus = metav1.ConditionTrue
+			stsCondReason = "StatefulSetReady"
+			stsCondMessage = "StatefulSet is ready"
+		} else {
+			stsCondStatus = metav1.ConditionFalse
+			stsCondReason = "StatefulSetNotReady"
+			stsCondMessage = "StatefulSet is not ready yet"
+		}
 	}
 
 	meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
 		Type:    openclawv1alpha1.ConditionTypeStatefulSetReady,
-		Status:  status,
-		Reason:  reason,
-		Message: message,
+		Status:  stsCondStatus,
+		Reason:  stsCondReason,
+		Message: stsCondMessage,
 	})
 
-	// Update instance readiness metric
+	// Update instance readiness metric (0 when suspended - instance is not serving traffic)
 	readyVal := float64(0)
-	if ready {
+	if ready && !instance.Spec.Suspended {
 		readyVal = 1
 	}
 	instanceReady.WithLabelValues(instance.Name, instance.Namespace).Set(readyVal)
@@ -1571,5 +1852,56 @@ func (r *OpenClawInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&policyv1.PodDisruptionBudget{}).
 		Owns(&autoscalingv2.HorizontalPodAutoscaler{}).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.findInstancesForSecret)).
+		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.findInstancesForConfigMap)).
 		Complete(r)
+}
+
+// findInstancesForConfigMap maps an external ConfigMap change to the OpenClawInstances
+// that reference it via spec.config.configMapRef or spec.workspace.configMapRef.
+func (r *OpenClawInstanceReconciler) findInstancesForConfigMap(ctx context.Context, obj client.Object) []reconcile.Request {
+	cm, ok := obj.(*corev1.ConfigMap)
+	if !ok {
+		return nil
+	}
+
+	instanceList := &openclawv1alpha1.OpenClawInstanceList{}
+	if err := r.List(ctx, instanceList, client.InNamespace(cm.Namespace)); err != nil {
+		log.FromContext(ctx).Error(err, "Failed to list OpenClawInstances for ConfigMap watch")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for i := range instanceList.Items {
+		instance := &instanceList.Items[i]
+		matched := false
+		// Check spec.config.configMapRef
+		if instance.Spec.Config.ConfigMapRef != nil && instance.Spec.Config.ConfigMapRef.Name == cm.Name {
+			matched = true
+		}
+		// Check spec.workspace.configMapRef
+		if !matched && instance.Spec.Workspace != nil &&
+			instance.Spec.Workspace.ConfigMapRef != nil &&
+			instance.Spec.Workspace.ConfigMapRef.Name == cm.Name {
+			matched = true
+		}
+		// Check spec.workspace.additionalWorkspaces[].configMapRef
+		if !matched && instance.Spec.Workspace != nil {
+			for j := range instance.Spec.Workspace.AdditionalWorkspaces {
+				if instance.Spec.Workspace.AdditionalWorkspaces[j].ConfigMapRef != nil &&
+					instance.Spec.Workspace.AdditionalWorkspaces[j].ConfigMapRef.Name == cm.Name {
+					matched = true
+					break
+				}
+			}
+		}
+		if matched {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      instance.Name,
+					Namespace: instance.Namespace,
+				},
+			})
+		}
+	}
+	return requests
 }

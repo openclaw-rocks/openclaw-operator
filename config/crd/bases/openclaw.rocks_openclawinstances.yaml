@@ -1073,6 +1073,14 @@ spec:
                         format: int32
                         type: integer
                     type: object
+                  runtimeClassName:
+                    description: |-
+                      RuntimeClassName refers to a RuntimeClass object in the cluster,
+                      which should be used to run this pod.
+                      If no RuntimeClass resource matches the named class, the pod will not be run.
+                      If unset or empty, the default container runtime is used.
+                      More info: https://kubernetes.io/docs/concepts/containers/runtime-class/
+                    type: string
                   tolerations:
                     description: Tolerations are tolerations for pod scheduling
                     items:
@@ -1309,12 +1317,31 @@ spec:
                     format: int32
                     minimum: 0
                     type: integer
+                  retentionDays:
+                    default: 7
+                    description: |-
+                      RetentionDays is the number of days to keep daily snapshots in S3.
+                      The periodic backup syncs incrementally to a fixed "latest" path and
+                      takes a daily snapshot. Snapshots older than RetentionDays are pruned
+                      after each successful backup.
+                    format: int32
+                    maximum: 365
+                    minimum: 1
+                    type: integer
                   schedule:
                     description: |-
                       Schedule is a cron expression for periodic backups (e.g., "0 2 * * *" for daily at 2 AM).
                       When set, the operator creates a CronJob that runs rclone to sync PVC data to S3.
                       Requires persistence to be enabled and the s3-backup-credentials Secret
                       in the operator namespace.
+                    type: string
+                  serviceAccountName:
+                    description: |-
+                      ServiceAccountName is the name of the ServiceAccount to use for backup and restore Jobs.
+                      Use this to assign a cloud-provider workload identity ServiceAccount (e.g., AWS IRSA,
+                      GKE Workload Identity, AKS Workload Identity) so backup Jobs can authenticate to the
+                      storage backend without static credentials.
+                      When set, all backup Jobs (pre-delete, pre-update, periodic, and restore) use this SA.
                     type: string
                   timeout:
                     description: |-
@@ -1472,11 +1499,11 @@ spec:
                           chain security
                         type: string
                       repository:
-                        default: ghcr.io/browserless/chromium
+                        default: chromedp/headless-shell
                         description: Repository is the container image repository
                         type: string
                       tag:
-                        default: latest
+                        default: stable
                         description: Tag is the container image tag
                         type: string
                     type: object
@@ -1703,6 +1730,9 @@ spec:
                   - name
                   type: object
                 type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               envFrom:
                 description: |-
                   EnvFrom is a list of sources to populate environment variables from
@@ -3583,7 +3613,8 @@ spec:
                 maxItems: 10
                 type: array
               gateway:
-                description: Gateway configures the gateway authentication token
+                description: Gateway configures the gateway reverse proxy and authentication
+                  token
                 properties:
                   controlUiOrigins:
                     description: |-
@@ -3595,6 +3626,14 @@ spec:
                       type: string
                     maxItems: 20
                     type: array
+                  enabled:
+                    default: true
+                    description: |-
+                      Enabled controls whether the built-in gateway reverse proxy sidecar is
+                      injected into the pod. When false, no proxy container is added and health
+                      probes target the OpenClaw gateway directly on port 18789.
+                      Defaults to true.
+                    type: boolean
                   existingSecret:
                     description: |-
                       ExistingSecret is the name of a user-managed Secret containing the gateway token.
@@ -5435,6 +5474,23 @@ spec:
                         type: string
                     type: object
                 type: object
+              plugins:
+                description: |-
+                  Plugins is a list of plugins to install via init container.
+                  Each entry is an npm package name (e.g., "@martian-engineering/lossless-claw").
+                  An optional "npm:" prefix is accepted and stripped before installation.
+                  npm lifecycle scripts are disabled for security.
+                items:
+                  type: string
+                maxItems: 20
+                type: array
+              podAnnotations:
+                additionalProperties:
+                  type: string
+                description: |-
+                  PodAnnotations are extra annotations merged into the pod template metadata.
+                  Operator-managed annotations (e.g. config-hash) take precedence on conflict.
+                type: object
               probes:
                 description: Probes configures health probes for the OpenClaw container
                 nullable: true
@@ -5524,6 +5580,14 @@ spec:
                         type: integer
                     type: object
                 type: object
+              registry:
+                description: |-
+                  Registry is the global container image registry override.
+                  When set, this registry replaces the registry part of all container images
+                  used by the instance (main container, sidecars, init containers).
+                  Example: "my-registry.example.com" will change "ghcr.io/openclaw/openclaw:latest"
+                  to "my-registry.example.com/openclaw/openclaw:latest".
+                type: string
               resources:
                 description: Resources specifies the compute resources for the OpenClaw
                   container
@@ -9175,6 +9239,7 @@ spec:
                   type: string
                 maxItems: 20
                 type: array
+                x-kubernetes-list-type: set
               storage:
                 description: Storage specifies persistent storage configuration
                 properties:
@@ -9215,6 +9280,13 @@ spec:
                         type: string
                     type: object
                 type: object
+              suspended:
+                default: false
+                description: |-
+                  Suspended scales the workload to zero replicas when true.
+                  Non-runtime resources (Service, ConfigMap, RBAC, NetworkPolicy, PVC)
+                  remain fully managed. Set to false to resume normal operation.
+                type: boolean
               tailscale:
                 description: Tailscale configures Tailscale integration for tailnet
                   access and HTTPS
@@ -9398,6 +9470,75 @@ spec:
                   Files are copied once on first boot and never overwritten, so agent
                   modifications survive pod restarts.
                 properties:
+                  additionalWorkspaces:
+                    description: |-
+                      AdditionalWorkspaces configures workspace files for secondary agents.
+                      Each entry seeds files to ~/.openclaw/workspace-<name>/, matching the
+                      workspace path configured in spec.config.raw.agents.list[].workspace.
+                    items:
+                      description: |-
+                        AdditionalWorkspace defines a named workspace for a secondary agent.
+                        The operator seeds files to ~/.openclaw/workspace-<name>/.
+                      properties:
+                        configMapRef:
+                          description: ConfigMapRef references an external ConfigMap
+                            whose keys become workspace files.
+                          properties:
+                            name:
+                              description: Name is the name of the ConfigMap to reference.
+                              minLength: 1
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        initialDirectories:
+                          description: InitialDirectories is a list of directories
+                            to create inside this workspace.
+                          items:
+                            type: string
+                          maxItems: 20
+                          type: array
+                        initialFiles:
+                          additionalProperties:
+                            type: string
+                          description: InitialFiles maps filenames to their content
+                            (same as spec.workspace.initialFiles).
+                          maxProperties: 50
+                          type: object
+                        name:
+                          description: |-
+                            Name identifies this workspace. The operator seeds files to
+                            ~/.openclaw/workspace-<name>/. Must match the workspace path
+                            configured in spec.config.raw.agents.list[].workspace.
+                          maxLength: 63
+                          minLength: 1
+                          pattern: ^[a-z0-9]+(-[a-z0-9]+)*$
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    maxItems: 10
+                    type: array
+                  configMapRef:
+                    description: |-
+                      ConfigMapRef references an external ConfigMap whose keys become workspace files.
+                      All keys in the referenced ConfigMap are included as workspace files.
+                      This is useful for GitOps workflows where workspace files (AGENT.md, SOUL.md, etc.)
+                      are managed as standalone files and bundled via Kustomize configMapGenerator or similar.
+
+                      Merge priority (highest wins):
+                      1. Operator-injected files (ENVIRONMENT.md, BOOTSTRAP.md, SELFCONFIG.md, selfconfig.sh)
+                      2. Inline initialFiles
+                      3. External configMapRef entries
+                      4. Skill pack files
+                    properties:
+                      name:
+                        description: Name is the name of the ConfigMap to reference.
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    type: object
                   initialDirectories:
                     description: |-
                       InitialDirectories is a list of directories to create (mkdir -p)
@@ -9651,6 +9792,7 @@ spec:
                 - BackingUp
                 - Restoring
                 - Updating
+                - Suspended
                 type: string
               restoreJobName:
                 description: RestoreJobName is the name of the active restore Job

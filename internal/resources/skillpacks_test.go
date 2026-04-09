@@ -137,7 +137,7 @@ func TestBuildInitScript_WithSkillPacks(t *testing.T) {
 		Directories: []string{"skills/image-gen/scripts"},
 	}
 
-	script := BuildInitScript(instance, resolved)
+	script := BuildInitScript(instance, nil, nil, resolved)
 
 	// Should create directories
 	if !strings.Contains(script, "mkdir -p /data/workspace/'skills/image-gen/scripts'") {
@@ -162,7 +162,7 @@ func TestBuildWorkspaceConfigMap_WithSkillPacks(t *testing.T) {
 		},
 	}
 
-	cm := BuildWorkspaceConfigMap(instance, resolved)
+	cm := BuildWorkspaceConfigMap(instance, nil, nil, resolved)
 	if cm == nil {
 		t.Fatal("expected non-nil ConfigMap")
 	}

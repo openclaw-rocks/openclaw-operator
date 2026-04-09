@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -30,11 +31,17 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1alpha1 "github.com/openclawrocks/openclaw-operator/api/v1alpha1"
+	"github.com/openclawrocks/openclaw-operator/internal/resources"
 )
 
 const imageTagLatest = "latest"
 const configFormatJSON5 = "json5"
+
+// workspaceNameRegex matches the kubebuilder validation pattern for workspace names.
+// Requires lowercase alphanumeric, optionally followed by hyphen-separated segments.
+// Disallows consecutive hyphens to prevent ambiguous key parsing.
+var workspaceNameRegex = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
 // knownProviderEnvVars lists environment variable names for known AI provider API keys.
 var knownProviderEnvVars = map[string]bool{
@@ -181,9 +188,9 @@ func (v *OpenClawInstanceValidator) validate(instance *openclawv1alpha1.OpenClaw
 		warnings = append(warnings, "readOnlyRootFilesystem is disabled - consider enabling for security hardening (the PVC at ~/.openclaw/ and /tmp emptyDir provide writable paths)")
 	}
 
-	// 9. Validate resource limits are set (recommended)
+	// 9. Enforce resource limits (required for production safety)
 	if instance.Spec.Resources.Limits.CPU == "" || instance.Spec.Resources.Limits.Memory == "" {
-		warnings = append(warnings, "Resource limits are not fully configured - consider setting both CPU and memory limits")
+		return nil, fmt.Errorf("resource limits are required - both CPU and memory limits must be set")
 	}
 
 	// 10. Warn if using "latest" image tag without a digest pin
@@ -226,6 +233,13 @@ func (v *OpenClawInstanceValidator) validate(instance *openclawv1alpha1.OpenClaw
 	for i, skill := range instance.Spec.Skills {
 		if err := validateSkillName(skill); err != nil {
 			return nil, fmt.Errorf("skills[%d] %q: %w", i, skill, err)
+		}
+	}
+
+	// 15b. Validate plugin names
+	for i, plugin := range instance.Spec.Plugins {
+		if err := validatePluginName(plugin); err != nil {
+			return nil, fmt.Errorf("plugins[%d] %q: %w", i, plugin, err)
 		}
 	}
 
@@ -274,21 +288,61 @@ func (v *OpenClawInstanceValidator) validate(instance *openclawv1alpha1.OpenClaw
 		}
 	}
 
+	// 21. Reject suspended + HPA auto-scaling (mutually exclusive)
+	if instance.Spec.Suspended && resources.IsHPAEnabled(instance) {
+		return nil, fmt.Errorf("spec.suspended and spec.availability.autoScaling.enabled are mutually exclusive: disable auto-scaling before suspending")
+	}
+
 	return warnings, nil
 }
 
 // validateWorkspaceSpec validates workspace file and directory names.
 func validateWorkspaceSpec(ws *openclawv1alpha1.WorkspaceSpec) error {
+	// Validate configMapRef
+	if ws.ConfigMapRef != nil && ws.ConfigMapRef.Name == "" {
+		return fmt.Errorf("workspace configMapRef.name must not be empty")
+	}
+
 	for name := range ws.InitialFiles {
-		if err := validateWorkspaceFilename(name); err != nil {
+		if err := resources.ValidateWorkspaceFilename(name); err != nil {
 			return fmt.Errorf("workspace initialFiles key %q: %w", name, err)
 		}
 	}
 	for _, dir := range ws.InitialDirectories {
-		if err := validateWorkspaceDirectory(dir); err != nil {
+		if err := resources.ValidateWorkspaceDirectory(dir); err != nil {
 			return fmt.Errorf("workspace initialDirectories entry %q: %w", dir, err)
 		}
 	}
+
+	// Validate additional workspaces
+	seen := make(map[string]bool, len(ws.AdditionalWorkspaces))
+	for i, aw := range ws.AdditionalWorkspaces {
+		if aw.Name == "" {
+			return fmt.Errorf("additionalWorkspaces[%d].name must not be empty", i)
+		}
+		if !workspaceNameRegex.MatchString(aw.Name) {
+			return fmt.Errorf("additionalWorkspaces[%d].name %q must match %s (lowercase alphanumeric, no consecutive hyphens)", i, aw.Name, workspaceNameRegex.String())
+		}
+		if seen[aw.Name] {
+			return fmt.Errorf("additionalWorkspaces[%d].name %q is duplicated", i, aw.Name)
+		}
+		seen[aw.Name] = true
+
+		if aw.ConfigMapRef != nil && aw.ConfigMapRef.Name == "" {
+			return fmt.Errorf("additionalWorkspaces[%d] %q configMapRef.name must not be empty", i, aw.Name)
+		}
+		for name := range aw.InitialFiles {
+			if err := resources.ValidateWorkspaceFilename(name); err != nil {
+				return fmt.Errorf("additionalWorkspaces[%d] %q initialFiles key %q: %w", i, aw.Name, name, err)
+			}
+		}
+		for _, dir := range aw.InitialDirectories {
+			if err := resources.ValidateWorkspaceDirectory(dir); err != nil {
+				return fmt.Errorf("additionalWorkspaces[%d] %q initialDirectories entry %q: %w", i, aw.Name, dir, err)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -398,51 +452,8 @@ func validateResourceQuantities(instance *openclawv1alpha1.OpenClawInstance) err
 	return nil
 }
 
-// validateWorkspaceFilename checks a single workspace filename.
-func validateWorkspaceFilename(name string) error {
-	if name == "" {
-		return fmt.Errorf("filename must not be empty")
-	}
-	if len(name) > 253 {
-		return fmt.Errorf("filename must be at most 253 characters")
-	}
-	if strings.Contains(name, "/") {
-		return fmt.Errorf("filename must not contain '/'")
-	}
-	if strings.Contains(name, "\\") {
-		return fmt.Errorf("filename must not contain '\\'")
-	}
-	if strings.Contains(name, "..") {
-		return fmt.Errorf("filename must not contain '..'")
-	}
-	if strings.HasPrefix(name, ".") {
-		return fmt.Errorf("filename must not start with '.'")
-	}
-	if name == "openclaw.json" {
-		return fmt.Errorf("filename 'openclaw.json' is reserved for config")
-	}
-	return nil
-}
-
-// validateWorkspaceDirectory checks a single workspace directory path.
-func validateWorkspaceDirectory(dir string) error {
-	if dir == "" {
-		return fmt.Errorf("directory must not be empty")
-	}
-	if len(dir) > 253 {
-		return fmt.Errorf("directory must be at most 253 characters")
-	}
-	if strings.Contains(dir, "\\") {
-		return fmt.Errorf("directory must not contain '\\'")
-	}
-	if strings.Contains(dir, "..") {
-		return fmt.Errorf("directory must not contain '..'")
-	}
-	if strings.HasPrefix(dir, "/") {
-		return fmt.Errorf("directory must not be an absolute path")
-	}
-	return nil
-}
+// validateWorkspaceFilename and validateWorkspaceDirectory are in
+// internal/resources/validation.go (exported for use by both webhook and controller).
 
 // validateSkillName checks a single skill identifier.
 // Entries may use the "npm:" prefix to install npm packages instead of ClawHub
@@ -466,6 +477,33 @@ func validateSkillName(name string) error {
 		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
 			c == '-' || c == '_' || c == '/' || c == '.' || c == '@') {
 			return fmt.Errorf("skill name contains invalid character %q", string(c))
+		}
+	}
+	return nil
+}
+
+// validatePluginName checks a single plugin identifier.
+// Plugin entries are npm package names. An optional "npm:" prefix is accepted
+// and stripped before character-set validation.
+func validatePluginName(name string) error {
+	if name == "" {
+		return fmt.Errorf("plugin name must not be empty")
+	}
+	if len(name) > 128 {
+		return fmt.Errorf("plugin name must be at most 128 characters")
+	}
+	// Strip optional npm: prefix before character validation
+	check := name
+	if after, ok := strings.CutPrefix(name, "npm:"); ok {
+		if after == "" {
+			return fmt.Errorf("npm: prefix requires a package name")
+		}
+		check = after
+	}
+	for _, c := range check {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+			c == '-' || c == '_' || c == '/' || c == '.' || c == '@') {
+			return fmt.Errorf("plugin name contains invalid character %q", string(c))
 		}
 	}
 	return nil
@@ -516,11 +554,12 @@ func validateConfigSchema(instance *openclawv1alpha1.OpenClawInstance) admission
 
 // reservedInitContainerNames are names used by operator-managed init containers.
 var reservedInitContainerNames = map[string]bool{
-	"init-config": true,
-	"init-pnpm":   true,
-	"init-python": true,
-	"init-skills": true,
-	"init-ollama": true,
+	"init-config":  true,
+	"init-pnpm":    true,
+	"init-python":  true,
+	"init-skills":  true,
+	"init-plugins": true,
+	"init-ollama":  true,
 }
 
 // validateInitContainers checks custom init container names.

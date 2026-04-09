@@ -26,13 +26,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1alpha1 "github.com/openclawrocks/openclaw-operator/api/v1alpha1"
 )
 
 const (
@@ -50,6 +49,7 @@ type OpenClawSelfConfigReconciler struct {
 //+kubebuilder:rbac:groups=openclaw.rocks,resources=openclawselfconfigs,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=openclaw.rocks,resources=openclawselfconfigs/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=openclaw.rocks,resources=openclawselfconfigs/finalizers,verbs=update
+//+kubebuilder:rbac:groups=openclaw.rocks,resources=openclawinstances,verbs=get;patch
 
 // Reconcile processes an OpenClawSelfConfig request.
 func (r *OpenClawSelfConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -114,37 +114,37 @@ func (r *OpenClawSelfConfigReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return r.setTerminalStatus(ctx, sc, openclawv1alpha1.SelfConfigPhaseDenied, msg)
 	}
 
-	// Apply changes to the parent instance with optimistic concurrency retry
-	applyErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		// Re-fetch instance on each retry to get latest resourceVersion
-		freshInstance := &openclawv1alpha1.OpenClawInstance{}
-		if err := r.Get(ctx, types.NamespacedName{Name: sc.Spec.InstanceRef, Namespace: sc.Namespace}, freshInstance); err != nil {
-			return err
-		}
+	// Build the partial spec for SSA apply
+	applySpec, err := buildApplySpec(instance, sc, requestedActions)
+	if err != nil {
+		logger.Error(err, "failed to build apply spec")
+		return r.setTerminalStatus(ctx, sc, openclawv1alpha1.SelfConfigPhaseFailed,
+			fmt.Sprintf("failed to build apply spec: %v", err))
+	}
 
-		// Apply each action type
-		for _, action := range requestedActions {
-			switch action {
-			case openclawv1alpha1.SelfConfigActionSkills:
-				applySkillChanges(freshInstance, sc)
-			case openclawv1alpha1.SelfConfigActionConfig:
-				if err := applyConfigPatch(freshInstance, sc); err != nil {
-					return err
-				}
-			case openclawv1alpha1.SelfConfigActionWorkspaceFiles:
-				applyWorkspaceFileChanges(freshInstance, sc)
-			case openclawv1alpha1.SelfConfigActionEnvVars:
-				if err := applyEnvVarChanges(freshInstance, sc); err != nil {
-					return err
-				}
-			}
-		}
+	// Apply changes using Server-Side Apply with dedicated field manager.
+	// This allows coexistence with GitOps controllers (FluxCD, ArgoCD) by
+	// tracking field ownership at the API server level.
+	applyObj := &openclawv1alpha1.OpenClawInstance{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: openclawv1alpha1.GroupVersion.String(),
+			Kind:       "OpenClawInstance",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      instance.Name,
+			Namespace: instance.Namespace,
+		},
+		Spec: *applySpec,
+	}
 
-		return r.Update(ctx, freshInstance) // reconcile-guard:allow
-	})
+	applyErr := r.Patch(ctx, applyObj,
+		client.Apply,
+		client.FieldOwner(SelfConfigFieldManager),
+		client.ForceOwnership,
+	)
 
 	if applyErr != nil {
-		logger.Error(applyErr, "failed to apply self-config changes")
+		logger.Error(applyErr, "failed to apply self-config changes via SSA")
 		return r.setTerminalStatus(ctx, sc, openclawv1alpha1.SelfConfigPhaseFailed,
 			fmt.Sprintf("failed to apply changes: %v", applyErr))
 	}
@@ -154,7 +154,7 @@ func (r *OpenClawSelfConfigReconciler) Reconcile(ctx context.Context, req ctrl.R
 		logger.Error(err, "failed to set owner reference")
 		// Non-fatal - continue to mark as applied
 	} else {
-		if err := r.Update(ctx, sc); err != nil {
+		if err := r.Update(ctx, sc); err != nil { // reconcile-guard:allow
 			logger.Error(err, "failed to update owner reference")
 		}
 	}

@@ -23,8 +23,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	openclawv1alpha1 "github.com/openclawrocks/openclaw-operator/api/v1alpha1"
 )
+
+// SelfConfigFieldManager is the SSA field manager name for SelfConfig changes.
+const SelfConfigFieldManager = "openclaw-selfconfig"
 
 // protectedConfigKeys are config paths that cannot be modified via self-config
 // to prevent breaking gateway authentication.
@@ -86,79 +89,70 @@ func checkAllowedActions(requested, allowed []openclawv1alpha1.SelfConfigAction)
 	return denied
 }
 
-// applySkillChanges adds and removes skills from the instance spec.
-func applySkillChanges(instance *openclawv1alpha1.OpenClawInstance, sc *openclawv1alpha1.OpenClawSelfConfig) {
-	// Remove skills
-	if len(sc.Spec.RemoveSkills) > 0 {
-		removeSet := make(map[string]bool, len(sc.Spec.RemoveSkills))
-		for _, s := range sc.Spec.RemoveSkills {
-			removeSet[s] = true
-		}
-		filtered := make([]string, 0, len(instance.Spec.Skills))
-		for _, s := range instance.Spec.Skills {
-			if !removeSet[s] {
-				filtered = append(filtered, s)
-			}
-		}
-		instance.Spec.Skills = filtered
+// buildSkillsApply computes the skills list for an SSA apply.
+// Merges new skills into the current list and filters out removals.
+func buildSkillsApply(current []string, sc *openclawv1alpha1.OpenClawSelfConfig) []string {
+	removeSet := make(map[string]bool, len(sc.Spec.RemoveSkills))
+	for _, s := range sc.Spec.RemoveSkills {
+		removeSet[s] = true
 	}
 
-	// Add skills (deduplicate, preserve order)
-	if len(sc.Spec.AddSkills) > 0 {
-		existing := make(map[string]bool, len(instance.Spec.Skills))
-		for _, s := range instance.Spec.Skills {
-			existing[s] = true
+	seen := make(map[string]bool, len(current)+len(sc.Spec.AddSkills))
+	var result []string
+	for _, s := range current {
+		if removeSet[s] {
+			continue
 		}
-		for _, s := range sc.Spec.AddSkills {
-			if !existing[s] {
-				instance.Spec.Skills = append(instance.Spec.Skills, s)
-				existing[s] = true
-			}
+		if !seen[s] {
+			result = append(result, s)
+			seen[s] = true
 		}
 	}
+
+	for _, s := range sc.Spec.AddSkills {
+		if !seen[s] && !removeSet[s] {
+			result = append(result, s)
+			seen[s] = true
+		}
+	}
+
+	return result
 }
 
-// applyConfigPatch deep-merges the config patch into the instance config.
-// Returns an error if protected keys are present in the patch.
-func applyConfigPatch(instance *openclawv1alpha1.OpenClawInstance, sc *openclawv1alpha1.OpenClawSelfConfig) error {
+// buildConfigApply deep-merges the config patch into the current config.
+// Returns the merged raw JSON for the apply configuration.
+func buildConfigApply(current *openclawv1alpha1.RawConfig, sc *openclawv1alpha1.OpenClawSelfConfig) ([]byte, error) {
 	if sc.Spec.ConfigPatch == nil || len(sc.Spec.ConfigPatch.Raw) == 0 {
-		return nil
+		return nil, nil
 	}
 
-	// Parse patch to check for protected keys
 	var patch map[string]interface{}
 	if err := json.Unmarshal(sc.Spec.ConfigPatch.Raw, &patch); err != nil {
-		return fmt.Errorf("invalid config patch JSON: %w", err)
+		return nil, fmt.Errorf("invalid config patch JSON: %w", err)
 	}
 
 	for key := range patch {
 		if protectedConfigKeys[key] {
-			return fmt.Errorf("config key %q is protected and cannot be modified via self-config", key)
+			return nil, fmt.Errorf("config key %q is protected and cannot be modified via self-config", key)
 		}
 	}
 
-	// Parse existing config (or start empty)
 	var base map[string]interface{}
-	if instance.Spec.Config.Raw != nil && len(instance.Spec.Config.Raw.Raw) > 0 {
-		if err := json.Unmarshal(instance.Spec.Config.Raw.Raw, &base); err != nil {
-			return fmt.Errorf("failed to parse existing config: %w", err)
+	if current != nil && len(current.Raw) > 0 {
+		if err := json.Unmarshal(current.Raw, &base); err != nil {
+			return nil, fmt.Errorf("failed to parse existing config: %w", err)
 		}
 	} else {
 		base = make(map[string]interface{})
 	}
 
-	// Deep merge
 	merged := deepMerge(base, patch)
 	raw, err := json.Marshal(merged)
 	if err != nil {
-		return fmt.Errorf("failed to marshal merged config: %w", err)
+		return nil, fmt.Errorf("failed to marshal merged config: %w", err)
 	}
 
-	if instance.Spec.Config.Raw == nil {
-		instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{}
-	}
-	instance.Spec.Config.Raw.RawExtension = runtime.RawExtension{Raw: raw}
-	return nil
+	return raw, nil
 }
 
 // deepMerge recursively merges src into dst. Arrays are replaced, not merged.
@@ -179,76 +173,120 @@ func deepMerge(dst, src map[string]interface{}) map[string]interface{} {
 	return result
 }
 
-// applyWorkspaceFileChanges adds and removes workspace files.
-func applyWorkspaceFileChanges(instance *openclawv1alpha1.OpenClawInstance, sc *openclawv1alpha1.OpenClawSelfConfig) {
-	// Initialize workspace if needed
-	if instance.Spec.Workspace == nil {
-		instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{}
-	}
-	if instance.Spec.Workspace.InitialFiles == nil {
-		instance.Spec.Workspace.InitialFiles = make(map[string]string)
-	}
+// buildWorkspaceFilesApply computes the workspace files map for an SSA apply.
+// Merges new files into the current map and removes targeted files.
+func buildWorkspaceFilesApply(current map[string]string, sc *openclawv1alpha1.OpenClawSelfConfig) map[string]string {
+	result := make(map[string]string, len(current)+len(sc.Spec.AddWorkspaceFiles))
 
-	// Remove files
+	removeSet := make(map[string]bool, len(sc.Spec.RemoveWorkspaceFiles))
 	for _, name := range sc.Spec.RemoveWorkspaceFiles {
-		delete(instance.Spec.Workspace.InitialFiles, name)
+		removeSet[name] = true
+	}
+	for name, content := range current {
+		if !removeSet[name] {
+			result[name] = content
+		}
 	}
 
-	// Add files
 	for name, content := range sc.Spec.AddWorkspaceFiles {
-		instance.Spec.Workspace.InitialFiles[name] = content
+		result[name] = content
 	}
+
+	return result
 }
 
-// applyEnvVarChanges adds and removes environment variables.
-// Returns an error if protected env vars are targeted.
-func applyEnvVarChanges(instance *openclawv1alpha1.OpenClawInstance, sc *openclawv1alpha1.OpenClawSelfConfig) error {
-	// Check for protected env var additions
+// buildEnvApply computes the env var list for an SSA apply.
+// Validates against protected env vars, then merges adds and filters removals.
+func buildEnvApply(current []corev1.EnvVar, sc *openclawv1alpha1.OpenClawSelfConfig) ([]corev1.EnvVar, error) {
 	for _, ev := range sc.Spec.AddEnvVars {
 		if protectedEnvVars[ev.Name] {
-			return fmt.Errorf("environment variable %q is protected and cannot be modified via self-config", ev.Name)
+			return nil, fmt.Errorf("environment variable %q is protected and cannot be modified via self-config", ev.Name)
 		}
 	}
 
-	// Check for protected env var removals
 	for _, name := range sc.Spec.RemoveEnvVars {
 		if protectedEnvVars[name] {
-			return fmt.Errorf("environment variable %q is protected and cannot be removed via self-config", name)
+			return nil, fmt.Errorf("environment variable %q is protected and cannot be removed via self-config", name)
 		}
 	}
 
-	// Remove env vars
-	if len(sc.Spec.RemoveEnvVars) > 0 {
-		removeSet := make(map[string]bool, len(sc.Spec.RemoveEnvVars))
-		for _, name := range sc.Spec.RemoveEnvVars {
-			removeSet[name] = true
+	removeSet := make(map[string]bool, len(sc.Spec.RemoveEnvVars))
+	for _, name := range sc.Spec.RemoveEnvVars {
+		removeSet[name] = true
+	}
+	addByName := make(map[string]string, len(sc.Spec.AddEnvVars))
+	for _, ev := range sc.Spec.AddEnvVars {
+		addByName[ev.Name] = ev.Value
+	}
+
+	seen := make(map[string]bool, len(current)+len(sc.Spec.AddEnvVars))
+	var result []corev1.EnvVar
+	for _, ev := range current {
+		if removeSet[ev.Name] {
+			continue
 		}
-		filtered := make([]corev1.EnvVar, 0, len(instance.Spec.Env))
-		for _, ev := range instance.Spec.Env {
-			if !removeSet[ev.Name] {
-				filtered = append(filtered, ev)
+		if val, ok := addByName[ev.Name]; ok {
+			result = append(result, corev1.EnvVar{Name: ev.Name, Value: val})
+			seen[ev.Name] = true
+			continue
+		}
+		result = append(result, ev)
+		seen[ev.Name] = true
+	}
+
+	for _, ev := range sc.Spec.AddEnvVars {
+		if !seen[ev.Name] {
+			result = append(result, corev1.EnvVar{Name: ev.Name, Value: ev.Value})
+			seen[ev.Name] = true
+		}
+	}
+
+	return result, nil
+}
+
+// buildApplySpec constructs the partial OpenClawInstanceSpec for an SSA apply
+// based on the current instance state and the requested SelfConfig changes.
+func buildApplySpec(
+	instance *openclawv1alpha1.OpenClawInstance,
+	sc *openclawv1alpha1.OpenClawSelfConfig,
+	actions []openclawv1alpha1.SelfConfigAction,
+) (*openclawv1alpha1.OpenClawInstanceSpec, error) {
+	spec := &openclawv1alpha1.OpenClawInstanceSpec{}
+
+	for _, action := range actions {
+		switch action {
+		case openclawv1alpha1.SelfConfigActionSkills:
+			spec.Skills = buildSkillsApply(instance.Spec.Skills, sc)
+
+		case openclawv1alpha1.SelfConfigActionConfig:
+			raw, err := buildConfigApply(instance.Spec.Config.Raw, sc)
+			if err != nil {
+				return nil, err
 			}
-		}
-		instance.Spec.Env = filtered
-	}
-
-	// Add env vars (replace existing with same name, or append)
-	for _, newEV := range sc.Spec.AddEnvVars {
-		found := false
-		for i, ev := range instance.Spec.Env {
-			if ev.Name == newEV.Name {
-				instance.Spec.Env[i] = corev1.EnvVar{Name: newEV.Name, Value: newEV.Value}
-				found = true
-				break
+			if raw != nil {
+				spec.Config.Raw = &openclawv1alpha1.RawConfig{
+					RawExtension: runtime.RawExtension{Raw: raw},
+				}
 			}
-		}
-		if !found {
-			instance.Spec.Env = append(instance.Spec.Env, corev1.EnvVar{
-				Name:  newEV.Name,
-				Value: newEV.Value,
-			})
+
+		case openclawv1alpha1.SelfConfigActionWorkspaceFiles:
+			var currentFiles map[string]string
+			if instance.Spec.Workspace != nil {
+				currentFiles = instance.Spec.Workspace.InitialFiles
+			}
+			files := buildWorkspaceFilesApply(currentFiles, sc)
+			spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+				InitialFiles: files,
+			}
+
+		case openclawv1alpha1.SelfConfigActionEnvVars:
+			env, err := buildEnvApply(instance.Spec.Env, sc)
+			if err != nil {
+				return nil, err
+			}
+			spec.Env = env
 		}
 	}
 
-	return nil
+	return spec, nil
 }

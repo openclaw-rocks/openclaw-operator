@@ -33,8 +33,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
-	"github.com/openclawrocks/k8s-operator/internal/resources"
+	openclawv1alpha1 "github.com/openclawrocks/openclaw-operator/api/v1alpha1"
+	"github.com/openclawrocks/openclaw-operator/internal/resources"
 )
 
 const (
@@ -75,8 +75,7 @@ func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Conte
 	}
 
 	// Check if persistence is enabled — no PVC means nothing to back up
-	persistenceEnabled := instance.Spec.Storage.Persistence.Enabled == nil || *instance.Spec.Storage.Persistence.Enabled
-	if !persistenceEnabled {
+	if !resources.IsPersistenceEnabled(instance) {
 		logger.Info("Persistence disabled, skipping backup")
 		instance.Status.Phase = openclawv1alpha1.PhaseTerminating
 		if err := r.Status().Update(ctx, instance); err != nil {
@@ -166,6 +165,11 @@ func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Conte
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
+	// Reconcile mirror Secret for secretKeyRef (no-op for env-auth mode)
+	if mirrorErr := r.reconcileS3MirrorSecret(ctx, instance, creds); mirrorErr != nil {
+		return ctrl.Result{}, mirrorErr
+	}
+
 	tenantID := getTenantID(instance)
 	timestamp := time.Now().UTC().Format("2006-01-02T150405Z")
 	b2Path := fmt.Sprintf("backups/%s/%s/%s", tenantID, instance.Name, timestamp)
@@ -192,7 +196,7 @@ func (r *OpenClawInstanceReconciler) reconcileDeleteWithBackup(ctx context.Conte
 
 		pvcName := pvcNameForInstance(instance)
 		labels := backupLabels(instance, "backup")
-		job := buildRcloneJob(jobName, instance.Namespace, pvcName, b2Path, labels, creds, true, instance.Spec.Availability.NodeSelector, instance.Spec.Availability.Tolerations)
+		job := buildRcloneJob(jobName, instance.Namespace, pvcName, b2Path, labels, creds, true, instance.Spec.Availability.NodeSelector, instance.Spec.Availability.Tolerations, instance.Spec.Backup.ServiceAccountName, mirrorSecretName(instance))
 
 		// Set owner reference so the Job is cleaned up with the instance
 		if err := controllerutil.SetControllerReference(instance, job, r.Scheme); err != nil {
@@ -286,9 +290,8 @@ func (r *OpenClawInstanceReconciler) removeFinalizer(ctx context.Context, instan
 	// Orphan the PVC unless the user explicitly set orphan=false.
 	// Only applies to operator-managed PVCs (not existingClaim).
 	orphan := instance.Spec.Storage.Persistence.Orphan == nil || *instance.Spec.Storage.Persistence.Orphan
-	persistenceEnabled := instance.Spec.Storage.Persistence.Enabled == nil || *instance.Spec.Storage.Persistence.Enabled
 	usingExistingClaim := instance.Spec.Storage.Persistence.ExistingClaim != ""
-	if orphan && persistenceEnabled && !usingExistingClaim {
+	if orphan && resources.IsPersistenceEnabled(instance) && !usingExistingClaim {
 		if err := r.orphanPVC(ctx, instance); err != nil {
 			logger.Error(err, "Failed to orphan PVC - proceeding with finalizer removal")
 		}

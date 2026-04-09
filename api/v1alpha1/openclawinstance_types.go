@@ -9,6 +9,14 @@ import (
 
 // OpenClawInstanceSpec defines the desired state of OpenClawInstance
 type OpenClawInstanceSpec struct {
+	// Registry is the global container image registry override.
+	// When set, this registry replaces the registry part of all container images
+	// used by the instance (main container, sidecars, init containers).
+	// Example: "my-registry.example.com" will change "ghcr.io/openclaw/openclaw:latest"
+	// to "my-registry.example.com/openclaw/openclaw:latest".
+	// +optional
+	Registry string `json:"registry,omitempty"`
+
 	// Image configuration for the OpenClaw container
 	// +optional
 	Image ImageSpec `json:"image,omitempty"`
@@ -28,8 +36,17 @@ type OpenClawInstanceSpec struct {
 	// or an npm package prefixed with "npm:" (e.g., "npm:@openclaw/matrix").
 	// npm lifecycle scripts are disabled for security (see #91).
 	// +kubebuilder:validation:MaxItems=20
+	// +listType=set
 	// +optional
 	Skills []string `json:"skills,omitempty"`
+
+	// Plugins is a list of plugins to install via init container.
+	// Each entry is an npm package name (e.g., "@martian-engineering/lossless-claw").
+	// An optional "npm:" prefix is accepted and stripped before installation.
+	// npm lifecycle scripts are disabled for security.
+	// +kubebuilder:validation:MaxItems=20
+	// +optional
+	Plugins []string `json:"plugins,omitempty"`
 
 	// EnvFrom is a list of sources to populate environment variables from
 	// Use this for API keys and other secrets (e.g., ANTHROPIC_API_KEY, OPENAI_API_KEY)
@@ -37,6 +54,8 @@ type OpenClawInstanceSpec struct {
 	EnvFrom []corev1.EnvFromSource `json:"envFrom,omitempty"`
 
 	// Env is a list of environment variables to set in the container
+	// +listType=map
+	// +listMapKey=name
 	// +optional
 	Env []corev1.EnvVar `json:"env,omitempty"`
 
@@ -112,6 +131,13 @@ type OpenClawInstanceSpec struct {
 	// +optional
 	Availability AvailabilitySpec `json:"availability,omitempty"`
 
+	// Suspended scales the workload to zero replicas when true.
+	// Non-runtime resources (Service, ConfigMap, RBAC, NetworkPolicy, PVC)
+	// remain fully managed. Set to false to resume normal operation.
+	// +kubebuilder:default=false
+	// +optional
+	Suspended bool `json:"suspended,omitempty"`
+
 	// Backup configures periodic scheduled backups to S3-compatible storage.
 	// Requires the s3-backup-credentials Secret in the operator namespace and persistence enabled.
 	// +optional
@@ -128,7 +154,7 @@ type OpenClawInstanceSpec struct {
 	// +optional
 	RuntimeDeps RuntimeDepsSpec `json:"runtimeDeps,omitempty"`
 
-	// Gateway configures the gateway authentication token
+	// Gateway configures the gateway reverse proxy and authentication token
 	// +optional
 	Gateway GatewaySpec `json:"gateway,omitempty"`
 
@@ -140,6 +166,11 @@ type OpenClawInstanceSpec struct {
 	// When enabled, the operator injects RBAC, env vars, and a helper skill into the workspace.
 	// +optional
 	SelfConfigure SelfConfigureSpec `json:"selfConfigure,omitempty"`
+
+	// PodAnnotations are extra annotations merged into the pod template metadata.
+	// Operator-managed annotations (e.g. config-hash) take precedence on conflict.
+	// +optional
+	PodAnnotations map[string]string `json:"podAnnotations,omitempty"`
 }
 
 // ImageSpec defines the container image configuration
@@ -219,6 +250,19 @@ type RawConfig struct {
 // Files listed in InitialFiles are seeded once (only if they don't already
 // exist on the PVC), so agent modifications survive pod restarts.
 type WorkspaceSpec struct {
+	// ConfigMapRef references an external ConfigMap whose keys become workspace files.
+	// All keys in the referenced ConfigMap are included as workspace files.
+	// This is useful for GitOps workflows where workspace files (AGENT.md, SOUL.md, etc.)
+	// are managed as standalone files and bundled via Kustomize configMapGenerator or similar.
+	//
+	// Merge priority (highest wins):
+	// 1. Operator-injected files (ENVIRONMENT.md, BOOTSTRAP.md, SELFCONFIG.md, selfconfig.sh)
+	// 2. Inline initialFiles
+	// 3. External configMapRef entries
+	// 4. Skill pack files
+	// +optional
+	ConfigMapRef *ConfigMapNameSelector `json:"configMapRef,omitempty"`
+
 	// InitialFiles maps filenames to their content. Each file is written
 	// to the workspace directory only if it does not already exist.
 	// +kubebuilder:validation:MaxProperties=50
@@ -230,6 +274,47 @@ type WorkspaceSpec struct {
 	// +kubebuilder:validation:MaxItems=20
 	// +optional
 	InitialDirectories []string `json:"initialDirectories,omitempty"`
+
+	// AdditionalWorkspaces configures workspace files for secondary agents.
+	// Each entry seeds files to ~/.openclaw/workspace-<name>/, matching the
+	// workspace path configured in spec.config.raw.agents.list[].workspace.
+	// +kubebuilder:validation:MaxItems=10
+	// +optional
+	AdditionalWorkspaces []AdditionalWorkspace `json:"additionalWorkspaces,omitempty"`
+}
+
+// AdditionalWorkspace defines a named workspace for a secondary agent.
+// The operator seeds files to ~/.openclaw/workspace-<name>/.
+type AdditionalWorkspace struct {
+	// Name identifies this workspace. The operator seeds files to
+	// ~/.openclaw/workspace-<name>/. Must match the workspace path
+	// configured in spec.config.raw.agents.list[].workspace.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]+(-[a-z0-9]+)*$`
+	Name string `json:"name"`
+
+	// ConfigMapRef references an external ConfigMap whose keys become workspace files.
+	// +optional
+	ConfigMapRef *ConfigMapNameSelector `json:"configMapRef,omitempty"`
+
+	// InitialFiles maps filenames to their content (same as spec.workspace.initialFiles).
+	// +kubebuilder:validation:MaxProperties=50
+	// +optional
+	InitialFiles map[string]string `json:"initialFiles,omitempty"`
+
+	// InitialDirectories is a list of directories to create inside this workspace.
+	// +kubebuilder:validation:MaxItems=20
+	// +optional
+	InitialDirectories []string `json:"initialDirectories,omitempty"`
+}
+
+// ConfigMapNameSelector references a ConfigMap by name.
+// Unlike ConfigMapKeySelector, all keys in the ConfigMap are used.
+type ConfigMapNameSelector struct {
+	// Name is the name of the ConfigMap to reference.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
 }
 
 // ResourcesSpec defines compute resource requirements
@@ -488,6 +573,24 @@ type BackupSpec struct {
 	// Minimum: 5m, Maximum: 24h, Default: 30m.
 	// +optional
 	Timeout string `json:"timeout,omitempty"`
+
+	// ServiceAccountName is the name of the ServiceAccount to use for backup and restore Jobs.
+	// Use this to assign a cloud-provider workload identity ServiceAccount (e.g., AWS IRSA,
+	// GKE Workload Identity, AKS Workload Identity) so backup Jobs can authenticate to the
+	// storage backend without static credentials.
+	// When set, all backup Jobs (pre-delete, pre-update, periodic, and restore) use this SA.
+	// +optional
+	ServiceAccountName string `json:"serviceAccountName,omitempty"`
+
+	// RetentionDays is the number of days to keep daily snapshots in S3.
+	// The periodic backup syncs incrementally to a fixed "latest" path and
+	// takes a daily snapshot. Snapshots older than RetentionDays are pruned
+	// after each successful backup.
+	// +kubebuilder:default=7
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=365
+	// +optional
+	RetentionDays *int32 `json:"retentionDays,omitempty"`
 }
 
 // ChromiumSpec defines the Chromium sidecar configuration
@@ -554,12 +657,12 @@ type ChromiumPersistenceSpec struct {
 // ChromiumImageSpec defines the Chromium container image
 type ChromiumImageSpec struct {
 	// Repository is the container image repository
-	// +kubebuilder:default="ghcr.io/browserless/chromium"
+	// +kubebuilder:default="chromedp/headless-shell"
 	// +optional
 	Repository string `json:"repository,omitempty"`
 
 	// Tag is the container image tag
-	// +kubebuilder:default="latest"
+	// +kubebuilder:default="stable"
 	// +optional
 	Tag string `json:"tag,omitempty"`
 
@@ -1095,6 +1198,14 @@ type AvailabilitySpec struct {
 	// TopologySpreadConstraints describes how pods should spread across topology domains
 	// +optional
 	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
+
+	// RuntimeClassName refers to a RuntimeClass object in the cluster,
+	// which should be used to run this pod.
+	// If no RuntimeClass resource matches the named class, the pod will not be run.
+	// If unset or empty, the default container runtime is used.
+	// More info: https://kubernetes.io/docs/concepts/containers/runtime-class/
+	// +optional
+	RuntimeClassName *string `json:"runtimeClassName,omitempty"`
 }
 
 // AutoScalingSpec configures horizontal pod auto-scaling via HPA
@@ -1188,8 +1299,16 @@ type RuntimeDepsSpec struct {
 	Python bool `json:"python,omitempty"`
 }
 
-// GatewaySpec configures the gateway authentication token
+// GatewaySpec configures the gateway reverse proxy and authentication token
 type GatewaySpec struct {
+	// Enabled controls whether the built-in gateway reverse proxy sidecar is
+	// injected into the pod. When false, no proxy container is added and health
+	// probes target the OpenClaw gateway directly on port 18789.
+	// Defaults to true.
+	// +optional
+	// +kubebuilder:default=true
+	Enabled *bool `json:"enabled,omitempty"`
+
 	// ExistingSecret is the name of a user-managed Secret containing the gateway token.
 	// The Secret must have a key named "token". When set, the operator skips
 	// auto-generating a gateway token Secret and uses this Secret instead.
@@ -1258,7 +1377,7 @@ type AutoUpdateStatus struct {
 // OpenClawInstanceStatus defines the observed state of OpenClawInstance
 type OpenClawInstanceStatus struct {
 	// Phase represents the current lifecycle phase of the instance
-	// +kubebuilder:validation:Enum=Pending;Provisioning;Running;Degraded;Failed;Terminating;BackingUp;Restoring;Updating
+	// +kubebuilder:validation:Enum=Pending;Provisioning;Running;Degraded;Failed;Terminating;BackingUp;Restoring;Updating;Suspended
 	// +optional
 	Phase string `json:"phase,omitempty"`
 
@@ -1469,6 +1588,10 @@ const (
 
 	// ConditionTypeSkillPacksReady indicates skill packs were resolved successfully
 	ConditionTypeSkillPacksReady = "SkillPacksReady"
+
+	// ConditionTypeWorkspaceReady indicates the workspace configuration is valid
+	// and any external ConfigMap referenced by spec.workspace.configMapRef exists
+	ConditionTypeWorkspaceReady = "WorkspaceReady"
 )
 
 // Phase constants
@@ -1482,4 +1605,5 @@ const (
 	PhaseBackingUp    = "BackingUp"
 	PhaseRestoring    = "Restoring"
 	PhaseUpdating     = "Updating"
+	PhaseSuspended    = "Suspended"
 )

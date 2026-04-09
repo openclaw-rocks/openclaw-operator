@@ -31,8 +31,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
-	"github.com/openclawrocks/k8s-operator/internal/resources"
+	openclawv1alpha1 "github.com/openclawrocks/openclaw-operator/api/v1alpha1"
+	"github.com/openclawrocks/openclaw-operator/internal/resources"
 )
 
 const (
@@ -62,6 +62,8 @@ type s3Credentials struct {
 	AppKey   string
 	Endpoint string
 	Region   string // optional - only needed for S3 providers with custom regions (e.g., MinIO)
+	Provider string // rclone S3 provider (e.g., "AWS", "GCS", "Other") - defaults to "Other"
+	EnvAuth  bool   // true when static credentials are not provided - uses the provider's credential chain
 }
 
 // getTenantID extracts the tenant ID from the instance label or falls back to namespace
@@ -77,7 +79,9 @@ func getTenantID(instance *openclawv1alpha1.OpenClawInstance) string {
 	return ns
 }
 
-// getS3Credentials reads the S3 backup credentials Secret from the operator namespace
+// getS3Credentials reads the S3 backup credentials Secret from the operator namespace.
+// S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY are optional - when omitted, EnvAuth is set
+// to true so rclone uses the AWS SDK credential chain (IRSA / Pod Identity / instance profile).
 func (r *OpenClawInstanceReconciler) getS3Credentials(ctx context.Context) (*s3Credentials, error) {
 	secret := &corev1.Secret{}
 	if err := r.Get(ctx, types.NamespacedName{
@@ -99,21 +103,34 @@ func (r *OpenClawInstanceReconciler) getS3Credentials(ctx context.Context) (*s3C
 	if err != nil {
 		return nil, err
 	}
-	keyID, err := get("S3_ACCESS_KEY_ID")
-	if err != nil {
-		return nil, err
-	}
-	appKey, err := get("S3_SECRET_ACCESS_KEY")
-	if err != nil {
-		return nil, err
-	}
 	endpoint, err := get("S3_ENDPOINT")
 	if err != nil {
 		return nil, err
 	}
 
+	// S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY are optional.
+	// When both are omitted, EnvAuth is set so rclone uses the provider's credential chain
+	// (e.g., AWS SDK chain for IRSA/Pod Identity, GCS Workload Identity).
+	keyID := string(secret.Data["S3_ACCESS_KEY_ID"])
+	appKey := string(secret.Data["S3_SECRET_ACCESS_KEY"])
+
+	// Validate: either both must be set or both must be empty
+	if (keyID == "") != (appKey == "") {
+		return nil, fmt.Errorf("S3 credentials secret must set both S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY, or omit both for workload identity (env-auth)")
+	}
+	envAuth := keyID == "" && appKey == ""
+
 	// S3_REGION is optional - only needed for providers with custom regions (e.g., MinIO)
 	region := string(secret.Data["S3_REGION"])
+
+	// S3_PROVIDER sets the rclone --s3-provider flag.
+	// Defaults to "Other" for generic S3-compatible backends.
+	// Set to "AWS" for native AWS credential chain, "GCS" for Google Cloud Storage
+	// S3-compatible endpoint, etc. See: https://rclone.org/s3/#s3-provider
+	provider := string(secret.Data["S3_PROVIDER"])
+	if provider == "" {
+		provider = "Other"
+	}
 
 	return &s3Credentials{
 		Bucket:   bucket,
@@ -121,12 +138,56 @@ func (r *OpenClawInstanceReconciler) getS3Credentials(ctx context.Context) (*s3C
 		AppKey:   appKey,
 		Endpoint: endpoint,
 		Region:   region,
+		Provider: provider,
+		EnvAuth:  envAuth,
 	}, nil
+}
+
+// mirrorSecretName returns the name of the per-instance mirror Secret that holds
+// S3 credentials in the instance namespace (so Jobs can use secretKeyRef).
+func mirrorSecretName(instance *openclawv1alpha1.OpenClawInstance) string {
+	return instance.Name + "-s3-credentials" // #nosec G101 -- not a credential, just a Secret resource name
+}
+
+// reconcileS3MirrorSecret creates or updates a mirror of the S3 credentials
+// in the instance namespace. This allows Jobs/CronJobs to reference credentials
+// via secretKeyRef instead of embedding plaintext values in the Job spec.
+// The mirror Secret is owned by the instance and garbage-collected on deletion.
+// For env-auth (workload identity) mode, no mirror is needed.
+func (r *OpenClawInstanceReconciler) reconcileS3MirrorSecret(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance, creds *s3Credentials) error {
+	if creds.EnvAuth {
+		return nil
+	}
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      mirrorSecretName(instance),
+			Namespace: instance.Namespace,
+		},
+	}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
+		secret.Labels = map[string]string{
+			LabelManagedBy: "openclaw-operator",
+			LabelInstance:  instance.Name,
+		}
+		secret.Data = map[string][]byte{
+			"S3_ACCESS_KEY_ID":     []byte(creds.KeyID),
+			"S3_SECRET_ACCESS_KEY": []byte(creds.AppKey),
+		}
+		return controllerutil.SetControllerReference(instance, secret, r.Scheme)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to reconcile S3 mirror secret: %w", err)
+	}
+	return nil
 }
 
 // buildRcloneJob creates a batch/v1 Job that runs rclone to sync data between a PVC and S3.
 // For backup: src=PVC mount, dst=S3 remote path
 // For restore: src=S3 remote path, dst=PVC mount
+// credentialSecretName is the name of the Secret in the Job's namespace containing
+// S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY (used via secretKeyRef to avoid plaintext
+// credentials in the Job spec). Ignored when creds.EnvAuth is true.
 func buildRcloneJob(
 	name, namespace, pvcName string,
 	remotePath string,
@@ -135,6 +196,8 @@ func buildRcloneJob(
 	isBackup bool,
 	nodeSelector map[string]string,
 	tolerations []corev1.Toleration,
+	serviceAccountName string,
+	credentialSecretName string,
 ) *batchv1.Job {
 	backoffLimit := int32(3)
 	ttl := int32(86400) // 24h
@@ -143,14 +206,24 @@ func buildRcloneJob(
 	// :s3: is used because S3-compatible API works with rclone's S3 backend
 	rcloneRemotePath := fmt.Sprintf(":s3:%s/%s", creds.Bucket, remotePath)
 
+	var authArgs []string
+	if creds.EnvAuth {
+		authArgs = []string{"--s3-env-auth=true"}
+	} else {
+		authArgs = []string{"--s3-access-key-id=$(S3_ACCESS_KEY_ID)", "--s3-secret-access-key=$(S3_SECRET_ACCESS_KEY)"}
+	}
+
+	providerFlag := fmt.Sprintf("--s3-provider=%s", creds.Provider)
+
 	var args []string
 	if isBackup {
 		// PVC -> S3
-		args = []string{"sync", "/data/", rcloneRemotePath, "--s3-provider=Other", "--s3-endpoint=$(S3_ENDPOINT)", "--s3-access-key-id=$(S3_ACCESS_KEY_ID)", "--s3-secret-access-key=$(S3_SECRET_ACCESS_KEY)", "--transfers=8", "--checkers=16", "-v"}
+		args = append([]string{"sync", "/data/", rcloneRemotePath, providerFlag, "--s3-endpoint=$(S3_ENDPOINT)"}, authArgs...)
 	} else {
 		// S3 -> PVC
-		args = []string{"sync", rcloneRemotePath, "/data/", "--s3-provider=Other", "--s3-endpoint=$(S3_ENDPOINT)", "--s3-access-key-id=$(S3_ACCESS_KEY_ID)", "--s3-secret-access-key=$(S3_SECRET_ACCESS_KEY)", "--transfers=8", "--checkers=16", "-v"}
+		args = append([]string{"sync", rcloneRemotePath, "/data/", providerFlag, "--s3-endpoint=$(S3_ENDPOINT)"}, authArgs...)
 	}
+	args = append(args, "--copy-links", "--transfers=8", "--checkers=16", "-v")
 
 	if creds.Region != "" {
 		args = append(args, "--s3-region=$(S3_REGION)")
@@ -158,8 +231,28 @@ func buildRcloneJob(
 
 	env := []corev1.EnvVar{
 		{Name: "S3_ENDPOINT", Value: creds.Endpoint},
-		{Name: "S3_ACCESS_KEY_ID", Value: creds.KeyID},
-		{Name: "S3_SECRET_ACCESS_KEY", Value: creds.AppKey},
+	}
+	if !creds.EnvAuth {
+		env = append(env,
+			corev1.EnvVar{
+				Name: "S3_ACCESS_KEY_ID",
+				ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: credentialSecretName},
+						Key:                  "S3_ACCESS_KEY_ID",
+					},
+				},
+			},
+			corev1.EnvVar{
+				Name: "S3_SECRET_ACCESS_KEY",
+				ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: credentialSecretName},
+						Key:                  "S3_SECRET_ACCESS_KEY",
+					},
+				},
+			},
+		)
 	}
 	if creds.Region != "" {
 		env = append(env, corev1.EnvVar{Name: "S3_REGION", Value: creds.Region})
@@ -179,9 +272,10 @@ func buildRcloneJob(
 					Labels: labels,
 				},
 				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyOnFailure,
-					NodeSelector:  nodeSelector,
-					Tolerations:   tolerations,
+					RestartPolicy:      corev1.RestartPolicyOnFailure,
+					ServiceAccountName: serviceAccountName,
+					NodeSelector:       nodeSelector,
+					Tolerations:        tolerations,
 					// Match the fsGroup/runAsUser from the OpenClaw StatefulSet
 					// so the rclone container can read/write the PVC data
 					SecurityContext: &corev1.PodSecurityContext{
@@ -277,12 +371,50 @@ func backupCronJobName(instance *openclawv1alpha1.OpenClawInstance) string {
 	return instance.Name + "-backup-periodic"
 }
 
+// rcloneCronJobEnv returns the environment variables for the rclone CronJob container.
+// When creds.EnvAuth is true, static credential env vars are omitted.
+// credentialSecretName is the mirror Secret name used via secretKeyRef.
+func rcloneCronJobEnv(creds *s3Credentials, credentialSecretName string) []corev1.EnvVar {
+	env := []corev1.EnvVar{
+		{Name: "S3_ENDPOINT", Value: creds.Endpoint},
+	}
+	if !creds.EnvAuth {
+		env = append(env,
+			corev1.EnvVar{
+				Name: "S3_ACCESS_KEY_ID",
+				ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: credentialSecretName},
+						Key:                  "S3_ACCESS_KEY_ID",
+					},
+				},
+			},
+			corev1.EnvVar{
+				Name: "S3_SECRET_ACCESS_KEY",
+				ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: credentialSecretName},
+						Key:                  "S3_SECRET_ACCESS_KEY",
+					},
+				},
+			},
+		)
+	}
+	if creds.Region != "" {
+		env = append(env, corev1.EnvVar{Name: "S3_REGION", Value: creds.Region})
+	}
+	return env
+}
+
 // buildBackupCronJob creates a batch/v1 CronJob for periodic S3 backups.
 // The CronJob mounts the PVC read-only and uses pod affinity to co-locate
 // on the same node as the StatefulSet pod (required for RWO PVCs).
+// credentialSecretName is the mirror Secret name used via secretKeyRef
+// (ignored when creds.EnvAuth is true).
 func buildBackupCronJob(
 	instance *openclawv1alpha1.OpenClawInstance,
 	creds *s3Credentials,
+	credentialSecretName string,
 ) *batchv1.CronJob {
 	name := backupCronJobName(instance)
 	labels := backupLabels(instance, "periodic-backup")
@@ -304,17 +436,60 @@ func buildBackupCronJob(
 	startingDeadline := int64(600) // 10m - skip missed runs rather than firing all at once
 	gracePeriod := int64(30)
 
-	// Shell command: compute timestamped S3 path and run rclone sync
-	// Uses $(date) for unique path per run under periodic/ prefix
+	// Shell command: incremental sync + daily snapshot + retention cleanup.
+	//
+	// 1. rclone sync to a fixed "latest" path (incremental - only uploads changed files)
+	// 2. rclone copy "latest" to a daily snapshot path (cheap - near-free if today's
+	//    snapshot already exists from an earlier run)
+	// 3. rclone purge snapshots older than retentionDays
+	//
+	// This reduces S3 transactions by ~95% vs the old full-re-upload approach and
+	// keeps storage bounded by the retention window.
+	var authFlags string
+	if creds.EnvAuth {
+		authFlags = `--s3-env-auth=true`
+	} else {
+		authFlags = `--s3-access-key-id="${S3_ACCESS_KEY_ID}" ` +
+			`--s3-secret-access-key="${S3_SECRET_ACCESS_KEY}"`
+	}
+
+	retentionDays := int32(7)
+	if instance.Spec.Backup.RetentionDays != nil {
+		retentionDays = *instance.Spec.Backup.RetentionDays
+	}
+
+	basePath := fmt.Sprintf("backups/%s/%s/periodic", tenantID, instance.Name)
+	remote := fmt.Sprintf(":s3:%s/%s", creds.Bucket, basePath)
+	s3Flags := fmt.Sprintf(`--s3-provider=%s --s3-endpoint="${S3_ENDPOINT}" %s`, creds.Provider, authFlags)
+	if creds.Region != "" {
+		s3Flags += ` --s3-region="${S3_REGION}"`
+	}
+
+	// CUTOFF uses epoch arithmetic (busybox-compatible, since the rclone image is Alpine-based)
 	rcloneCmd := fmt.Sprintf(
-		`TIMESTAMP=$(date -u +%%Y%%m%%dT%%H%%M%%SZ) && `+
-			`rclone sync /data/ ":s3:%s/backups/%s/%s/periodic/${TIMESTAMP}" `+
-			`--s3-provider=Other `+
-			`--s3-endpoint="${S3_ENDPOINT}" `+
-			`--s3-access-key-id="${S3_ACCESS_KEY_ID}" `+
-			`--s3-secret-access-key="${S3_SECRET_ACCESS_KEY}" `+
-			`--transfers=8 --checkers=16 -v`,
-		creds.Bucket, tenantID, instance.Name,
+		`set -e`+
+			` && R="%s"`+
+			` && S3="%s"`+
+			// Step 1: incremental sync to fixed "latest" path
+			` && echo "Step 1: incremental sync to latest"`+
+			` && rclone sync /data/ "${S3}/latest" $R --copy-links --transfers=8 --checkers=16 -v`+
+			// Step 2: daily snapshot (copy latest to snapshots/YYYY-MM-DD)
+			` && TODAY=$(date -u +%%Y-%%m-%%d)`+
+			` && echo "Step 2: snapshot ${TODAY}"`+
+			` && rclone copy "${S3}/latest" "${S3}/snapshots/${TODAY}" $R --transfers=8 --checkers=16 -v`+
+			// Step 3: prune snapshots older than retention period
+			` && CUTOFF=$(date -u -d @$(($(date -u +%%s) - 86400 * %d)) +%%Y-%%m-%%d)`+
+			` && echo "Step 3: pruning snapshots older than ${CUTOFF} (%d day retention)"`+
+			` && for dir in $(rclone lsf "${S3}/snapshots/" $R --dirs-only 2>/dev/null); do`+
+			`   d=$(echo "$dir" | tr -d "/");`+
+			`   if [ "$d" \< "$CUTOFF" ]; then`+
+			`     echo "Pruning snapshot $d";`+
+			`     rclone purge "${S3}/snapshots/$d" $R -v;`+
+			`   fi;`+
+			` done`+
+			` && echo "Backup complete"`,
+		s3Flags, remote,
+		retentionDays, retentionDays,
 	)
 
 	return &batchv1.CronJob{
@@ -346,8 +521,15 @@ func buildBackupCronJob(
 							DNSPolicy:                     corev1.DNSClusterFirst,
 							SchedulerName:                 "default-scheduler",
 							TerminationGracePeriodSeconds: &gracePeriod,
+							ServiceAccountName:            instance.Spec.Backup.ServiceAccountName,
 							NodeSelector:                  instance.Spec.Availability.NodeSelector,
 							Tolerations:                   instance.Spec.Availability.Tolerations,
+							// Match the StatefulSet pod security context. The PVC must
+							// NOT be mounted read-only so that Kubernetes can apply
+							// fsGroup ownership (chown to GID 1000) on mount. Without
+							// this, the PVC root stays root:root and rclone (UID 1000)
+							// gets "permission denied". rclone sync from /data/ is
+							// inherently read-only (source path, not destination).
 							SecurityContext: &corev1.PodSecurityContext{
 								RunAsUser:  int64Ptr(1000),
 								RunAsGroup: int64Ptr(1000),
@@ -376,16 +558,11 @@ func buildBackupCronJob(
 									Image:           RcloneImage,
 									ImagePullPolicy: corev1.PullIfNotPresent,
 									Command:         []string{"sh", "-c", rcloneCmd},
-									Env: []corev1.EnvVar{
-										{Name: "S3_ENDPOINT", Value: creds.Endpoint},
-										{Name: "S3_ACCESS_KEY_ID", Value: creds.KeyID},
-										{Name: "S3_SECRET_ACCESS_KEY", Value: creds.AppKey},
-									},
+									Env:             rcloneCronJobEnv(creds, credentialSecretName),
 									VolumeMounts: []corev1.VolumeMount{
 										{
 											Name:      "data",
 											MountPath: "/data",
-											ReadOnly:  true,
 										},
 									},
 									TerminationMessagePath:   "/dev/termination-log",
@@ -398,7 +575,6 @@ func buildBackupCronJob(
 									VolumeSource: corev1.VolumeSource{
 										PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 											ClaimName: pvcName,
-											ReadOnly:  true,
 										},
 									},
 								},
@@ -421,7 +597,7 @@ func (r *OpenClawInstanceReconciler) reconcileBackupCronJob(ctx context.Context,
 	}
 
 	// Check persistence is enabled
-	if instance.Spec.Storage.Persistence.Enabled != nil && !*instance.Spec.Storage.Persistence.Enabled {
+	if !resources.IsPersistenceEnabled(instance) {
 		logger.Info("Scheduled backup requested but persistence is disabled, skipping CronJob creation")
 		meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
 			Type:               openclawv1alpha1.ConditionTypeScheduledBackupReady,
@@ -447,8 +623,13 @@ func (r *OpenClawInstanceReconciler) reconcileBackupCronJob(ctx context.Context,
 		return nil
 	}
 
+	// Reconcile mirror Secret for secretKeyRef (no-op for env-auth mode)
+	if err := r.reconcileS3MirrorSecret(ctx, instance, creds); err != nil {
+		return err
+	}
+
 	// Build desired CronJob
-	desired := buildBackupCronJob(instance, creds)
+	desired := buildBackupCronJob(instance, creds, mirrorSecretName(instance))
 
 	// CreateOrUpdate the CronJob
 	obj := &batchv1.CronJob{

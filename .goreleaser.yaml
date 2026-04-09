@@ -71,4 +71,4 @@ release:
   replace_existing_artifacts: true
   github:
     owner: openclaw-rocks
-    name: k8s-operator
+    name: openclaw-operator
