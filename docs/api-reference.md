@@ -181,7 +181,7 @@ configMapGenerator:
 
 | Field    | Type       | Default | Description                                                                                       |
 |----------|------------|---------|---------------------------------------------------------------------------------------------------|
-| `skills` | `[]string` | --      | Skills to install. Three formats supported: ClawHub identifiers (e.g., `mcp-server-fetch`), npm packages with `npm:` prefix (e.g., `npm:@openclaw/matrix`), and GitHub-hosted skill packs with `pack:` prefix (e.g., `pack:openclaw-rocks/skills/image-gen`). ClawHub installs are idempotent - already-installed skills are skipped gracefully, making restarts safe with persistent storage. npm lifecycle scripts are disabled for security. Max 20 items. |
+| `skills` | `[]string` | --      | Skills to install. Three formats supported: ClawHub identifiers (e.g., `mcp-server-fetch`), npm packages with `npm:` prefix (e.g., `npm:@openclaw/matrix`), and GitHub-hosted skill packs with `pack:` prefix (e.g., `pack:openclaw-rocks/skills/image-gen`). ClawHub installs are idempotent - already-installed skills are skipped gracefully, making restarts safe with persistent storage. npm lifecycle scripts are disabled for security. Max 20 items. SSA list type: `set` -- each skill is individually tracked for field ownership. |
 
 ```yaml
 spec:
@@ -228,7 +228,7 @@ spec:
 
 | Field | Type           | Default | Description                                         |
 |-------|----------------|---------|-----------------------------------------------------|
-| `env` | `[]EnvVar`     | --      | Individual environment variables to set.             |
+| `env` | `[]EnvVar`     | --      | Individual environment variables to set. SSA list type: `map` (key: `name`) -- each env var is individually tracked for field ownership. |
 
 Standard Kubernetes `EnvVar`. Example:
 
@@ -1349,6 +1349,17 @@ An `OpenClawSelfConfig` represents a request from an agent to modify its own `Op
 4. Status transitions to `Applied` (success) or `Failed` (error)
 5. An owner reference is set to the parent instance for garbage collection
 6. Terminal requests are auto-deleted after 1 hour
+
+### Server-Side Apply and Field Ownership
+
+The SelfConfig controller uses Kubernetes Server-Side Apply (SSA) with the field manager name `openclaw-selfconfig`. This enables fine-grained field ownership tracking:
+
+- **Skills** (`+listType=set`): Each skill name is individually owned. Multiple field managers can each own different skills on the same instance.
+- **Env vars** (`+listType=map`, key: `name`): Each env var is individually owned by the field manager that last set it.
+- **Workspace files** (map fields): Each file entry under `initialFiles` is individually owned.
+- **Config raw**: Owned atomically as a single field.
+
+When a SelfConfig request attempts to remove an item owned by another field manager, the removal is skipped and the operator emits a `Warning` / `SelfConfigSkippedRemoval` event identifying the owning manager. The status message includes details about any skipped removals.
 
 ### Protected Resources
 
