@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.26.0](https://github.com/openclaw-rocks/openclaw-operator/compare/v0.25.2...v0.26.0) (2026-04-09)
+
+
+### Features
+
+* exclude workspace from config-hash to skip unnecessary restarts ([#432](https://github.com/openclaw-rocks/openclaw-operator/issues/432)) ([586e11f](https://github.com/openclaw-rocks/openclaw-operator/commit/586e11fca48cac8edb8a732edcf65a9910dcf64a))
+
+
+### Bug Fixes
+
+* remove env token injection in trusted-proxy mode ([#434](https://github.com/openclaw-rocks/openclaw-operator/issues/434)) ([6daae12](https://github.com/openclaw-rocks/openclaw-operator/commit/6daae12a204d6db1ba50a0c2e1660af5e53a281d))
+
 ## [0.25.2](https://github.com/openclaw-rocks/openclaw-operator/compare/v0.25.1...v0.25.2) (2026-04-06)
 
 
