@@ -19,10 +19,12 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -122,10 +124,72 @@ func (r *OpenClawSelfConfigReconciler) Reconcile(ctx context.Context, req ctrl.R
 			fmt.Sprintf("failed to build apply spec: %v", err))
 	}
 
+	// Check managed fields for removal attempts on unowned items
+	managedFields := instance.GetManagedFields()
+	var warnings []string
+
+	if len(sc.Spec.RemoveSkills) > 0 {
+		ownedSkills := extractOwnedSkills(managedFields)
+		for _, s := range sc.Spec.RemoveSkills {
+			if ownedSkills != nil && ownedSkills[s] {
+				continue // owned by us, will be removed by the apply
+			}
+			manager := findSkillFieldManager(managedFields, s)
+			if manager != "" {
+				msg := fmt.Sprintf("cannot remove skill %q: managed by field manager %q", s, manager)
+				warnings = append(warnings, msg)
+				r.Recorder.Event(instance, "Warning", "SelfConfigSkippedRemoval", msg)
+			} else {
+				msg := fmt.Sprintf("cannot remove skill %q: not managed by %s", s, SelfConfigFieldManager)
+				warnings = append(warnings, msg)
+				r.Recorder.Event(instance, "Warning", "SelfConfigSkippedRemoval", msg)
+			}
+		}
+	}
+
+	if len(sc.Spec.RemoveEnvVars) > 0 {
+		ownedEnv := extractOwnedEnvVars(managedFields)
+		for _, name := range sc.Spec.RemoveEnvVars {
+			if ownedEnv != nil && ownedEnv[name] {
+				continue
+			}
+			manager := findEnvVarFieldManager(managedFields, name)
+			if manager != "" {
+				msg := fmt.Sprintf("cannot remove env var %q: managed by field manager %q", name, manager)
+				warnings = append(warnings, msg)
+				r.Recorder.Event(instance, "Warning", "SelfConfigSkippedRemoval", msg)
+			} else {
+				msg := fmt.Sprintf("cannot remove env var %q: not managed by %s", name, SelfConfigFieldManager)
+				warnings = append(warnings, msg)
+				r.Recorder.Event(instance, "Warning", "SelfConfigSkippedRemoval", msg)
+			}
+		}
+	}
+
+	if len(sc.Spec.RemoveWorkspaceFiles) > 0 {
+		ownedFiles := extractOwnedWorkspaceFiles(managedFields)
+		for _, name := range sc.Spec.RemoveWorkspaceFiles {
+			if ownedFiles != nil && ownedFiles[name] {
+				continue
+			}
+			manager := findWorkspaceFileFieldManager(managedFields, name)
+			if manager != "" {
+				msg := fmt.Sprintf("cannot remove workspace file %q: managed by field manager %q", name, manager)
+				warnings = append(warnings, msg)
+				r.Recorder.Event(instance, "Warning", "SelfConfigSkippedRemoval", msg)
+			} else {
+				msg := fmt.Sprintf("cannot remove workspace file %q: not managed by %s", name, SelfConfigFieldManager)
+				warnings = append(warnings, msg)
+				r.Recorder.Event(instance, "Warning", "SelfConfigSkippedRemoval", msg)
+			}
+		}
+	}
+
 	// Apply changes using Server-Side Apply with dedicated field manager.
-	// This allows coexistence with GitOps controllers (FluxCD, ArgoCD) by
-	// tracking field ownership at the API server level.
-	applyObj := &openclawv1alpha1.OpenClawInstance{
+	// Use unstructured to preserve empty slices/maps in the JSON payload,
+	// which typed objects with omitempty would drop. This ensures the field
+	// manager correctly releases ownership when all items are removed.
+	typedObj := &openclawv1alpha1.OpenClawInstance{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: openclawv1alpha1.GroupVersion.String(),
 			Kind:       "OpenClawInstance",
@@ -136,6 +200,15 @@ func (r *OpenClawSelfConfigReconciler) Reconcile(ctx context.Context, req ctrl.R
 		},
 		Spec: *applySpec,
 	}
+
+	rawMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(typedObj)
+	if err != nil {
+		logger.Error(err, "failed to convert apply spec to unstructured")
+		return r.setTerminalStatus(ctx, sc, openclawv1alpha1.SelfConfigPhaseFailed,
+			fmt.Sprintf("failed to convert apply spec: %v", err))
+	}
+
+	applyObj := &unstructured.Unstructured{Object: rawMap}
 
 	applyErr := r.Patch(ctx, applyObj,
 		client.Apply,
@@ -164,7 +237,13 @@ func (r *OpenClawSelfConfigReconciler) Reconcile(ctx context.Context, req ctrl.R
 	r.Recorder.Event(instance, "Normal", "SelfConfigApplied",
 		fmt.Sprintf("self-config request %q applied", sc.Name))
 
-	return r.setTerminalStatus(ctx, sc, openclawv1alpha1.SelfConfigPhaseApplied, "changes applied successfully")
+	// Build status message including any warnings about skipped removals
+	statusMsg := "changes applied successfully"
+	if len(warnings) > 0 {
+		statusMsg = fmt.Sprintf("changes applied with warnings: %s", strings.Join(warnings, "; "))
+	}
+
+	return r.setTerminalStatus(ctx, sc, openclawv1alpha1.SelfConfigPhaseApplied, statusMsg)
 }
 
 // setTerminalStatus updates the SelfConfig status to a terminal phase.
