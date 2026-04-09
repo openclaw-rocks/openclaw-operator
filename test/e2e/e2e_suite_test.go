@@ -2394,6 +2394,21 @@ var _ = Describe("OpenClawInstance Controller", func() {
 			Expect(auth).NotTo(HaveKey("token"),
 				"gateway.auth.token must not be set in trusted-proxy mode")
 
+			// OPENCLAW_GATEWAY_TOKEN env var must NOT be present on the StatefulSet
+			sts := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resources.StatefulSetName(instance),
+					Namespace: namespace,
+				}, sts)
+			}, timeout, interval).Should(Succeed())
+
+			mainContainer := sts.Spec.Template.Spec.Containers[0]
+			for _, env := range mainContainer.Env {
+				Expect(env.Name).NotTo(Equal("OPENCLAW_GATEWAY_TOKEN"),
+					"OPENCLAW_GATEWAY_TOKEN env var must not be set in trusted-proxy mode")
+			}
+
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})
 	})

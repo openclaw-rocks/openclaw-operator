@@ -6313,6 +6313,31 @@ func TestEnrichConfigWithGatewayAuth_PreservesOtherAuthFields(t *testing.T) {
 	}
 }
 
+func TestIsGatewayAuthTrustedProxy(t *testing.T) {
+	tests := []struct {
+		name   string
+		config string
+		want   bool
+	}{
+		{"trusted-proxy mode", `{"gateway":{"auth":{"mode":"trusted-proxy"}}}`, true},
+		{"token mode", `{"gateway":{"auth":{"mode":"token"}}}`, false},
+		{"no mode set", `{"gateway":{"auth":{}}}`, false},
+		{"no auth key", `{"gateway":{}}`, false},
+		{"no gateway key", `{}`, false},
+		{"empty config", ``, false},
+		{"invalid JSON", `not-json`, false},
+		{"trusted-proxy with extra fields", `{"gateway":{"auth":{"mode":"trusted-proxy","allowTailscale":true}}}`, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsGatewayAuthTrustedProxy([]byte(tt.config))
+			if got != tt.want {
+				t.Errorf("IsGatewayAuthTrustedProxy(%s) = %v, want %v", tt.config, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBuildConfigMap_WithGatewayToken(t *testing.T) {
 	instance := newTestInstance("gw-test")
 	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
@@ -6550,6 +6575,28 @@ func TestBuildStatefulSet_NoGatewayTokenSecretName(t *testing.T) {
 	for _, env := range main.Env {
 		if env.Name == "OPENCLAW_GATEWAY_TOKEN" {
 			t.Error("OPENCLAW_GATEWAY_TOKEN should not be present when no secret name is provided")
+		}
+	}
+}
+
+// TestBuildStatefulSet_TrustedProxy_NoGatewayTokenEnv verifies that when the
+// controller detects trusted-proxy mode and passes an empty gwSecretName,
+// the OPENCLAW_GATEWAY_TOKEN env var is not injected into the StatefulSet.
+func TestBuildStatefulSet_TrustedProxy_NoGatewayTokenEnv(t *testing.T) {
+	instance := newTestInstance("trusted-proxy-sts")
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{
+			Raw: []byte(`{"gateway":{"auth":{"mode":"trusted-proxy"}}}`),
+		},
+	}
+
+	// In trusted-proxy mode, the controller passes empty gwSecretName
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
+
+	main := sts.Spec.Template.Spec.Containers[0]
+	for _, env := range main.Env {
+		if env.Name == "OPENCLAW_GATEWAY_TOKEN" {
+			t.Error("OPENCLAW_GATEWAY_TOKEN must not be present in trusted-proxy mode")
 		}
 	}
 }

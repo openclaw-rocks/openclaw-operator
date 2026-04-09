@@ -177,6 +177,25 @@ func enrichConfigWithGatewayAuth(configJSON []byte, token string) ([]byte, error
 	return json.Marshal(config)
 }
 
+// IsGatewayAuthTrustedProxy returns true if the given config JSON sets
+// gateway.auth.mode to "trusted-proxy".
+func IsGatewayAuthTrustedProxy(configJSON []byte) bool {
+	var config map[string]interface{}
+	if err := json.Unmarshal(configJSON, &config); err != nil {
+		return false
+	}
+	gw, _ := config["gateway"].(map[string]interface{})
+	if gw == nil {
+		return false
+	}
+	auth, _ := gw["auth"].(map[string]interface{})
+	if auth == nil {
+		return false
+	}
+	mode, _ := auth["mode"].(string)
+	return mode == "trusted-proxy"
+}
+
 // enrichConfigWithOTelMetrics injects diagnostics.otel config into the config
 // JSON so OpenClaw pushes metrics to the OTel Collector sidecar via OTLP.
 // The collector then exposes these metrics as a Prometheus scrape endpoint.
