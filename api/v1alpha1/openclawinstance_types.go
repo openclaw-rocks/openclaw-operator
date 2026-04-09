@@ -36,6 +36,7 @@ type OpenClawInstanceSpec struct {
 	// or an npm package prefixed with "npm:" (e.g., "npm:@openclaw/matrix").
 	// npm lifecycle scripts are disabled for security (see #91).
 	// +kubebuilder:validation:MaxItems=20
+	// +listType=set
 	// +optional
 	Skills []string `json:"skills,omitempty"`
 
@@ -53,6 +54,8 @@ type OpenClawInstanceSpec struct {
 	EnvFrom []corev1.EnvFromSource `json:"envFrom,omitempty"`
 
 	// Env is a list of environment variables to set in the container
+	// +listType=map
+	// +listMapKey=name
 	// +optional
 	Env []corev1.EnvVar `json:"env,omitempty"`
 
