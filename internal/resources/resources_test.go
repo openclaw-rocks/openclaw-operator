@@ -4692,7 +4692,7 @@ func TestBuildInitScript_WithExternalFiles(t *testing.T) {
 	}
 }
 
-func TestConfigHash_ChangesWithExternalWorkspace(t *testing.T) {
+func TestConfigHash_StableWithExternalWorkspace(t *testing.T) {
 	instance := newTestInstance("hash-ext")
 
 	sts1 := BuildStatefulSet(instance, "", nil, nil, nil)
@@ -4704,19 +4704,8 @@ func TestConfigHash_ChangesWithExternalWorkspace(t *testing.T) {
 	sts2 := BuildStatefulSet(instance, "", nil, externalFiles, nil)
 	hash2 := sts2.Spec.Template.Annotations["openclaw.rocks/config-hash"]
 
-	if hash1 == hash2 {
-		t.Error("config hash should change when external workspace files are added")
-	}
-
-	// Changing content should also change hash
-	externalFiles2 := map[string]string{
-		"AGENT.md": "# Modified agent content",
-	}
-	sts3 := BuildStatefulSet(instance, "", nil, externalFiles2, nil)
-	hash3 := sts3.Spec.Template.Annotations["openclaw.rocks/config-hash"]
-
-	if hash2 == hash3 {
-		t.Error("config hash should change when external workspace file content changes")
+	if hash1 != hash2 {
+		t.Error("config hash should not change for workspace-only changes (delivered via ConfigMap volume)")
 	}
 }
 
@@ -4885,7 +4874,7 @@ func TestBuildInitScript_VanillaDeployment(t *testing.T) {
 // Config hash includes workspace
 // ---------------------------------------------------------------------------
 
-func TestConfigHash_ChangesWithWorkspace(t *testing.T) {
+func TestConfigHash_StableWithWorkspace(t *testing.T) {
 	instance := newTestInstance("hash-ws")
 	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
 		RawExtension: runtime.RawExtension{Raw: []byte(`{}`)},
@@ -4901,12 +4890,12 @@ func TestConfigHash_ChangesWithWorkspace(t *testing.T) {
 	dep2 := BuildStatefulSet(instance, "", nil, nil, nil)
 	hash2 := dep2.Spec.Template.Annotations["openclaw.rocks/config-hash"]
 
-	if hash1 == hash2 {
-		t.Error("config hash should change when workspace is added")
+	if hash1 != hash2 {
+		t.Error("config hash should not change for workspace-only changes (delivered via ConfigMap volume)")
 	}
 }
 
-func TestConfigHash_ChangesWithFileContent(t *testing.T) {
+func TestConfigHash_StableWithFileContent(t *testing.T) {
 	instance := newTestInstance("hash-content")
 	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
 		InitialFiles: map[string]string{"SOUL.md": "v1"},
@@ -4920,8 +4909,8 @@ func TestConfigHash_ChangesWithFileContent(t *testing.T) {
 	dep2 := BuildStatefulSet(instance, "", nil, nil, nil)
 	hash2 := dep2.Spec.Template.Annotations["openclaw.rocks/config-hash"]
 
-	if hash1 == hash2 {
-		t.Error("config hash should change when workspace file content changes")
+	if hash1 != hash2 {
+		t.Error("config hash should not change for workspace file content changes (delivered via ConfigMap volume)")
 	}
 }
 
@@ -12517,7 +12506,7 @@ func TestBuildInitScript_AdditionalWorkspaces(t *testing.T) {
 	}
 }
 
-func TestConfigHash_ChangesWithAdditionalWorkspace(t *testing.T) {
+func TestConfigHash_StableWithAdditionalWorkspace(t *testing.T) {
 	instance := newTestInstance("ws-addl-hash")
 	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
 		AdditionalWorkspaces: []openclawv1alpha1.AdditionalWorkspace{
@@ -12528,22 +12517,15 @@ func TestConfigHash_ChangesWithAdditionalWorkspace(t *testing.T) {
 	sts1 := BuildStatefulSet(instance, "", nil, nil, nil)
 	hash1 := sts1.Spec.Template.Annotations["openclaw.rocks/config-hash"]
 
-	// Add additional external files
+	// Add additional external files — hash should remain stable
 	additionalExt := map[string]map[string]string{
 		"work": {"SOUL.md": "work soul"},
 	}
 	sts2 := BuildStatefulSet(instance, "", nil, nil, additionalExt)
 	hash2 := sts2.Spec.Template.Annotations["openclaw.rocks/config-hash"]
 
-	if hash1 == hash2 {
-		t.Error("config hash should change when additional workspace external files are added")
-	}
-
-	// Same content should produce same hash
-	sts3 := BuildStatefulSet(instance, "", nil, nil, additionalExt)
-	hash3 := sts3.Spec.Template.Annotations["openclaw.rocks/config-hash"]
-	if hash2 != hash3 {
-		t.Error("config hash should be deterministic for same additional workspace content")
+	if hash1 != hash2 {
+		t.Error("config hash should not change for workspace-only changes (delivered via ConfigMap volume)")
 	}
 }
 

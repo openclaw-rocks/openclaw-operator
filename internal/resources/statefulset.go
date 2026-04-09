@@ -2433,50 +2433,15 @@ func getPullPolicy(instance *openclawv1alpha1.OpenClawInstance) corev1.PullPolic
 	return corev1.PullIfNotPresent
 }
 
-// calculateConfigHash computes a hash of the config, workspace, and skills for rollout detection.
-// Changes to any of these trigger a pod restart.
-func calculateConfigHash(instance *openclawv1alpha1.OpenClawInstance, externalWorkspaceFiles map[string]string, additionalExternalFiles map[string]map[string]string) string {
+// calculateConfigHash computes a hash of the config, skills, plugins, and
+// runtime settings for rollout detection. Changes to any of these trigger a
+// pod restart. Workspace files are intentionally excluded because they are
+// delivered via a projected ConfigMap volume that the kubelet updates in-place
+// without requiring a pod restart.
+func calculateConfigHash(instance *openclawv1alpha1.OpenClawInstance, _ map[string]string, _ map[string]map[string]string) string {
 	h := sha256.New()
 	configData, _ := json.Marshal(instance.Spec.Config)
 	h.Write(configData)
-	if instance.Spec.Workspace != nil {
-		wsData, _ := json.Marshal(instance.Spec.Workspace)
-		h.Write(wsData)
-	}
-	// Hash external workspace files content for pod restart detection
-	if len(externalWorkspaceFiles) > 0 {
-		// Sort keys for deterministic hashing
-		keys := make([]string, 0, len(externalWorkspaceFiles))
-		for k := range externalWorkspaceFiles {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			h.Write([]byte(k))
-			h.Write([]byte(externalWorkspaceFiles[k]))
-		}
-	}
-	// Hash additional workspace external files
-	if len(additionalExternalFiles) > 0 {
-		wsNames := make([]string, 0, len(additionalExternalFiles))
-		for name := range additionalExternalFiles {
-			wsNames = append(wsNames, name)
-		}
-		sort.Strings(wsNames)
-		for _, name := range wsNames {
-			h.Write([]byte(name))
-			files := additionalExternalFiles[name]
-			fKeys := make([]string, 0, len(files))
-			for k := range files {
-				fKeys = append(fKeys, k)
-			}
-			sort.Strings(fKeys)
-			for _, k := range fKeys {
-				h.Write([]byte(k))
-				h.Write([]byte(files[k]))
-			}
-		}
-	}
 	if len(instance.Spec.Skills) > 0 {
 		skillsData, _ := json.Marshal(instance.Spec.Skills)
 		h.Write(skillsData)
