@@ -45,9 +45,7 @@ spec:
             - --health-probe-bind-address=:8081
             {{- if .Values.metrics.enabled }}
             - --metrics-bind-address={{ .Values.metrics.bindAddress }}
-            {{- if .Values.metrics.secure }}
-            - --metrics-secure=true
-            {{- end }}
+            - --metrics-secure={{ .Values.metrics.secure }}
             {{- else }}
             - --metrics-bind-address=0
             {{- end }}
