@@ -24,7 +24,7 @@ import (
 
 // buildManagedFieldsEntry creates a ManagedFieldsEntry with the given manager name
 // and raw JSON fields, using the Apply operation.
-func buildManagedFieldsEntry(manager string, fieldsJSON string) metav1.ManagedFieldsEntry {
+func buildManagedFieldsEntry(manager, fieldsJSON string) metav1.ManagedFieldsEntry {
 	return metav1.ManagedFieldsEntry{
 		Manager:   manager,
 		Operation: metav1.ManagedFieldsOperationApply,
@@ -265,6 +265,27 @@ func TestFindWorkspaceFileFieldManager(t *testing.T) {
 	manager = findWorkspaceFileFieldManager(managedFields, "unknown.md")
 	if manager != "" {
 		t.Errorf("expected empty, got %q", manager)
+	}
+}
+
+func TestFindFieldManagerByKey_SkipsUpdateEntries(t *testing.T) {
+	managedFields := []metav1.ManagedFieldsEntry{
+		{
+			Manager:   "kubectl-edit",
+			Operation: metav1.ManagedFieldsOperationUpdate,
+			FieldsV1:  &metav1.FieldsV1{Raw: []byte(`{"f:spec":{"f:skills":{"v:update-skill":{}}}}`)},
+		},
+		buildManagedFieldsEntry("flux-system", `{"f:spec":{"f:skills":{"v:apply-skill":{}}}}`),
+	}
+
+	manager := findSkillFieldManager(managedFields, "update-skill")
+	if manager != "" {
+		t.Errorf("expected empty (Update entry should be skipped), got %q", manager)
+	}
+
+	manager = findSkillFieldManager(managedFields, "apply-skill")
+	if manager != "flux-system" {
+		t.Errorf("expected flux-system, got %q", manager)
 	}
 }
 

@@ -124,23 +124,20 @@ func (r *OpenClawSelfConfigReconciler) Reconcile(ctx context.Context, req ctrl.R
 			fmt.Sprintf("failed to build apply spec: %v", err))
 	}
 
-	// Check managed fields for removal attempts on unowned items
+	// Check managed fields for removal attempts on unowned items.
+	// These checks are purely informational - SSA naturally prevents removing
+	// items not owned by our field manager. The apply spec still includes the
+	// removals, but SSA will simply not remove items owned by other managers.
+	// We emit warnings so users understand why certain removals had no effect.
 	managedFields := instance.GetManagedFields()
 	var warnings []string
 
 	if len(sc.Spec.RemoveSkills) > 0 {
 		ownedSkills := extractOwnedSkills(managedFields)
 		for _, s := range sc.Spec.RemoveSkills {
-			if ownedSkills != nil && ownedSkills[s] {
-				continue // owned by us, will be removed by the apply
-			}
-			manager := findSkillFieldManager(managedFields, s)
-			if manager != "" {
-				msg := fmt.Sprintf("cannot remove skill %q: managed by field manager %q", s, manager)
-				warnings = append(warnings, msg)
-				r.Recorder.Event(instance, "Warning", "SelfConfigSkippedRemoval", msg)
-			} else {
-				msg := fmt.Sprintf("cannot remove skill %q: not managed by %s", s, SelfConfigFieldManager)
+			if msg := checkRemovalOwnership(s, "skill", ownedSkills, func(name string) string {
+				return findSkillFieldManager(managedFields, name)
+			}); msg != "" {
 				warnings = append(warnings, msg)
 				r.Recorder.Event(instance, "Warning", "SelfConfigSkippedRemoval", msg)
 			}
@@ -150,16 +147,9 @@ func (r *OpenClawSelfConfigReconciler) Reconcile(ctx context.Context, req ctrl.R
 	if len(sc.Spec.RemoveEnvVars) > 0 {
 		ownedEnv := extractOwnedEnvVars(managedFields)
 		for _, name := range sc.Spec.RemoveEnvVars {
-			if ownedEnv != nil && ownedEnv[name] {
-				continue
-			}
-			manager := findEnvVarFieldManager(managedFields, name)
-			if manager != "" {
-				msg := fmt.Sprintf("cannot remove env var %q: managed by field manager %q", name, manager)
-				warnings = append(warnings, msg)
-				r.Recorder.Event(instance, "Warning", "SelfConfigSkippedRemoval", msg)
-			} else {
-				msg := fmt.Sprintf("cannot remove env var %q: not managed by %s", name, SelfConfigFieldManager)
+			if msg := checkRemovalOwnership(name, "env var", ownedEnv, func(name string) string {
+				return findEnvVarFieldManager(managedFields, name)
+			}); msg != "" {
 				warnings = append(warnings, msg)
 				r.Recorder.Event(instance, "Warning", "SelfConfigSkippedRemoval", msg)
 			}
@@ -169,16 +159,9 @@ func (r *OpenClawSelfConfigReconciler) Reconcile(ctx context.Context, req ctrl.R
 	if len(sc.Spec.RemoveWorkspaceFiles) > 0 {
 		ownedFiles := extractOwnedWorkspaceFiles(managedFields)
 		for _, name := range sc.Spec.RemoveWorkspaceFiles {
-			if ownedFiles != nil && ownedFiles[name] {
-				continue
-			}
-			manager := findWorkspaceFileFieldManager(managedFields, name)
-			if manager != "" {
-				msg := fmt.Sprintf("cannot remove workspace file %q: managed by field manager %q", name, manager)
-				warnings = append(warnings, msg)
-				r.Recorder.Event(instance, "Warning", "SelfConfigSkippedRemoval", msg)
-			} else {
-				msg := fmt.Sprintf("cannot remove workspace file %q: not managed by %s", name, SelfConfigFieldManager)
+			if msg := checkRemovalOwnership(name, "workspace file", ownedFiles, func(name string) string {
+				return findWorkspaceFileFieldManager(managedFields, name)
+			}); msg != "" {
 				warnings = append(warnings, msg)
 				r.Recorder.Event(instance, "Warning", "SelfConfigSkippedRemoval", msg)
 			}

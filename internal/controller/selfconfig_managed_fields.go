@@ -66,11 +66,15 @@ func navigateFields(fields managedFieldsSet, path ...string) managedFieldsSet {
 	return current
 }
 
-// findFieldManagerByKey searches all managed field entries for one that owns
-// the given key at the specified field path. Returns the field manager name
-// or empty string if not found.
+// findFieldManagerByKey searches all Apply-type managed field entries for one
+// that owns the given key at the specified field path. Returns the field manager
+// name or empty string if not found. Only Apply entries are checked to avoid
+// matching Update entries from the same manager.
 func findFieldManagerByKey(managedFields []metav1.ManagedFieldsEntry, key string, path ...string) string {
 	for _, entry := range managedFields {
+		if entry.Operation != metav1.ManagedFieldsOperationApply {
+			continue
+		}
 		if entry.FieldsV1 == nil {
 			continue
 		}
@@ -164,6 +168,9 @@ func findSkillFieldManager(managedFields []metav1.ManagedFieldsEntry, skill stri
 }
 
 // findEnvVarFieldManager returns the field manager that owns a given env var.
+// The key is constructed via string concatenation without JSON-escaping because
+// Kubernetes env var names are restricted to [A-Za-z_][A-Za-z0-9_]* and cannot
+// contain characters that would need escaping.
 func findEnvVarFieldManager(managedFields []metav1.ManagedFieldsEntry, name string) string {
 	key := `k:{"name":"` + name + `"}`
 	return findFieldManagerByKey(managedFields, key, "f:spec", "f:env")
