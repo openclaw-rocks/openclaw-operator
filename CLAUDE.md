@@ -5,7 +5,7 @@
 Go-based Kubernetes operator for managing OpenClaw instances, built with controller-runtime (kubebuilder). CRD API group is `openclaw.rocks`, version `v1alpha1`.
 
 - **Module:** `github.com/openclawrocks/openclaw-operator`
-- **Go version:** 1.24
+- **Go version:** 1.25
 - **GitHub:** `openclaw-rocks/openclaw-operator` (GHCR org: `openclaw-rocks`)
 
 ## Commands
