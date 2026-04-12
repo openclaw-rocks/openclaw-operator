@@ -76,6 +76,9 @@ tolerations: []
 # Affinity rules for pod scheduling
 affinity: {}
 
+# Log level for the operator (passed as --zap-log-level). Valid values: debug, info, error, or an integer (0=info, 1=debug).
+logLevel: info
+
 # Leader election configuration
 leaderElection:
   enabled: true
