@@ -497,8 +497,8 @@ func (r *OpenClawInstanceReconciler) reconcileRBAC(ctx context.Context, instance
 		}
 		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error {
 			desired := resources.BuildServiceAccount(instance)
-			sa.Labels = desired.Labels
-			sa.Annotations = desired.Annotations
+			sa.Labels = mergeStringMap(sa.Labels, desired.Labels)
+			sa.Annotations = mergeStringMap(sa.Annotations, desired.Annotations)
 			sa.AutomountServiceAccountToken = desired.AutomountServiceAccountToken
 			return controllerutil.SetControllerReference(instance, sa, r.Scheme)
 		}); err != nil {
@@ -515,7 +515,7 @@ func (r *OpenClawInstanceReconciler) reconcileRBAC(ctx context.Context, instance
 		}
 		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, role, func() error {
 			desired := resources.BuildRole(instance)
-			role.Labels = desired.Labels
+			role.Labels = mergeStringMap(role.Labels, desired.Labels)
 			role.Rules = desired.Rules
 			return controllerutil.SetControllerReference(instance, role, r.Scheme)
 		}); err != nil {
@@ -532,7 +532,7 @@ func (r *OpenClawInstanceReconciler) reconcileRBAC(ctx context.Context, instance
 		}
 		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, roleBinding, func() error {
 			desired := resources.BuildRoleBinding(instance)
-			roleBinding.Labels = desired.Labels
+			roleBinding.Labels = mergeStringMap(roleBinding.Labels, desired.Labels)
 			roleBinding.RoleRef = desired.RoleRef
 			roleBinding.Subjects = desired.Subjects
 			return controllerutil.SetControllerReference(instance, roleBinding, r.Scheme)
@@ -577,7 +577,7 @@ func (r *OpenClawInstanceReconciler) reconcileNetworkPolicy(ctx context.Context,
 	}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, np, func() error {
 		desired := resources.BuildNetworkPolicy(instance)
-		np.Labels = desired.Labels
+		np.Labels = mergeStringMap(np.Labels, desired.Labels)
 		np.Spec = desired.Spec
 		return controllerutil.SetControllerReference(instance, np, r.Scheme)
 	}); err != nil {
@@ -679,7 +679,7 @@ func (r *OpenClawInstanceReconciler) reconcileGatewayTokenSecret(ctx context.Con
 	}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
 		desired := resources.BuildGatewayTokenSecret(instance, tokenHex)
-		secret.Labels = desired.Labels
+		secret.Labels = mergeStringMap(secret.Labels, desired.Labels)
 		// Only set data if this is a new Secret (don't overwrite user edits)
 		if secret.Data == nil {
 			secret.Data = desired.Data
@@ -709,7 +709,7 @@ func (r *OpenClawInstanceReconciler) reconcileTailscaleStateSecret(ctx context.C
 	}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
 		desired := resources.BuildTailscaleStateSecret(instance)
-		secret.Labels = desired.Labels
+		secret.Labels = mergeStringMap(secret.Labels, desired.Labels)
 		// Do not overwrite Data - containerboot manages the content
 		return controllerutil.SetControllerReference(instance, secret, r.Scheme)
 	}); err != nil {
@@ -770,7 +770,7 @@ func (r *OpenClawInstanceReconciler) reconcileConfigMap(ctx context.Context, ins
 		},
 	}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
-		cm.Labels = desired.Labels
+		cm.Labels = mergeStringMap(cm.Labels, desired.Labels)
 		cm.Data = desired.Data
 		return controllerutil.SetControllerReference(instance, cm, r.Scheme)
 	}); err != nil {
@@ -950,7 +950,7 @@ func (r *OpenClawInstanceReconciler) reconcileWorkspaceConfigMap(ctx context.Con
 		},
 	}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
-		cm.Labels = desired.Labels
+		cm.Labels = mergeStringMap(cm.Labels, desired.Labels)
 		cm.Data = desired.Data
 		return controllerutil.SetControllerReference(instance, cm, r.Scheme)
 	}); err != nil {
@@ -1118,7 +1118,7 @@ func (r *OpenClawInstanceReconciler) reconcilePDB(ctx context.Context, instance 
 	}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, pdb, func() error {
 		desired := resources.BuildPDB(instance)
-		pdb.Labels = desired.Labels
+		pdb.Labels = mergeStringMap(pdb.Labels, desired.Labels)
 		pdb.Spec = desired.Spec
 		return controllerutil.SetControllerReference(instance, pdb, r.Scheme)
 	}); err != nil {
@@ -1151,7 +1151,7 @@ func (r *OpenClawInstanceReconciler) reconcileHPA(ctx context.Context, instance 
 	}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, hpa, func() error {
 		desired := resources.BuildHPA(instance)
-		hpa.Labels = desired.Labels
+		hpa.Labels = mergeStringMap(hpa.Labels, desired.Labels)
 		hpa.Spec = desired.Spec
 		return controllerutil.SetControllerReference(instance, hpa, r.Scheme)
 	}); err != nil {
@@ -1286,7 +1286,7 @@ func (r *OpenClawInstanceReconciler) reconcileStatefulSet(ctx context.Context, i
 		},
 	}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sts, func() error {
-		sts.Labels = desired.Labels
+		sts.Labels = mergeStringMap(sts.Labels, desired.Labels)
 		// Preserve current replica count when HPA manages scaling
 		existingReplicas := sts.Spec.Replicas
 		sts.Spec = desired.Spec
@@ -1371,8 +1371,8 @@ func (r *OpenClawInstanceReconciler) reconcileService(ctx context.Context, insta
 	}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, service, func() error {
 		desired := resources.BuildService(instance)
-		service.Labels = desired.Labels
-		service.Annotations = desired.Annotations
+		service.Labels = mergeStringMap(service.Labels, desired.Labels)
+		service.Annotations = mergeStringMap(service.Annotations, desired.Annotations)
 		// Preserve ClusterIP — it is assigned by the API server and immutable
 		clusterIP := service.Spec.ClusterIP
 		clusterIPs := service.Spec.ClusterIPs
@@ -1415,7 +1415,7 @@ func (r *OpenClawInstanceReconciler) reconcileChromiumCDPService(ctx context.Con
 
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
 		desired := resources.BuildChromiumCDPService(instance)
-		svc.Labels = desired.Labels
+		svc.Labels = mergeStringMap(svc.Labels, desired.Labels)
 		svc.Spec = desired.Spec
 		return controllerutil.SetControllerReference(instance, svc, r.Scheme)
 	}); err != nil {
@@ -1458,8 +1458,8 @@ func (r *OpenClawInstanceReconciler) reconcileIngress(ctx context.Context, insta
 	}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, ingress, func() error {
 		desired := resources.BuildIngress(instance)
-		ingress.Labels = desired.Labels
-		ingress.Annotations = desired.Annotations
+		ingress.Labels = mergeStringMap(ingress.Labels, desired.Labels)
+		ingress.Annotations = mergeStringMap(ingress.Annotations, desired.Annotations)
 		ingress.Spec = desired.Spec
 		return controllerutil.SetControllerReference(instance, ingress, r.Scheme)
 	}); err != nil {
@@ -1513,7 +1513,7 @@ func (r *OpenClawInstanceReconciler) reconcileBasicAuthSecret(ctx context.Contex
 	}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
 		desired := resources.BuildBasicAuthSecret(instance, password)
-		secret.Labels = desired.Labels
+		secret.Labels = mergeStringMap(secret.Labels, desired.Labels)
 		if secret.Data == nil {
 			secret.Data = desired.Data
 		}
@@ -1699,8 +1699,8 @@ func (r *OpenClawInstanceReconciler) reconcileGrafanaDashboards(ctx context.Cont
 	}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, opCM, func() error {
 		desired := resources.BuildGrafanaDashboardOperator(instance)
-		opCM.Labels = desired.Labels
-		opCM.Annotations = desired.Annotations
+		opCM.Labels = mergeStringMap(opCM.Labels, desired.Labels)
+		opCM.Annotations = mergeStringMap(opCM.Annotations, desired.Annotations)
 		opCM.Data = desired.Data
 		return controllerutil.SetControllerReference(instance, opCM, r.Scheme)
 	}); err != nil {
@@ -1717,8 +1717,8 @@ func (r *OpenClawInstanceReconciler) reconcileGrafanaDashboards(ctx context.Cont
 	}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, instCM, func() error {
 		desired := resources.BuildGrafanaDashboardInstance(instance)
-		instCM.Labels = desired.Labels
-		instCM.Annotations = desired.Annotations
+		instCM.Labels = mergeStringMap(instCM.Labels, desired.Labels)
+		instCM.Annotations = mergeStringMap(instCM.Annotations, desired.Annotations)
 		instCM.Data = desired.Data
 		return controllerutil.SetControllerReference(instance, instCM, r.Scheme)
 	}); err != nil {
