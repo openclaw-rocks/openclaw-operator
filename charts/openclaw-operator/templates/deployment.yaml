@@ -49,6 +49,7 @@ spec:
             {{- else }}
             - --metrics-bind-address=0
             {{- end }}
+            - --zap-log-level={{ .Values.logLevel }}
             {{- if .Values.otlp.enabled }}
             {{- if not .Values.otlp.endpoint }}
             {{- fail "otlp.endpoint is required when otlp.enabled is true" }}
