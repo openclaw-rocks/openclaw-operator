@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.0](https://github.com/openclaw-rocks/openclaw-operator/compare/v0.26.2...v0.27.0) (2026-04-14)
+
+
+### Features
+
+* **helm:** add logLevel value to control operator log verbosity ([#445](https://github.com/openclaw-rocks/openclaw-operator/issues/445)) ([4cab3f2](https://github.com/openclaw-rocks/openclaw-operator/commit/4cab3f274a24e9c4c89e0d19156c56e1e63f0b77))
+
+
+### Bug Fixes
+
+* preserve third-party annotations and labels when reconciling managed resources ([#447](https://github.com/openclaw-rocks/openclaw-operator/issues/447)) ([3711bce](https://github.com/openclaw-rocks/openclaw-operator/commit/3711bce50b6de870d9f36c651bceacf0f044f5f9))
+
 ## [0.26.2](https://github.com/openclaw-rocks/openclaw-operator/compare/v0.26.1...v0.26.2) (2026-04-09)
 
 
