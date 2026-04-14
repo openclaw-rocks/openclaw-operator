@@ -472,6 +472,42 @@ func TestDeepMerge(t *testing.T) {
 	}
 }
 
+func TestBuildSkillsApply_RemoveAll_NonNilSlice(t *testing.T) {
+	sc := newTestSelfConfig()
+	sc.Spec.RemoveSkills = []string{"skill-a", "skill-b"}
+
+	result := buildSkillsApply([]string{"skill-a", "skill-b"}, sc)
+
+	if result == nil {
+		t.Fatal("expected non-nil empty slice, got nil")
+	}
+	if len(result) != 0 {
+		t.Errorf("expected empty slice, got %v", result)
+	}
+}
+
+func TestBuildEnvApply_RemoveAll_NonNilSlice(t *testing.T) {
+	current := []corev1.EnvVar{
+		{Name: "VAR_A", Value: "a"},
+		{Name: "VAR_B", Value: "b"},
+	}
+
+	sc := newTestSelfConfig()
+	sc.Spec.RemoveEnvVars = []string{"VAR_A", "VAR_B"}
+
+	result, err := buildEnvApply(current, sc)
+	if err != nil {
+		t.Fatalf("buildEnvApply failed: %v", err)
+	}
+
+	if result == nil {
+		t.Fatal("expected non-nil empty slice, got nil")
+	}
+	if len(result) != 0 {
+		t.Errorf("expected empty slice, got %v", result)
+	}
+}
+
 func TestBuildApplySpec_AllActions(t *testing.T) {
 	instance := newTestInstance()
 	instance.Spec.Skills = []string{"existing-skill"}

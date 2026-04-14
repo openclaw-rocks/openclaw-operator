@@ -19,10 +19,12 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -122,10 +124,55 @@ func (r *OpenClawSelfConfigReconciler) Reconcile(ctx context.Context, req ctrl.R
 			fmt.Sprintf("failed to build apply spec: %v", err))
 	}
 
+	// Check managed fields for removal attempts on unowned items.
+	// These checks are purely informational - SSA naturally prevents removing
+	// items not owned by our field manager. The apply spec still includes the
+	// removals, but SSA will simply not remove items owned by other managers.
+	// We emit warnings so users understand why certain removals had no effect.
+	managedFields := instance.GetManagedFields()
+	var warnings []string
+
+	if len(sc.Spec.RemoveSkills) > 0 {
+		ownedSkills := extractOwnedSkills(managedFields)
+		for _, s := range sc.Spec.RemoveSkills {
+			if msg := checkRemovalOwnership(s, "skill", ownedSkills, func(name string) string {
+				return findSkillFieldManager(managedFields, name)
+			}); msg != "" {
+				warnings = append(warnings, msg)
+				r.Recorder.Event(instance, "Warning", "SelfConfigSkippedRemoval", msg)
+			}
+		}
+	}
+
+	if len(sc.Spec.RemoveEnvVars) > 0 {
+		ownedEnv := extractOwnedEnvVars(managedFields)
+		for _, name := range sc.Spec.RemoveEnvVars {
+			if msg := checkRemovalOwnership(name, "env var", ownedEnv, func(name string) string {
+				return findEnvVarFieldManager(managedFields, name)
+			}); msg != "" {
+				warnings = append(warnings, msg)
+				r.Recorder.Event(instance, "Warning", "SelfConfigSkippedRemoval", msg)
+			}
+		}
+	}
+
+	if len(sc.Spec.RemoveWorkspaceFiles) > 0 {
+		ownedFiles := extractOwnedWorkspaceFiles(managedFields)
+		for _, name := range sc.Spec.RemoveWorkspaceFiles {
+			if msg := checkRemovalOwnership(name, "workspace file", ownedFiles, func(name string) string {
+				return findWorkspaceFileFieldManager(managedFields, name)
+			}); msg != "" {
+				warnings = append(warnings, msg)
+				r.Recorder.Event(instance, "Warning", "SelfConfigSkippedRemoval", msg)
+			}
+		}
+	}
+
 	// Apply changes using Server-Side Apply with dedicated field manager.
-	// This allows coexistence with GitOps controllers (FluxCD, ArgoCD) by
-	// tracking field ownership at the API server level.
-	applyObj := &openclawv1alpha1.OpenClawInstance{
+	// Use unstructured to preserve empty slices/maps in the JSON payload,
+	// which typed objects with omitempty would drop. This ensures the field
+	// manager correctly releases ownership when all items are removed.
+	typedObj := &openclawv1alpha1.OpenClawInstance{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: openclawv1alpha1.GroupVersion.String(),
 			Kind:       "OpenClawInstance",
@@ -136,6 +183,15 @@ func (r *OpenClawSelfConfigReconciler) Reconcile(ctx context.Context, req ctrl.R
 		},
 		Spec: *applySpec,
 	}
+
+	rawMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(typedObj)
+	if err != nil {
+		logger.Error(err, "failed to convert apply spec to unstructured")
+		return r.setTerminalStatus(ctx, sc, openclawv1alpha1.SelfConfigPhaseFailed,
+			fmt.Sprintf("failed to convert apply spec: %v", err))
+	}
+
+	applyObj := &unstructured.Unstructured{Object: rawMap}
 
 	applyErr := r.Patch(ctx, applyObj,
 		client.Apply,
@@ -164,7 +220,13 @@ func (r *OpenClawSelfConfigReconciler) Reconcile(ctx context.Context, req ctrl.R
 	r.Recorder.Event(instance, "Normal", "SelfConfigApplied",
 		fmt.Sprintf("self-config request %q applied", sc.Name))
 
-	return r.setTerminalStatus(ctx, sc, openclawv1alpha1.SelfConfigPhaseApplied, "changes applied successfully")
+	// Build status message including any warnings about skipped removals
+	statusMsg := "changes applied successfully"
+	if len(warnings) > 0 {
+		statusMsg = fmt.Sprintf("changes applied with warnings: %s", strings.Join(warnings, "; "))
+	}
+
+	return r.setTerminalStatus(ctx, sc, openclawv1alpha1.SelfConfigPhaseApplied, statusMsg)
 }
 
 // setTerminalStatus updates the SelfConfig status to a terminal phase.

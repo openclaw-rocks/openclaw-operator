@@ -98,7 +98,7 @@ func buildSkillsApply(current []string, sc *openclawv1alpha1.OpenClawSelfConfig)
 	}
 
 	seen := make(map[string]bool, len(current)+len(sc.Spec.AddSkills))
-	var result []string
+	result := make([]string, 0, len(current)+len(sc.Spec.AddSkills))
 	for _, s := range current {
 		if removeSet[s] {
 			continue
@@ -220,7 +220,7 @@ func buildEnvApply(current []corev1.EnvVar, sc *openclawv1alpha1.OpenClawSelfCon
 	}
 
 	seen := make(map[string]bool, len(current)+len(sc.Spec.AddEnvVars))
-	var result []corev1.EnvVar
+	result := make([]corev1.EnvVar, 0, len(current)+len(sc.Spec.AddEnvVars))
 	for _, ev := range current {
 		if removeSet[ev.Name] {
 			continue
@@ -242,6 +242,19 @@ func buildEnvApply(current []corev1.EnvVar, sc *openclawv1alpha1.OpenClawSelfCon
 	}
 
 	return result, nil
+}
+
+// checkRemovalOwnership checks whether a named item is owned by the SelfConfig
+// field manager. Returns a warning message if the item is not owned (and thus
+// SSA will not remove it), or empty string if the removal is valid.
+func checkRemovalOwnership(name, kind string, owned map[string]bool, findManager func(string) string) string {
+	if owned != nil && owned[name] {
+		return ""
+	}
+	if manager := findManager(name); manager != "" {
+		return fmt.Sprintf("cannot remove %s %q: managed by field manager %q", kind, name, manager)
+	}
+	return fmt.Sprintf("cannot remove %s %q: not managed by %s", kind, name, SelfConfigFieldManager)
 }
 
 // buildApplySpec constructs the partial OpenClawInstanceSpec for an SSA apply

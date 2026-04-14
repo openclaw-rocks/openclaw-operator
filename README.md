@@ -639,6 +639,15 @@ spec:
 
 The operator validates the request, applies it to the parent `OpenClawInstance`, and sets the request's status to `Applied`, `Denied`, or `Failed`. Terminal requests are auto-deleted after 1 hour.
 
+#### GitOps Coexistence
+
+SelfConfig uses Kubernetes Server-Side Apply (SSA) with the field manager name `openclaw-selfconfig`. This enables safe coexistence with GitOps controllers (FluxCD, ArgoCD, etc.) that manage the same `OpenClawInstance` resource:
+
+- **Per-item ownership** -- Skills (set items), env vars (map items by name), and workspace files (map fields) are tracked individually. A SelfConfig can add or remove only the items it owns without conflicting with items managed by other controllers.
+- **Atomic ownership** -- The `config.raw` field is owned atomically. If a GitOps controller also manages `config.raw`, `ForceOwnership` transfers ownership to the SelfConfig field manager on apply.
+- **Removal safety** -- When a SelfConfig attempts to remove an item owned by another field manager, the operator emits a `Warning` / `SelfConfigSkippedRemoval` event identifying the owning manager and includes the warning in the status message.
+- **Non-SSA users are unaffected** -- If you do not use `selfConfigure`, no SSA field managers are created and existing workflows remain unchanged.
+
 See the [API reference](docs/api-reference.md) for the full `OpenClawSelfConfig` CRD spec and `spec.selfConfigure` fields.
 
 ### Persistent storage
