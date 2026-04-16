@@ -5064,6 +5064,84 @@ func TestBuildStatefulSet_WritablePVCSubPaths(t *testing.T) {
 	}
 }
 
+// TestBuildStatefulSet_InitUvPipMountFullDataVolume verifies that init-uv and
+// init-pip mount the data PVC in full (not via SubPath .local). This is
+// required so that on hostPath-backed storage (where fsGroup is not applied),
+// the init containers create .local, .cache, and skills subdirectories with
+// the pod UID as owner. Every downstream container that mounts these paths via
+// SubPath inherits the correct ownership from the pre-created directory.
+// See https://github.com/openclaw-rocks/openclaw-operator/issues/448.
+func TestBuildStatefulSet_InitUvPipMountFullDataVolume(t *testing.T) {
+	instance := newTestInstance("init-uv-hostpath")
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
+
+	var initUv, initPip *corev1.Container
+	for i := range sts.Spec.Template.Spec.InitContainers {
+		c := &sts.Spec.Template.Spec.InitContainers[i]
+		switch c.Name {
+		case "init-uv":
+			initUv = c
+		case "init-pip":
+			initPip = c
+		}
+	}
+	if initUv == nil {
+		t.Fatal("init-uv container not found")
+	}
+	if initPip == nil {
+		t.Fatal("init-pip container not found")
+	}
+
+	// Both init containers must mount data in full at /data with no SubPath,
+	// otherwise kubelet creates the missing SubPath dir as root:root on
+	// hostPath PVCs and the non-root init container cannot write to it.
+	assertDataMountFull := func(t *testing.T, c *corev1.Container) {
+		t.Helper()
+		var found bool
+		for _, m := range c.VolumeMounts {
+			if m.Name != "data" {
+				continue
+			}
+			if m.SubPath != "" {
+				t.Errorf("%s data mount must not use SubPath (got %q): SubPath dirs are created root:root by kubelet on hostPath PVCs", c.Name, m.SubPath)
+			}
+			if m.MountPath != "/data" {
+				t.Errorf("%s data mount path = %q, want %q", c.Name, m.MountPath, "/data")
+			}
+			found = true
+		}
+		if !found {
+			t.Errorf("%s: data volume mount not found", c.Name)
+		}
+	}
+	assertDataMountFull(t, initUv)
+	assertDataMountFull(t, initPip)
+
+	// init-uv must pre-create all SubPath subdirectories so every downstream
+	// container (main, init-pip, init-skills, ...) inherits UID ownership.
+	script := ""
+	if len(initUv.Command) >= 3 {
+		script = initUv.Command[2]
+	}
+	for _, dir := range []string{"/data/.local/bin", "/data/.cache", "/data/skills"} {
+		if !strings.Contains(script, dir) {
+			t.Errorf("init-uv script should pre-create %s, got:\n%s", dir, script)
+		}
+	}
+
+	// init-pip must set HOME=/data so ensurepip --user writes to /data/.local
+	// (not /home/openclaw/.local, which would be an unmounted path now).
+	var homeEnv string
+	for _, e := range initPip.Env {
+		if e.Name == "HOME" {
+			homeEnv = e.Value
+		}
+	}
+	if homeEnv != "/data" {
+		t.Errorf("init-pip HOME = %q, want %q (so ~/.local resolves to /data/.local)", homeEnv, "/data")
+	}
+}
+
 func TestBuildStatefulSet_TmpVolumeAndMount(t *testing.T) {
 	instance := newTestInstance("tmp-vol")
 	sts := BuildStatefulSet(instance, "", nil, nil, nil)

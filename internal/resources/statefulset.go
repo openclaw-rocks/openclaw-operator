@@ -1164,12 +1164,20 @@ pnpm --version`
 // access to "uv pip install" for Python packages and "uv tool install" for CLI
 // tools without any manual bootstrapping. The check is idempotent - subsequent
 // pod starts skip the copy if uv is already present.
+//
+// The data volume is mounted in full at /data (not via a SubPath) so this
+// container also seeds the .local, .cache, and skills subdirectories with the
+// pod UID as owner. kubelet would otherwise create missing SubPath directories
+// as root:root, which breaks on hostPath-backed PVCs where fsGroup ownership
+// is not applied (e.g. Rancher local-path-provisioner on Talos). Every
+// downstream container that mounts these paths via SubPath inherits the
+// correct ownership from the pre-created directory. See #448.
 func buildUvInitContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
 	script := `set -e
-if [ -x /home/openclaw/.local/bin/uv ]; then echo "uv already installed"; exit 0; fi
-mkdir -p /home/openclaw/.local/bin
-cp /usr/local/bin/uv /home/openclaw/.local/bin/uv
-echo "uv $(/home/openclaw/.local/bin/uv --version) installed"`
+mkdir -p /data/.local/bin /data/.cache /data/skills
+if [ -x /data/.local/bin/uv ]; then echo "uv already installed"; exit 0; fi
+cp /usr/local/bin/uv /data/.local/bin/uv
+echo "uv $(/data/.local/bin/uv --version) installed"`
 
 	return corev1.Container{
 		Name:                     "init-uv",
@@ -1191,7 +1199,7 @@ echo "uv $(/home/openclaw/.local/bin/uv --version) installed"`
 			},
 		},
 		VolumeMounts: []corev1.VolumeMount{
-			{Name: "data", MountPath: "/home/openclaw/.local", SubPath: ".local"},
+			{Name: "data", MountPath: "/data"},
 		},
 	}
 }
@@ -1200,6 +1208,12 @@ echo "uv $(/home/openclaw/.local/bin/uv --version) installed"`
 // Uses the same image as the main container so pip targets the correct Python version.
 // Combined with PIP_USER=1 env var, "pip install <pkg>" writes to the writable
 // ~/.local/ PVC subpath. Runs on every pod start (fast, no network needed).
+//
+// HOME is set to /data (the full data volume mount) so ensurepip --user
+// resolves ~/.local to /data/.local. This avoids a SubPath mount that kubelet
+// would otherwise create as root:root on hostPath-backed PVCs where fsGroup
+// is not applied. The resulting files land in the same PVC location the main
+// container reads via its SubPath .local mount. See #448.
 func buildPipInitContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
 	script := `python3 -m ensurepip --upgrade --user 2>/dev/null || echo "ensurepip unavailable, skipping"`
 
@@ -1212,7 +1226,7 @@ func buildPipInitContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.C
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 		Resources:                corev1.ResourceRequirements{},
 		Env: []corev1.EnvVar{
-			{Name: "HOME", Value: "/home/openclaw"},
+			{Name: "HOME", Value: "/data"},
 		},
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: Ptr(false),
@@ -1226,7 +1240,7 @@ func buildPipInitContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.C
 			},
 		},
 		VolumeMounts: []corev1.VolumeMount{
-			{Name: "data", MountPath: "/home/openclaw/.local", SubPath: ".local"},
+			{Name: "data", MountPath: "/data"},
 			{Name: "tmp", MountPath: "/tmp"},
 		},
 	}
