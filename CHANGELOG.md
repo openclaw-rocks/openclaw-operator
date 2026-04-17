@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.28.0](https://github.com/openclaw-rocks/openclaw-operator/compare/v0.27.1...v0.28.0) (2026-04-17)
+
+
+### Features
+
+* **skillpacks:** install packs from plain git repos without skillpack.json ([#454](https://github.com/openclaw-rocks/openclaw-operator/issues/454)) ([78b92d7](https://github.com/openclaw-rocks/openclaw-operator/commit/78b92d73d7495d481121961bfc0591717009b008))
+
 ## [0.27.1](https://github.com/openclaw-rocks/openclaw-operator/compare/v0.27.0...v0.27.1) (2026-04-17)
 
 
