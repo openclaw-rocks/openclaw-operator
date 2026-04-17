@@ -450,7 +450,9 @@ spec:
     - "pack:myorg/private-skills/custom-tool@main"       # private repo (requires GITHUB_TOKEN)
 ```
 
-Each pack directory must contain a `skillpack.json` manifest:
+Packs are resolved in one of two modes:
+
+**1. Manifest mode** (explicit) -- the pack path contains a `skillpack.json` describing which files to seed and where:
 
 ```json
 {
@@ -465,7 +467,19 @@ Each pack directory must contain a `skillpack.json` manifest:
 }
 ```
 
-The operator resolves packs via the GitHub Contents API (cached for 5 minutes), seeds files into the workspace via the init container, and injects config entries into `config.raw.skills.entries` (user overrides take precedence). Set `GITHUB_TOKEN` on the operator deployment for private repo access.
+**2. Raw-repo mode** (autodiscovery) -- when no `skillpack.json` is present and the pack path contains a `SKILL.md`, the operator installs the entire directory verbatim into `skills/<basename>/` in the workspace. This is useful for multi-skill repositories like [fluxcd/agent-skills](https://github.com/fluxcd/agent-skills) that follow a conventional `skills/<name>/SKILL.md` layout without per-skill manifests:
+
+```yaml
+spec:
+  skills:
+    - "pack:fluxcd/agent-skills/skills/gitops-repo-audit@main"
+    # installs every file under skills/gitops-repo-audit/ into the workspace
+    # at skills/gitops-repo-audit/ (including nested assets, schemas, etc.)
+```
+
+Raw mode does not inject config entries into `config.raw.skills.entries` -- use manifest mode if you need that. The operator refuses to install if GitHub truncates the tree response for very large repositories (add a `skillpack.json` manifest in that case).
+
+The operator resolves packs via the GitHub Contents + Git Trees APIs (cached for 5 minutes), seeds files into the workspace via the init container, and (in manifest mode) injects config entries into `config.raw.skills.entries` with user overrides taking precedence. Set `GITHUB_TOKEN` on the operator deployment for private repo access.
 
 ### Plugin installation
 

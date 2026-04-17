@@ -20,8 +20,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"path"
 	"sort"
 	"strings"
 	"sync"
@@ -31,6 +33,11 @@ import (
 )
 
 const defaultBaseURL = "https://api.github.com"
+
+// errNotFound is returned by fetchFile / fetchTree when GitHub responds 404.
+// Wrapping allows callers to detect a missing resource (e.g. missing skillpack.json)
+// without relying on error message substrings.
+var errNotFound = errors.New("not found")
 
 // Resolver fetches skill pack manifests and files from GitHub repositories.
 type Resolver struct {
@@ -67,6 +74,18 @@ type manifest struct {
 type contentsResponse struct {
 	Content  string `json:"content"`
 	Encoding string `json:"encoding"`
+}
+
+// treeEntry is one entry in a GitHub Git Trees API response.
+type treeEntry struct {
+	Path string `json:"path"`
+	Type string `json:"type"` // "blob" or "tree"
+}
+
+// treeResponse is the GitHub Git Trees API response.
+type treeResponse struct {
+	Tree      []treeEntry `json:"tree"`
+	Truncated bool        `json:"truncated"`
 }
 
 // NewResolver creates a new GitHub-based skill pack resolver.
@@ -164,6 +183,9 @@ func (r *Resolver) resolvePack(ctx context.Context, name string) (*resources.Res
 }
 
 // fetchPack fetches a skill pack manifest and its files from GitHub.
+// When skillpack.json is absent, falls back to raw-repo mode: the pack path
+// is installed verbatim as a single skill rooted at skills/<basename>/, as long
+// as a SKILL.md exists at the path.
 func (r *Resolver) fetchPack(ctx context.Context, name string) (*resources.ResolvedSkillPacks, error) {
 	ref, err := parsePackRef(name)
 	if err != nil {
@@ -174,6 +196,9 @@ func (r *Resolver) fetchPack(ctx context.Context, name string) (*resources.Resol
 	manifestPath := ref.Path + "/skillpack.json"
 	manifestBytes, err := r.fetchFile(ctx, ref.Owner, ref.Repo, manifestPath, ref.Ref)
 	if err != nil {
+		if errors.Is(err, errNotFound) {
+			return r.fetchRawPack(ctx, ref)
+		}
 		return nil, fmt.Errorf("fetching skillpack.json: %w", err)
 	}
 
@@ -210,8 +235,8 @@ func (r *Resolver) fetchPack(ctx context.Context, name string) (*resources.Resol
 }
 
 // fetchFile retrieves a single file from GitHub using the Contents API.
-func (r *Resolver) fetchFile(ctx context.Context, owner, repo, path, ref string) ([]byte, error) {
-	url := fmt.Sprintf("%s/repos/%s/%s/contents/%s", r.baseURL, owner, repo, path)
+func (r *Resolver) fetchFile(ctx context.Context, owner, repo, filePath, ref string) ([]byte, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/contents/%s", r.baseURL, owner, repo, filePath)
 	if ref != "" {
 		url += "?ref=" + ref
 	}
@@ -232,10 +257,10 @@ func (r *Resolver) fetchFile(ctx context.Context, owner, repo, path, ref string)
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, fmt.Errorf("not found: %s/%s/%s", owner, repo, path)
+		return nil, fmt.Errorf("%w: %s/%s/%s", errNotFound, owner, repo, filePath)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status %d for %s/%s/%s", resp.StatusCode, owner, repo, path)
+		return nil, fmt.Errorf("unexpected status %d for %s/%s/%s", resp.StatusCode, owner, repo, filePath)
 	}
 
 	var cr contentsResponse
@@ -255,6 +280,120 @@ func (r *Resolver) fetchFile(ctx context.Context, owner, repo, path, ref string)
 	}
 
 	return data, nil
+}
+
+// fetchTree retrieves the recursive Git tree for a ref. Passes the ref name
+// (branch, tag, or commit SHA) to GitHub's Git Trees API, which resolves it
+// to a tree SHA server-side. When ref is empty, "HEAD" is used so the default
+// branch is picked.
+func (r *Resolver) fetchTree(ctx context.Context, owner, repo, ref string) (*treeResponse, error) {
+	treeRef := ref
+	if treeRef == "" {
+		treeRef = "HEAD"
+	}
+	url := fmt.Sprintf("%s/repos/%s/%s/git/trees/%s?recursive=1", r.baseURL, owner, repo, treeRef)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	if r.githubToken != "" {
+		req.Header.Set("Authorization", "Bearer "+r.githubToken)
+	}
+
+	resp, err := r.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("%w: tree %s/%s@%s", errNotFound, owner, repo, treeRef)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status %d for tree %s/%s@%s", resp.StatusCode, owner, repo, treeRef)
+	}
+
+	var tr treeResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tr); err != nil {
+		return nil, fmt.Errorf("decoding tree response: %w", err)
+	}
+	return &tr, nil
+}
+
+// fetchRawPack installs the pack path as a single skill without a skillpack.json
+// manifest. It lists the repository tree, verifies a SKILL.md is present at the
+// pack path, and seeds every blob under the path into the workspace at
+// skills/<basename>/<relative-path>.
+func (r *Resolver) fetchRawPack(ctx context.Context, ref *packRef) (*resources.ResolvedSkillPacks, error) {
+	tree, err := r.fetchTree(ctx, ref.Owner, ref.Repo, ref.Ref)
+	if err != nil {
+		return nil, fmt.Errorf("listing repository tree: %w", err)
+	}
+	if tree.Truncated {
+		return nil, fmt.Errorf("repository tree for %s/%s is too large to enumerate (GitHub truncated the response) -- add a skillpack.json manifest at %s to install this pack", ref.Owner, ref.Repo, ref.Path)
+	}
+
+	base := path.Base(ref.Path)
+	if base == "." || base == "/" || base == "" {
+		return nil, fmt.Errorf("pack path %q has no basename to derive a skill directory from", ref.Path)
+	}
+
+	prefix := strings.TrimSuffix(ref.Path, "/") + "/"
+	wsRoot := "skills/" + base
+
+	var (
+		blobPaths    []string
+		dirs         = []string{wsRoot}
+		skillMDFound bool
+	)
+	for _, te := range tree.Tree {
+		if !strings.HasPrefix(te.Path, prefix) {
+			continue
+		}
+		rel := strings.TrimPrefix(te.Path, prefix)
+		if rel == "" {
+			continue
+		}
+		switch te.Type {
+		case "blob":
+			blobPaths = append(blobPaths, te.Path)
+			if rel == "SKILL.md" {
+				skillMDFound = true
+			}
+		case "tree":
+			dirs = append(dirs, wsRoot+"/"+rel)
+		}
+	}
+
+	if !skillMDFound {
+		return nil, fmt.Errorf("no skillpack.json and no SKILL.md found at %s/%s/%s -- raw-repo install requires a SKILL.md at the pack path", ref.Owner, ref.Repo, ref.Path)
+	}
+
+	sort.Strings(blobPaths)
+	sort.Strings(dirs)
+
+	resolved := &resources.ResolvedSkillPacks{
+		Files:        make(map[string]string),
+		PathMapping:  make(map[string]string),
+		Directories:  dirs,
+		SkillEntries: make(map[string]interface{}),
+	}
+
+	for _, blob := range blobPaths {
+		rel := strings.TrimPrefix(blob, prefix)
+		content, err := r.fetchFile(ctx, ref.Owner, ref.Repo, blob, ref.Ref)
+		if err != nil {
+			return nil, fmt.Errorf("fetching file %q: %w", blob, err)
+		}
+		wsPath := wsRoot + "/" + rel
+		cmKey := resources.SkillPackCMKey(wsPath)
+		resolved.Files[cmKey] = string(content)
+		resolved.PathMapping[cmKey] = wsPath
+	}
+
+	return resolved, nil
 }
 
 // parsePackRef parses "owner/repo/path[@ref]" into its components.

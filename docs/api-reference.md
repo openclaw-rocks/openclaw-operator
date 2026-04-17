@@ -192,7 +192,12 @@ spec:
     - "pack:openclaw-rocks/skills/image-gen@v1.0.0"         # skill pack (pinned)
 ```
 
-**Skill packs** (`pack:owner/repo/path[@ref]`) are resolved from GitHub repos containing a `skillpack.json` manifest. The manifest declares files to seed into the workspace, directories to create, and config entries to inject into `config.raw.skills.entries`. User-defined config entries take precedence over pack defaults. The operator caches resolved packs for 5 minutes. Set `GITHUB_TOKEN` on the operator for private repo access.
+**Skill packs** (`pack:owner/repo/path[@ref]`) are resolved from GitHub repos in one of two modes:
+
+- **Manifest mode** -- the pack path contains a `skillpack.json` that declares files to seed into the workspace, directories to create, and config entries to inject into `config.raw.skills.entries`. User-defined config entries take precedence over pack defaults.
+- **Raw-repo mode** -- when no `skillpack.json` is present, the operator falls back to installing the pack path directly. If a `SKILL.md` exists at the path, every file beneath it is seeded into the workspace at `skills/<basename>/<relative-path>` (preserving nested directories). This is intended for community repositories like `fluxcd/agent-skills` that use a conventional layout without manifests. Raw mode does not inject `config.raw.skills.entries`; use manifest mode if you need that. Installation is refused if GitHub truncates the tree response for very large repositories.
+
+The operator caches resolved packs for 5 minutes. Set `GITHUB_TOKEN` on the operator for private repo access and to raise GitHub rate limits.
 
 ### spec.plugins
 
@@ -993,7 +998,7 @@ Standard `metav1.Condition` array. Condition types:
 | `ScheduledBackupReady`| The periodic backup CronJob is configured and ready.           |
 | `AutoUpdateAvailable` | A newer version is available in the OCI registry.              |
 | `SecretsReady`        | All referenced Secrets exist and are accessible.               |
-| `SkillPacksReady`     | Skill packs resolved successfully from GitHub. `False` with reason `ResolutionFailed` when GitHub is unreachable - instance runs without skill packs (phase `Degraded`). Retried on next reconcile. |
+| `SkillPacksReady`     | Skill packs resolved successfully from GitHub (either via `skillpack.json` or raw-repo autodiscovery). `False` with reason `ResolutionFailed` when GitHub is unreachable, the pack path has no `skillpack.json` and no `SKILL.md`, or the repository tree is truncated - instance runs without skill packs (phase `Degraded`). Retried on next reconcile. |
 | `WorkspaceReady`      | Workspace files seeded successfully. `False` when an external ConfigMap referenced by `spec.workspace.configMapRef` is missing or contains invalid filenames. `True` once all workspace files (from configMapRef, initialFiles, and skill packs) are seeded. |
 
 ### status.endpoints

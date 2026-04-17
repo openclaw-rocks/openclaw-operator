@@ -368,6 +368,212 @@ func TestResolve_StaleCacheFallback(t *testing.T) {
 	}
 }
 
+// ghTree returns a GitHub Git Trees API JSON response.
+func ghTree(truncated bool, entries ...treeEntry) string {
+	resp := treeResponse{Tree: entries, Truncated: truncated}
+	data, _ := json.Marshal(resp)
+	return string(data)
+}
+
+func TestResolve_RawRepo_SingleSkillWithNestedFiles(t *testing.T) {
+	// Simulates fluxcd/agent-skills layout:
+	//   skills/gitops-repo-audit/SKILL.md
+	//   skills/gitops-repo-audit/assets/schemas/kustomization.json
+	skillMD := "# Audit skill\n"
+	schema := `{"type":"object"}`
+
+	treeJSON := ghTree(false,
+		treeEntry{Path: "skills", Type: "tree"},
+		treeEntry{Path: "skills/gitops-repo-audit", Type: "tree"},
+		treeEntry{Path: "skills/gitops-repo-audit/SKILL.md", Type: "blob"},
+		treeEntry{Path: "skills/gitops-repo-audit/assets", Type: "tree"},
+		treeEntry{Path: "skills/gitops-repo-audit/assets/schemas", Type: "tree"},
+		treeEntry{Path: "skills/gitops-repo-audit/assets/schemas/kustomization.json", Type: "blob"},
+		// Sibling skill that must NOT be picked up
+		treeEntry{Path: "skills/other-skill/SKILL.md", Type: "blob"},
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		switch {
+		case strings.HasSuffix(path, "/skills/gitops-repo-audit/skillpack.json"):
+			// No manifest — trigger raw-repo fallback
+			http.NotFound(w, r)
+		case strings.HasSuffix(path, "/git/trees/HEAD"):
+			_, _ = w.Write([]byte(treeJSON))
+		case strings.HasSuffix(path, "/contents/skills/gitops-repo-audit/SKILL.md"):
+			_, _ = w.Write([]byte(ghFile(skillMD)))
+		case strings.HasSuffix(path, "/contents/skills/gitops-repo-audit/assets/schemas/kustomization.json"):
+			_, _ = w.Write([]byte(ghFile(schema)))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	resolver := newTestResolver(server, "")
+	resolved, err := resolver.Resolve(context.Background(),
+		[]string{"fluxcd/agent-skills/skills/gitops-repo-audit"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Two blobs should be seeded under skills/gitops-repo-audit/
+	if len(resolved.Files) != 2 {
+		t.Fatalf("expected 2 files, got %d: %+v", len(resolved.Files), resolved.PathMapping)
+	}
+
+	skillKey := resources.SkillPackCMKey("skills/gitops-repo-audit/SKILL.md")
+	if resolved.Files[skillKey] != skillMD {
+		t.Errorf("SKILL.md content mismatch: %q", resolved.Files[skillKey])
+	}
+	if resolved.PathMapping[skillKey] != "skills/gitops-repo-audit/SKILL.md" {
+		t.Errorf("SKILL.md workspace path mismatch: %q", resolved.PathMapping[skillKey])
+	}
+
+	schemaKey := resources.SkillPackCMKey("skills/gitops-repo-audit/assets/schemas/kustomization.json")
+	if resolved.Files[schemaKey] != schema {
+		t.Errorf("schema content mismatch: %q", resolved.Files[schemaKey])
+	}
+	if resolved.PathMapping[schemaKey] != "skills/gitops-repo-audit/assets/schemas/kustomization.json" {
+		t.Errorf("schema workspace path mismatch: %q", resolved.PathMapping[schemaKey])
+	}
+
+	// Directories should include the workspace root and every nested dir so
+	// the init container's mkdir -p creates parents before cp.
+	want := map[string]bool{
+		"skills/gitops-repo-audit":                true,
+		"skills/gitops-repo-audit/assets":         true,
+		"skills/gitops-repo-audit/assets/schemas": true,
+	}
+	got := make(map[string]bool, len(resolved.Directories))
+	for _, d := range resolved.Directories {
+		got[d] = true
+	}
+	for d := range want {
+		if !got[d] {
+			t.Errorf("expected directory %q in resolved.Directories (got %v)", d, resolved.Directories)
+		}
+	}
+
+	// Sibling skill path must not leak in.
+	for cmKey, wsPath := range resolved.PathMapping {
+		if strings.Contains(wsPath, "other-skill") || strings.Contains(cmKey, "other-skill") {
+			t.Errorf("sibling skill leaked into result: %q -> %q", cmKey, wsPath)
+		}
+	}
+
+	// Raw mode does not inject config entries.
+	if len(resolved.SkillEntries) != 0 {
+		t.Errorf("expected no skill entries in raw mode, got %v", resolved.SkillEntries)
+	}
+}
+
+func TestResolve_RawRepo_NoSkillMD(t *testing.T) {
+	// Tree has files but no SKILL.md at the pack path -- raw install must refuse.
+	treeJSON := ghTree(false,
+		treeEntry{Path: "skills", Type: "tree"},
+		treeEntry{Path: "skills/no-manifest", Type: "tree"},
+		treeEntry{Path: "skills/no-manifest/README.md", Type: "blob"},
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "skillpack.json") {
+			http.NotFound(w, r)
+			return
+		}
+		if strings.Contains(r.URL.Path, "/git/trees/") {
+			_, _ = w.Write([]byte(treeJSON))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	resolver := newTestResolver(server, "")
+	_, err := resolver.Resolve(context.Background(), []string{"owner/repo/skills/no-manifest"})
+	if err == nil {
+		t.Fatal("expected error when no skillpack.json and no SKILL.md")
+	}
+	if !strings.Contains(err.Error(), "SKILL.md") {
+		t.Errorf("error should mention SKILL.md: %v", err)
+	}
+}
+
+func TestResolve_RawRepo_TruncatedTree(t *testing.T) {
+	// GitHub returns truncated=true when the tree is too large. Refuse and
+	// tell the user to use a skillpack.json manifest instead.
+	treeJSON := ghTree(true)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "skillpack.json") {
+			http.NotFound(w, r)
+			return
+		}
+		if strings.Contains(r.URL.Path, "/git/trees/") {
+			_, _ = w.Write([]byte(treeJSON))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	resolver := newTestResolver(server, "")
+	_, err := resolver.Resolve(context.Background(), []string{"owner/huge-repo/skills/foo"})
+	if err == nil {
+		t.Fatal("expected error for truncated tree")
+	}
+	if !strings.Contains(err.Error(), "truncated") {
+		t.Errorf("error should mention truncation: %v", err)
+	}
+}
+
+func TestResolve_RawRepo_RefPassedThrough(t *testing.T) {
+	// The user-supplied ref must flow to both the tree lookup and each
+	// blob fetch, so the pinned version is consistent across the install.
+	var gotTreeRef string
+	var gotContentRefs []string
+	skillMD := "# skill\n"
+	treeJSON := ghTree(false,
+		treeEntry{Path: "my-skill", Type: "tree"},
+		treeEntry{Path: "my-skill/SKILL.md", Type: "blob"},
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		switch {
+		case strings.HasSuffix(path, "/skillpack.json"):
+			http.NotFound(w, r)
+		case strings.Contains(path, "/git/trees/"):
+			// URL form: .../git/trees/<ref>
+			parts := strings.Split(path, "/git/trees/")
+			gotTreeRef = parts[1]
+			_, _ = w.Write([]byte(treeJSON))
+		case strings.Contains(path, "/contents/"):
+			gotContentRefs = append(gotContentRefs, r.URL.Query().Get("ref"))
+			_, _ = w.Write([]byte(ghFile(skillMD)))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	resolver := newTestResolver(server, "")
+	_, err := resolver.Resolve(context.Background(), []string{"owner/repo/my-skill@v2.3.4"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if gotTreeRef != "v2.3.4" {
+		t.Errorf("expected tree ref 'v2.3.4', got %q", gotTreeRef)
+	}
+	for _, ref := range gotContentRefs {
+		if ref != "v2.3.4" {
+			t.Errorf("expected content ref 'v2.3.4', got %q", ref)
+		}
+	}
+}
+
 func TestResolve_NoCacheFallbackOnFirstFailure(t *testing.T) {
 	// When there is no cached data at all, errors should propagate
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
