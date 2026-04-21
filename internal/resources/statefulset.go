@@ -197,7 +197,7 @@ func buildContainerSecurityContext(instance *openclawv1alpha1.OpenClawInstance) 
 
 	sc := &corev1.SecurityContext{
 		AllowPrivilegeEscalation: Ptr(false),
-		ReadOnlyRootFilesystem:   Ptr(true), // PVC subpaths at ~/.openclaw/, ~/.local/, ~/.cache/ + /tmp emptyDir provide writable paths
+		ReadOnlyRootFilesystem:   Ptr(true), // PVC subpaths at ~/.openclaw/, ~/.local/, ~/.cache/, ~/.config/ + /tmp emptyDir provide writable paths
 		RunAsNonRoot:             Ptr(nonRoot),
 		Capabilities: &corev1.Capabilities{
 			Drop: []corev1.Capability{"ALL"},
@@ -318,6 +318,11 @@ func buildMainContainer(instance *openclawv1alpha1.OpenClawInstance, gatewayToke
 				Name:      "data",
 				MountPath: "/home/openclaw/.cache",
 				SubPath:   ".cache",
+			},
+			{
+				Name:      "data",
+				MountPath: "/home/openclaw/.config",
+				SubPath:   ".config",
 			},
 			{
 				Name:      "tmp",
@@ -1166,15 +1171,15 @@ pnpm --version`
 // pod starts skip the copy if uv is already present.
 //
 // The data volume is mounted in full at /data (not via a SubPath) so this
-// container also seeds the .local, .cache, and skills subdirectories with the
-// pod UID as owner. kubelet would otherwise create missing SubPath directories
-// as root:root, which breaks on hostPath-backed PVCs where fsGroup ownership
-// is not applied (e.g. Rancher local-path-provisioner on Talos). Every
-// downstream container that mounts these paths via SubPath inherits the
+// container also seeds the .local, .cache, .config, and skills subdirectories
+// with the pod UID as owner. kubelet would otherwise create missing SubPath
+// directories as root:root, which breaks on hostPath-backed PVCs where fsGroup
+// ownership is not applied (e.g. Rancher local-path-provisioner on Talos).
+// Every downstream container that mounts these paths via SubPath inherits the
 // correct ownership from the pre-created directory. See #448.
 func buildUvInitContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
 	script := `set -e
-mkdir -p /data/.local/bin /data/.cache /data/skills
+mkdir -p /data/.local/bin /data/.cache /data/.config /data/skills
 if [ -x /data/.local/bin/uv ]; then echo "uv already installed"; exit 0; fi
 cp /usr/local/bin/uv /data/.local/bin/uv
 echo "uv $(/data/.local/bin/uv --version) installed"`

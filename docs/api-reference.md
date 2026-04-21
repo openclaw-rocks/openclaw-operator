@@ -274,7 +274,7 @@ Security-related configuration for the instance.
 | Field                      | Type              | Default | Description                                                    |
 |----------------------------|-------------------|---------|----------------------------------------------------------------|
 | `allowPrivilegeEscalation` | `*bool`           | `false` | Allow privilege escalation. Warns if set to `true`.            |
-| `readOnlyRootFilesystem`   | `*bool`           | `true`  | Mount root filesystem as read-only. Writable paths: PVC at `~/.openclaw/`, `~/.local/` (pip user installs), `~/.cache/` (package caches), and `/tmp` emptyDir. |
+| `readOnlyRootFilesystem`   | `*bool`           | `true`  | Mount root filesystem as read-only. Writable paths: PVC at `~/.openclaw/`, `~/.local/` (pip user installs), `~/.cache/` (package caches), `~/.config/` (CLI config dir, e.g. Codex / ACP runtimes), and `/tmp` emptyDir. |
 | `capabilities`             | `*Capabilities`   | Drop ALL | Linux capabilities to add or drop.                            |
 | `runAsNonRoot`             | `*bool`           | --      | Require non-root execution for the main container. When not set, inherits from `podSecurityContext.runAsNonRoot` (defaults to `true`). Set to `false` to allow the main container to run as root without contradicting the pod-level setting. |
 | `runAsUser`                | `*int64`          | --      | UID to run the main container as. When not set, inherits from `podSecurityContext.runAsUser` via Kubernetes. |
