@@ -5039,13 +5039,18 @@ func TestBuildStatefulSet_WritablePVCSubPaths(t *testing.T) {
 	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	main := sts.Spec.Template.Spec.Containers[0]
 
-	// Verify ~/.local and ~/.cache are mounted as PVC subPaths for pip/package installs
+	// Verify ~/.local, ~/.cache, and ~/.config are mounted as PVC subPaths.
+	// ~/.local and ~/.cache cover pip/npm/uv package installs; ~/.config is
+	// required for tools (e.g. Codex CLI, ACP runtimes) that write config to
+	// ~/.config/<tool>/ on startup under readOnlyRootFilesystem: true.
+	// See https://github.com/openclaw-rocks/openclaw-operator/issues/456.
 	wantMounts := []struct {
 		mountPath string
 		subPath   string
 	}{
 		{"/home/openclaw/.local", ".local"},
 		{"/home/openclaw/.cache", ".cache"},
+		{"/home/openclaw/.config", ".config"},
 	}
 	for _, want := range wantMounts {
 		found := false
