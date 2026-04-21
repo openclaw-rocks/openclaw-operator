@@ -129,6 +129,14 @@ rules:
 - apiGroups:
   - openclaw.rocks
   resources:
+  - openclawclusterdefaults
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - openclaw.rocks
+  resources:
   - openclawinstances
   - openclawselfconfigs
   verbs:

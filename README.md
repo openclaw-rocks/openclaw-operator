@@ -88,6 +88,7 @@ Every request is validated against the instance's allowlist policy. Protected co
 | **Tailscale** | Tailnet access | Expose via Tailscale Serve or Funnel with SSO auth - no Ingress needed |
 | **Extensible** | Sidecars & init containers | Chromium for browser automation, Ollama for local LLMs, Tailscale for tailnet access, plus custom init containers and sidecars |
 | **Cloud Native** | SA annotations & CA bundles | AWS IRSA / GCP Workload Identity via ServiceAccount annotations; CA bundle injection for corporate proxies |
+| **Cluster Defaults** | Singleton CR | `OpenClawClusterDefaults` (name `cluster`) fills in unset instance fields - ideal for air-gapped / China regions where every instance would otherwise duplicate the same registry + mirror env boilerplate. Per-instance fields always win. |
 
 
 ## Architecture
@@ -688,6 +689,30 @@ spec:
 ```
 
 > **Retention is stateful data protection.** Because agent workspaces contain irreplaceable data such as memory, notebooks, and conversation history, the default is `orphan: true`. To re-attach a retained PVC to a new instance, set `existingClaim` to its name.
+
+### Cluster-wide defaults (air-gapped / restricted networks)
+
+For deployments where every instance needs the same registry mirror or the same package-mirror env vars (China regions, air-gapped clusters, private registries), set defaults once on a singleton `OpenClawClusterDefaults` resource and the operator will merge them into every `OpenClawInstance` at reconcile time:
+
+```yaml
+apiVersion: openclaw.rocks/v1alpha1
+kind: OpenClawClusterDefaults
+metadata:
+  name: cluster  # name MUST be "cluster" - other names are ignored
+spec:
+  registry: "<account>.dkr.ecr.<region>.amazonaws.com.cn"
+  env:
+    - name: NPM_CONFIG_REGISTRY
+      value: https://registry.npmmirror.com
+    - name: PIP_INDEX_URL
+      value: https://mirrors.aliyun.com/pypi/simple/
+  runtimeDeps:
+    python: true
+```
+
+**Precedence:** per-instance fields always win. A cluster default is only applied when the corresponding instance field is unset. For `spec.env`, cluster-default entries appear first and any instance entry with the same `name` overrides in place.
+
+Changes to the singleton are watched and automatically re-reconcile every existing instance. Only the CR named `cluster` takes effect; other names are ignored so typos do not silently churn the fleet.
 
 ### Runtime dependencies
 

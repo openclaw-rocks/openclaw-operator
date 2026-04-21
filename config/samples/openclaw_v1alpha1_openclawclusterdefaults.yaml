@@ -1,0 +1,30 @@
+# OpenClawClusterDefaults is a cluster-scoped singleton (name must be "cluster")
+# whose spec is merged into every OpenClawInstance at reconcile time.
+# Per-instance fields always win; defaults only fill in unset fields.
+#
+# Typical use: air-gapped or restricted-network deployments (China regions,
+# private mirrors) where every instance would otherwise duplicate the same
+# registry / env-var boilerplate.
+apiVersion: openclaw.rocks/v1alpha1
+kind: OpenClawClusterDefaults
+metadata:
+  name: cluster
+spec:
+  # Mirror all container image registries (main, sidecars, init containers).
+  registry: "<account>.dkr.ecr.<region>.amazonaws.com.cn"
+
+  # Defaults are applied independently per sub-field. Here we pin only the tag;
+  # instances that set spec.image.repository keep their own repository.
+  image:
+    tag: v0.28.0
+
+  # Package-mirror env vars. Instance entries with the same Name override.
+  env:
+    - name: NPM_CONFIG_REGISTRY
+      value: https://registry.npmmirror.com
+    - name: PIP_INDEX_URL
+      value: https://mirrors.aliyun.com/pypi/simple/
+
+  # Opt every instance into the Python runtime init container by default.
+  runtimeDeps:
+    python: true

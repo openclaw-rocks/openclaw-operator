@@ -1596,3 +1596,58 @@ spec:
     rollbackOnFailure: true
     healthCheckTimeout: 15m
 ```
+
+---
+
+## OpenClawClusterDefaults (v1alpha1)
+
+**Group**: `openclaw.rocks`
+**Version**: `v1alpha1`
+**Kind**: `OpenClawClusterDefaults`
+**Scope**: Cluster
+**Short name**: `occd`
+
+Cluster-scoped singleton that fills in unset fields on every `OpenClawInstance` at reconcile time. The name **must** be `cluster` - any other name is ignored so typos do not silently churn the fleet. Changes to the singleton trigger re-reconciliation of every existing instance.
+
+**Precedence**: per-instance fields always win. A cluster default is only applied when the corresponding instance field is unset. This means the defaults are invisible in `kubectl get openclawinstance -o yaml` (they never get written back into the stored instance) - to introspect what will actually render, look at the resulting StatefulSet or ConfigMap.
+
+### Spec fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `registry` | `string` | Default container image registry override applied when `spec.registry` is unset on an instance. Replaces the registry prefix of main, sidecar, and init-container images. |
+| `image.repository` | `string` | Default image repository when the instance's `spec.image.repository` is unset. |
+| `image.tag` | `string` | Default image tag when the instance has neither `spec.image.tag` nor `spec.image.digest` set. Never overrides a digest-pinned instance. |
+| `image.digest` | `string` | Default image digest when `spec.image.digest` is unset. |
+| `image.pullPolicy` | `PullPolicy` | Default pull policy when unset on the instance. |
+| `image.pullSecrets` | `[]LocalObjectReference` | Default pull secrets. Applied only when the instance has no pull secrets of its own (replace-only, not merged). |
+| `env` | `[]EnvVar` | Default environment variables merged into every instance's container env. Cluster defaults come first; instance entries with a matching `name` override the default's value in place; instance-only names are appended. |
+| `runtimeDeps.pnpm` | `bool` | When true, opts every instance into the pnpm runtime init container unless the instance has already set it true. Booleans are OR-merged because `unset` and `false` are indistinguishable. |
+| `runtimeDeps.python` | `bool` | Same OR-merge semantics for the Python/uv runtime init container. |
+
+### Example
+
+```yaml
+apiVersion: openclaw.rocks/v1alpha1
+kind: OpenClawClusterDefaults
+metadata:
+  name: cluster
+spec:
+  registry: "<account>.dkr.ecr.<region>.amazonaws.com.cn"
+  image:
+    tag: v0.28.0
+  env:
+    - name: NPM_CONFIG_REGISTRY
+      value: https://registry.npmmirror.com
+    - name: PIP_INDEX_URL
+      value: https://mirrors.aliyun.com/pypi/simple/
+  runtimeDeps:
+    python: true
+```
+
+### Status fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `conditions` | `[]metav1.Condition` | Current state of the singleton. |
+| `observedGeneration` | `int64` | Generation of the spec most recently processed by the operator. |

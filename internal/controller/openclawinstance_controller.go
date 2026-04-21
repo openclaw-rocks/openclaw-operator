@@ -86,6 +86,7 @@ type OpenClawInstanceReconciler struct {
 // +kubebuilder:rbac:groups=openclaw.rocks,resources=openclawinstances,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=openclaw.rocks,resources=openclawinstances/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=openclaw.rocks,resources=openclawinstances/finalizers,verbs=update
+// +kubebuilder:rbac:groups=openclaw.rocks,resources=openclawclusterdefaults,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
@@ -312,9 +313,44 @@ func updatePhaseMetric(name, namespace, currentPhase string) {
 	}
 }
 
+// applyClusterDefaults fetches the cluster-scoped OpenClawClusterDefaults
+// singleton (must be named "cluster") and merges its spec into the in-memory
+// instance. The merged fields are only used for rendering owned resources;
+// the user's stored spec is never overwritten in etcd.
+//
+// Cluster defaults are optional: if no singleton exists, the instance is
+// returned unchanged. If a defaults CR exists under a non-singleton name, it
+// is ignored and a warning event is emitted on the instance so platform
+// operators can fix the name.
+func (r *OpenClawInstanceReconciler) applyClusterDefaults(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) error {
+	logger := log.FromContext(ctx)
+
+	defaults := &openclawv1alpha1.OpenClawClusterDefaults{}
+	err := r.Get(ctx, types.NamespacedName{Name: openclawv1alpha1.ClusterDefaultsSingletonName}, defaults)
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("get OpenClawClusterDefaults/%s: %w", openclawv1alpha1.ClusterDefaultsSingletonName, err)
+	}
+
+	merged := resources.ApplyClusterDefaults(instance, defaults)
+	instance.Spec = merged.Spec
+	logger.V(1).Info("applied OpenClawClusterDefaults", "generation", defaults.Generation)
+	return nil
+}
+
 // reconcileResources reconciles all managed resources
 func (r *OpenClawInstanceReconciler) reconcileResources(ctx context.Context, instance *openclawv1alpha1.OpenClawInstance) error {
 	logger := log.FromContext(ctx)
+
+	// Merge the cluster-wide defaults singleton into the instance spec for
+	// rendering purposes. The merged spec is never written back to etcd;
+	// we only mutate the in-memory copy returned by r.Get so downstream
+	// builders see the defaulted values. Per-instance fields always win.
+	if err := r.applyClusterDefaults(ctx, instance); err != nil {
+		return fmt.Errorf("failed to apply cluster defaults: %w", err)
+	}
 
 	// 1. Reconcile RBAC (ServiceAccount, Role, RoleBinding)
 	if err := r.reconcileRBAC(ctx, instance); err != nil {
@@ -1853,7 +1889,36 @@ func (r *OpenClawInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&autoscalingv2.HorizontalPodAutoscaler{}).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.findInstancesForSecret)).
 		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.findInstancesForConfigMap)).
+		Watches(&openclawv1alpha1.OpenClawClusterDefaults{}, handler.EnqueueRequestsFromMapFunc(r.findInstancesForClusterDefaults)).
 		Complete(r)
+}
+
+// findInstancesForClusterDefaults enqueues every OpenClawInstance in the
+// cluster when the cluster-defaults singleton changes. Only the singleton
+// whose name matches ClusterDefaultsSingletonName triggers re-reconciliation;
+// other CRs are ignored so typos don't silently churn every instance.
+func (r *OpenClawInstanceReconciler) findInstancesForClusterDefaults(ctx context.Context, obj client.Object) []reconcile.Request {
+	if obj.GetName() != openclawv1alpha1.ClusterDefaultsSingletonName {
+		return nil
+	}
+
+	instanceList := &openclawv1alpha1.OpenClawInstanceList{}
+	if err := r.List(ctx, instanceList); err != nil {
+		log.FromContext(ctx).Error(err, "Failed to list OpenClawInstances for OpenClawClusterDefaults watch")
+		return nil
+	}
+
+	requests := make([]reconcile.Request, 0, len(instanceList.Items))
+	for i := range instanceList.Items {
+		instance := &instanceList.Items[i]
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      instance.Name,
+				Namespace: instance.Namespace,
+			},
+		})
+	}
+	return requests
 }
 
 // findInstancesForConfigMap maps an external ConfigMap change to the OpenClawInstances
