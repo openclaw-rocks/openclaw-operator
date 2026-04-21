@@ -31,6 +31,7 @@ You run in a hardened Kubernetes pod. The root filesystem is read-only.
 | ~/.openclaw/ | PVC | Yes |
 | ~/.local/ | PVC | Yes |
 | ~/.cache/ | PVC | Yes |
+| ~/.config/ | PVC | Yes |
 | /tmp | emptyDir | No |
 
 Everything else is read-only. Do NOT attempt writing to system paths.

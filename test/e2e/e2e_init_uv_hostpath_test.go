@@ -40,9 +40,9 @@ import (
 //
 // The fix mounts the full data volume in init-uv and init-pip (instead of
 // SubPath .local). That lets the non-root init container create .local,
-// .cache, and skills with UID 1000 ownership before any SubPath mount is
-// attempted. Without this, kubelet creates the missing SubPath directories
-// as root:root and fsGroup cannot chown hostPath volumes.
+// .cache, .config, and skills with UID 1000 ownership before any SubPath
+// mount is attempted. Without this, kubelet creates the missing SubPath
+// directories as root:root and fsGroup cannot chown hostPath volumes.
 var _ = Describe("Init containers on hostPath-backed PVCs (#448)", func() {
 	Context("When creating a persistent OpenClawInstance", func() {
 		var namespace string
@@ -134,7 +134,7 @@ var _ = Describe("Init containers on hostPath-backed PVCs (#448)", func() {
 			// UID 1000 ownership from the pre-existing directory.
 			Expect(initUv.Command).To(HaveLen(3), "init-uv should use sh -c <script>")
 			script := initUv.Command[2]
-			for _, dir := range []string{"/data/.local/bin", "/data/.cache", "/data/skills"} {
+			for _, dir := range []string{"/data/.local/bin", "/data/.cache", "/data/.config", "/data/skills"} {
 				Expect(strings.Contains(script, dir)).To(BeTrue(),
 					"init-uv script must pre-create %s with UID 1000 ownership, got:\n%s", dir, script)
 			}
