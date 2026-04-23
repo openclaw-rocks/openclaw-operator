@@ -25,10 +25,10 @@ import (
 	openclawv1alpha1 "github.com/openclawrocks/openclaw-operator/api/v1alpha1"
 )
 
-func newClusterDefaults(spec openclawv1alpha1.OpenClawClusterDefaultsSpec) *openclawv1alpha1.OpenClawClusterDefaults {
+func newClusterDefaults(spec *openclawv1alpha1.OpenClawClusterDefaultsSpec) *openclawv1alpha1.OpenClawClusterDefaults {
 	return &openclawv1alpha1.OpenClawClusterDefaults{
 		ObjectMeta: metav1.ObjectMeta{Name: openclawv1alpha1.ClusterDefaultsSingletonName},
-		Spec:       spec,
+		Spec:       *spec,
 	}
 }
 
@@ -48,7 +48,7 @@ func TestApplyClusterDefaults_NilDefaults(t *testing.T) {
 
 func TestApplyClusterDefaults_FillsUnsetRegistry(t *testing.T) {
 	instance := newTestInstance("fills-registry")
-	defaults := newClusterDefaults(openclawv1alpha1.OpenClawClusterDefaultsSpec{
+	defaults := newClusterDefaults(&openclawv1alpha1.OpenClawClusterDefaultsSpec{
 		Registry: "mirror.example.com",
 	})
 
@@ -62,7 +62,7 @@ func TestApplyClusterDefaults_FillsUnsetRegistry(t *testing.T) {
 func TestApplyClusterDefaults_InstanceRegistryWins(t *testing.T) {
 	instance := newTestInstance("instance-wins")
 	instance.Spec.Registry = "instance-mirror.example.com"
-	defaults := newClusterDefaults(openclawv1alpha1.OpenClawClusterDefaultsSpec{
+	defaults := newClusterDefaults(&openclawv1alpha1.OpenClawClusterDefaultsSpec{
 		Registry: "cluster-mirror.example.com",
 	})
 
@@ -76,7 +76,7 @@ func TestApplyClusterDefaults_InstanceRegistryWins(t *testing.T) {
 func TestApplyClusterDefaults_ImageFieldsMergeIndependently(t *testing.T) {
 	instance := newTestInstance("image-merge")
 	instance.Spec.Image.Repository = "private.example.com/openclaw"
-	defaults := newClusterDefaults(openclawv1alpha1.OpenClawClusterDefaultsSpec{
+	defaults := newClusterDefaults(&openclawv1alpha1.OpenClawClusterDefaultsSpec{
 		Image: openclawv1alpha1.ImageSpec{
 			Repository: "mirror.example.com/openclaw",
 			Tag:        "v1.2.3",
@@ -100,7 +100,7 @@ func TestApplyClusterDefaults_ImageFieldsMergeIndependently(t *testing.T) {
 func TestApplyClusterDefaults_DigestBlocksDefaultTag(t *testing.T) {
 	instance := newTestInstance("digest-pin")
 	instance.Spec.Image.Digest = "sha256:abc123"
-	defaults := newClusterDefaults(openclawv1alpha1.OpenClawClusterDefaultsSpec{
+	defaults := newClusterDefaults(&openclawv1alpha1.OpenClawClusterDefaultsSpec{
 		Image: openclawv1alpha1.ImageSpec{Tag: "v1.2.3"},
 	})
 
@@ -115,7 +115,7 @@ func TestApplyClusterDefaults_DigestBlocksDefaultTag(t *testing.T) {
 }
 
 func TestApplyClusterDefaults_PullSecretsReplaceOnly(t *testing.T) {
-	defaults := newClusterDefaults(openclawv1alpha1.OpenClawClusterDefaultsSpec{
+	defaults := newClusterDefaults(&openclawv1alpha1.OpenClawClusterDefaultsSpec{
 		Image: openclawv1alpha1.ImageSpec{
 			PullSecrets: []corev1.LocalObjectReference{{Name: "cluster-registry-creds"}},
 		},
@@ -143,7 +143,7 @@ func TestApplyClusterDefaults_EnvMergeAndOverride(t *testing.T) {
 		{Name: "PIP_INDEX_URL", Value: "https://instance.example.com/pypi"},
 		{Name: "EXTRA", Value: "instance-only"},
 	}
-	defaults := newClusterDefaults(openclawv1alpha1.OpenClawClusterDefaultsSpec{
+	defaults := newClusterDefaults(&openclawv1alpha1.OpenClawClusterDefaultsSpec{
 		Env: []corev1.EnvVar{
 			{Name: "NPM_CONFIG_REGISTRY", Value: "https://mirror/npm"},
 			{Name: "PIP_INDEX_URL", Value: "https://mirror/pypi"},
@@ -183,7 +183,7 @@ func TestApplyClusterDefaults_EnvMergeAndOverride(t *testing.T) {
 
 func TestApplyClusterDefaults_EmptyEnvs(t *testing.T) {
 	instance := newTestInstance("empty-env")
-	out := ApplyClusterDefaults(instance, newClusterDefaults(openclawv1alpha1.OpenClawClusterDefaultsSpec{}))
+	out := ApplyClusterDefaults(instance, newClusterDefaults(&openclawv1alpha1.OpenClawClusterDefaultsSpec{}))
 	if out.Spec.Env != nil {
 		t.Errorf("empty defaults + empty instance env should yield nil, got %+v", out.Spec.Env)
 	}
@@ -207,7 +207,7 @@ func TestApplyClusterDefaults_RuntimeDepsORMerge(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			instance := newTestInstance("rd")
 			instance.Spec.RuntimeDeps = tc.instance
-			defaults := newClusterDefaults(openclawv1alpha1.OpenClawClusterDefaultsSpec{RuntimeDeps: tc.defaults})
+			defaults := newClusterDefaults(&openclawv1alpha1.OpenClawClusterDefaultsSpec{RuntimeDeps: tc.defaults})
 
 			out := ApplyClusterDefaults(instance, defaults)
 
@@ -223,7 +223,7 @@ func TestApplyClusterDefaults_RuntimeDepsORMerge(t *testing.T) {
 
 func TestApplyClusterDefaults_DoesNotMutateInstance(t *testing.T) {
 	instance := newTestInstance("immutability")
-	defaults := newClusterDefaults(openclawv1alpha1.OpenClawClusterDefaultsSpec{
+	defaults := newClusterDefaults(&openclawv1alpha1.OpenClawClusterDefaultsSpec{
 		Registry: "mirror.example.com",
 		Env: []corev1.EnvVar{
 			{Name: "PIP_INDEX_URL", Value: "https://mirror/pypi"},
