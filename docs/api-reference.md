@@ -495,7 +495,7 @@ spec:
 |------------------|-----------------|---------|--------------------------------------------------------------------------|
 | `initContainers` | `[]Container`   | --      | Additional init containers to run before the main container. They run after the operator-managed init containers. Max 10 items. |
 
-Standard Kubernetes `Container` spec. The following names are reserved by the operator and rejected by the webhook: `init-config`, `init-pnpm`, `init-python`, `init-skills`, `init-plugins`, `init-ollama`.
+Standard Kubernetes `Container` spec. The following names are reserved by the operator and rejected by the webhook: `init-config`, `init-pnpm`, `init-python`, `init-skills`, `init-plugins`, `init-ollama`, `init-plugin-runtime-deps`.
 
 ```yaml
 spec:

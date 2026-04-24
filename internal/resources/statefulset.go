@@ -611,7 +611,14 @@ func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance, externalWo
 	// - init-uv: copies uv binary so agents can "uv tool install" CLI tools
 	// - init-pip: bootstraps pip via ensurepip so agents can "pip install <pkg>"
 	//   (PIP_USER=1 makes pip write to the writable ~/.local/ PVC subpath)
-	initContainers = append(initContainers, buildUvInitContainer(instance), buildPipInitContainer(instance))
+	// - init-plugin-runtime-deps: points bundled-plugin imports of "openclaw"
+	//   at the current container image so version upgrades don't crash loop (#462).
+	initContainers = append(
+		initContainers,
+		buildUvInitContainer(instance),
+		buildPipInitContainer(instance),
+		buildPluginRuntimeDepsInitContainer(instance),
+	)
 
 	// Runtime dependency init containers (run before skills so skills can use pnpm/python)
 	if instance.Spec.RuntimeDeps.Pnpm {
@@ -1247,6 +1254,55 @@ func buildPipInitContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.C
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "data", MountPath: "/data"},
 			{Name: "tmp", MountPath: "/tmp"},
+		},
+	}
+}
+
+// buildPluginRuntimeDepsInitContainer creates an init container that points the
+// bundled-plugin runtime-dep lookup path at the current container image.
+//
+// OpenClaw ships bundled plugin extensions under
+// ~/.openclaw/plugin-runtime-deps/openclaw-<version>-<hash>/dist/extensions/.
+// These extensions import "openclaw/..." as bare ESM specifiers. Node's
+// resolver walks up the tree looking for `openclaw` in node_modules. Without
+// this symlink, the resolver either finds nothing or falls back to a stale
+// npm-cached package from an earlier image version on the PVC, causing
+// crash loops like "Cannot find package 'openclaw'" or "Package subpath
+// '...' is not defined by exports" after an image upgrade (#462).
+//
+// The symlink ~/.openclaw/plugin-runtime-deps/node_modules/openclaw -> /app
+// is version-agnostic: Node's resolver finds it from any
+// openclaw-<version>-<hash>/ subdirectory, and the target always resolves
+// against /app in the main container (the current image's openclaw package).
+//
+// ln -sfn is idempotent, so re-running on every pod start is safe. Using
+// HOME=/data is unnecessary -- this container only writes under /data.
+func buildPluginRuntimeDepsInitContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
+	script := `set -e
+mkdir -p /data/plugin-runtime-deps/node_modules
+ln -sfn /app /data/plugin-runtime-deps/node_modules/openclaw`
+
+	return corev1.Container{
+		Name:                     "init-plugin-runtime-deps",
+		Image:                    GetImage(instance),
+		Command:                  []string{"sh", "-c", script},
+		ImagePullPolicy:          getPullPolicy(instance),
+		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
+		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+		Resources:                corev1.ResourceRequirements{},
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: Ptr(false),
+			ReadOnlyRootFilesystem:   Ptr(true),
+			RunAsNonRoot:             Ptr(podRunAsNonRoot(instance)),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+			SeccompProfile: &corev1.SeccompProfile{
+				Type: corev1.SeccompProfileTypeRuntimeDefault,
+			},
+		},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: "data", MountPath: "/data"},
 		},
 	}
 }

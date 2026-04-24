@@ -554,12 +554,13 @@ func validateConfigSchema(instance *openclawv1alpha1.OpenClawInstance) admission
 
 // reservedInitContainerNames are names used by operator-managed init containers.
 var reservedInitContainerNames = map[string]bool{
-	"init-config":  true,
-	"init-pnpm":    true,
-	"init-python":  true,
-	"init-skills":  true,
-	"init-plugins": true,
-	"init-ollama":  true,
+	"init-config":              true,
+	"init-pnpm":                true,
+	"init-python":              true,
+	"init-skills":              true,
+	"init-plugins":             true,
+	"init-ollama":              true,
+	"init-plugin-runtime-deps": true,
 }
 
 // validateInitContainers checks custom init container names.

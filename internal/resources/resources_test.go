@@ -867,8 +867,8 @@ func TestBuildStatefulSet_ConfigVolume_RawConfig(t *testing.T) {
 
 	// Init container should copy config from ConfigMap to data volume
 	initContainers := sts.Spec.Template.Spec.InitContainers
-	if len(initContainers) != 3 {
-		t.Fatalf("expected 3 init containers (init-config + init-uv + init-pip), got %d", len(initContainers))
+	if len(initContainers) != 4 {
+		t.Fatalf("expected 4 init containers (init-config + init-uv + init-pip + init-plugin-runtime-deps), got %d", len(initContainers))
 	}
 	initC := initContainers[0]
 	if initC.Name != "init-config" {
@@ -912,8 +912,8 @@ func TestBuildStatefulSet_ConfigVolume_ConfigMapRef(t *testing.T) {
 	// The controller reads the external CM and writes enriched content into the
 	// operator-managed CM under "openclaw.json", so the init container always uses that key.
 	initContainers := sts.Spec.Template.Spec.InitContainers
-	if len(initContainers) != 3 {
-		t.Fatalf("expected 3 init containers (init-config + init-uv + init-pip), got %d", len(initContainers))
+	if len(initContainers) != 4 {
+		t.Fatalf("expected 4 init containers (init-config + init-uv + init-pip + init-plugin-runtime-deps), got %d", len(initContainers))
 	}
 	initC := initContainers[0]
 	assertVolumeMount(t, initC.VolumeMounts, "data", "/data")
@@ -947,8 +947,8 @@ func TestBuildStatefulSet_ConfigMapRef_DefaultKey(t *testing.T) {
 
 	// Init container should use "openclaw.json" (operator-managed key)
 	initContainers := sts.Spec.Template.Spec.InitContainers
-	if len(initContainers) != 3 {
-		t.Fatalf("expected 3 init containers (init-config + init-uv + init-pip), got %d", len(initContainers))
+	if len(initContainers) != 4 {
+		t.Fatalf("expected 4 init containers (init-config + init-uv + init-pip + init-plugin-runtime-deps), got %d", len(initContainers))
 	}
 	expectedPrefix := "cp /config/'openclaw.json' /data/openclaw.json"
 	if !strings.HasPrefix(initContainers[0].Command[2], expectedPrefix) {
@@ -971,9 +971,9 @@ func TestBuildStatefulSet_VanillaDeployment_HasInitContainer(t *testing.T) {
 
 	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 
-	// Vanilla deployments get init-config + init-uv + init-pip
-	if len(sts.Spec.Template.Spec.InitContainers) != 3 {
-		t.Fatalf("expected 3 init containers for vanilla deployment, got %d", len(sts.Spec.Template.Spec.InitContainers))
+	// Vanilla deployments get init-config + init-uv + init-pip + init-plugin-runtime-deps
+	if len(sts.Spec.Template.Spec.InitContainers) != 4 {
+		t.Fatalf("expected 4 init containers for vanilla deployment, got %d", len(sts.Spec.Template.Spec.InitContainers))
 	}
 	if sts.Spec.Template.Spec.InitContainers[0].Name != "init-config" {
 		t.Errorf("init container name = %q, want %q", sts.Spec.Template.Spec.InitContainers[0].Name, "init-config")
@@ -5147,6 +5147,66 @@ func TestBuildStatefulSet_InitUvPipMountFullDataVolume(t *testing.T) {
 	}
 }
 
+// TestBuildStatefulSet_PluginRuntimeDepsSymlink verifies that every StatefulSet
+// includes the init-plugin-runtime-deps container, which points the bundled-plugin
+// openclaw import at the current container image. Without this symlink, bundled
+// plugins (e.g. discord) crash loop after an image upgrade because they resolve
+// "openclaw" against the stale npm-cached package on the PVC.
+// See https://github.com/openclaw-rocks/openclaw-operator/issues/462.
+func TestBuildStatefulSet_PluginRuntimeDepsSymlink(t *testing.T) {
+	instance := newTestInstance("plugin-runtime-deps")
+	sts := BuildStatefulSet(instance, "", nil, nil, nil)
+
+	var c *corev1.Container
+	for i := range sts.Spec.Template.Spec.InitContainers {
+		if sts.Spec.Template.Spec.InitContainers[i].Name == "init-plugin-runtime-deps" {
+			c = &sts.Spec.Template.Spec.InitContainers[i]
+			break
+		}
+	}
+	if c == nil {
+		t.Fatal("init-plugin-runtime-deps container not found")
+	}
+
+	// Must use the OpenClaw image so /app resolves correctly in the main container
+	// (the symlink target is evaluated at access time in whatever container dereferences it).
+	if c.Image != GetImage(instance) {
+		t.Errorf("init-plugin-runtime-deps image = %q, want %q", c.Image, GetImage(instance))
+	}
+
+	// Must mount data at /data in full (not via SubPath). The symlink must land at
+	// /data/plugin-runtime-deps/node_modules/openclaw so that, in the main
+	// container (data mounted at /home/openclaw/.openclaw), Node's ESM resolver
+	// finds ~/.openclaw/plugin-runtime-deps/node_modules/openclaw.
+	assertVolumeMount(t, c.VolumeMounts, "data", "/data")
+	for _, m := range c.VolumeMounts {
+		if m.Name == "data" && m.SubPath != "" {
+			t.Errorf("init-plugin-runtime-deps data mount must not use SubPath, got %q", m.SubPath)
+		}
+	}
+
+	// Script must be idempotent (mkdir -p + ln -sfn) so re-running on every pod
+	// start is safe, and must create the version-agnostic symlink.
+	if len(c.Command) != 3 {
+		t.Fatalf("init-plugin-runtime-deps command = %v, want [sh -c <script>]", c.Command)
+	}
+	script := c.Command[2]
+	if !strings.Contains(script, "mkdir -p /data/plugin-runtime-deps/node_modules") {
+		t.Errorf("script must create plugin-runtime-deps/node_modules, got:\n%s", script)
+	}
+	if !strings.Contains(script, "ln -sfn /app /data/plugin-runtime-deps/node_modules/openclaw") {
+		t.Errorf("script must symlink openclaw -> /app, got:\n%s", script)
+	}
+
+	// Security context should match the other read-only init containers.
+	if c.SecurityContext == nil {
+		t.Fatal("init-plugin-runtime-deps security context is nil")
+	}
+	if c.SecurityContext.ReadOnlyRootFilesystem == nil || !*c.SecurityContext.ReadOnlyRootFilesystem {
+		t.Error("init-plugin-runtime-deps should have ReadOnlyRootFilesystem=true")
+	}
+}
+
 func TestBuildStatefulSet_TmpVolumeAndMount(t *testing.T) {
 	instance := newTestInstance("tmp-vol")
 	sts := BuildStatefulSet(instance, "", nil, nil, nil)
@@ -7050,8 +7110,8 @@ func TestBuildStatefulSet_CustomInitContainers_AfterOperatorManaged(t *testing.T
 	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
-	if len(initContainers) != 5 {
-		t.Fatalf("expected 5 init containers, got %d", len(initContainers))
+	if len(initContainers) != 6 {
+		t.Fatalf("expected 6 init containers, got %d", len(initContainers))
 	}
 	if initContainers[0].Name != "init-config" {
 		t.Errorf("initContainers[0] = %q, want init-config", initContainers[0].Name)
@@ -7062,11 +7122,14 @@ func TestBuildStatefulSet_CustomInitContainers_AfterOperatorManaged(t *testing.T
 	if initContainers[2].Name != "init-pip" {
 		t.Errorf("initContainers[2] = %q, want init-pip", initContainers[2].Name)
 	}
-	if initContainers[3].Name != "init-skills" {
-		t.Errorf("initContainers[3] = %q, want init-skills", initContainers[3].Name)
+	if initContainers[3].Name != "init-plugin-runtime-deps" {
+		t.Errorf("initContainers[3] = %q, want init-plugin-runtime-deps", initContainers[3].Name)
 	}
-	if initContainers[4].Name != "user-init" {
-		t.Errorf("initContainers[4] = %q, want user-init", initContainers[4].Name)
+	if initContainers[4].Name != "init-skills" {
+		t.Errorf("initContainers[4] = %q, want init-skills", initContainers[4].Name)
+	}
+	if initContainers[5].Name != "user-init" {
+		t.Errorf("initContainers[5] = %q, want user-init", initContainers[5].Name)
 	}
 }
 
@@ -7410,7 +7473,7 @@ func TestBuildStatefulSet_RuntimeDeps_InitContainerOrder(t *testing.T) {
 	sts := BuildStatefulSet(instance, "", nil, nil, nil)
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
-	expected := []string{"init-config", "init-uv", "init-pip", "init-pnpm", "init-python", "init-skills", "user-init"}
+	expected := []string{"init-config", "init-uv", "init-pip", "init-plugin-runtime-deps", "init-pnpm", "init-python", "init-skills", "user-init"}
 	if len(initContainers) != len(expected) {
 		t.Fatalf("expected %d init containers, got %d: %v", len(expected), len(initContainers),
 			func() []string {
