@@ -9519,6 +9519,24 @@ spec:
                       type: object
                     maxItems: 10
                     type: array
+                  bootstrap:
+                    description: |-
+                      Bootstrap controls the operator-managed BOOTSTRAP.md file injected into
+                      the default workspace to guide first-run agent onboarding.
+                    properties:
+                      enabled:
+                        default: true
+                        description: |-
+                          Enabled controls whether the operator injects its BOOTSTRAP.md into the
+                          default workspace. When true (the default), the init container seeds
+                          BOOTSTRAP.md on pod start if the file is not present on the PVC.
+
+                          Set to false if the agent has already completed bootstrap and you don't
+                          want the operator to recreate the file on pod restart or config change.
+                          OpenClaw deletes BOOTSTRAP.md after applying it, so without this flag
+                          every restart would cause the agent to re-run bootstrap. See #463.
+                        type: boolean
+                    type: object
                   configMapRef:
                     description: |-
                       ConfigMapRef references an external ConfigMap whose keys become workspace files.

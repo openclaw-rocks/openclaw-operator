@@ -63,9 +63,15 @@ func BuildWorkspaceConfigMap(instance *openclawv1alpha1.OpenClawInstance, extern
 		}
 	}
 
-	// 1. Operator-injected files (highest priority - always present)
+	// 1. Operator-injected files (highest priority)
 	files["ENVIRONMENT.md"] = EnvironmentSkillContent
-	files["BOOTSTRAP.md"] = BootstrapContent
+
+	// BOOTSTRAP.md is opt-out via spec.workspace.bootstrap.enabled=false.
+	// Skipping injection also skips the init-script re-copy, so agents that
+	// have already completed bootstrap don't re-run it on every pod restart (#463).
+	if bootstrapEnabled(instance) {
+		files["BOOTSTRAP.md"] = BootstrapContent
+	}
 
 	// Operator-injected self-configure files
 	if instance.Spec.SelfConfigure.Enabled {

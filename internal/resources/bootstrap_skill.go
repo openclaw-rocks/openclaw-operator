@@ -16,11 +16,31 @@ limitations under the License.
 
 package resources
 
-// BootstrapContent is the BOOTSTRAP.md file injected into the workspace for all
-// new instances. It guides the agent through first-run onboarding: learning the
-// user's name, preferences, and picking its own identity. The agent deletes the
-// file after completing the bootstrap flow, so it only runs once (the init script
-// uses seed-once semantics and won't re-create it).
+import (
+	openclawv1alpha1 "github.com/openclawrocks/openclaw-operator/api/v1alpha1"
+)
+
+// bootstrapEnabled reports whether the operator should inject BOOTSTRAP.md
+// into the default workspace. Defaults to true for backward compatibility;
+// users can opt out by setting spec.workspace.bootstrap.enabled=false.
+//
+// Opting out also skips the init-script re-copy. Without the flag, OpenClaw's
+// post-bootstrap cleanup (it deletes BOOTSTRAP.md after applying) is undone
+// on the next pod restart or config change, putting the agent back through
+// onboarding every time. See #463.
+func bootstrapEnabled(instance *openclawv1alpha1.OpenClawInstance) bool {
+	if instance.Spec.Workspace == nil || instance.Spec.Workspace.Bootstrap.Enabled == nil {
+		return true
+	}
+	return *instance.Spec.Workspace.Bootstrap.Enabled
+}
+
+// BootstrapContent is the BOOTSTRAP.md file injected into the workspace when
+// spec.workspace.bootstrap.enabled is true (the default). It guides the agent
+// through first-run onboarding: learning the user's name, preferences, and
+// picking its own identity. The agent deletes the file after completing
+// bootstrap. To keep the file from being recreated on subsequent pod starts,
+// set spec.workspace.bootstrap.enabled=false (#463).
 const BootstrapContent = `# BOOTSTRAP
 
 You just came online for the first time. Before doing anything else, get to know your human.

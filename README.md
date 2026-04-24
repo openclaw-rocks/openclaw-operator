@@ -527,6 +527,19 @@ All keys in the referenced ConfigMap are written as files into the workspace dir
 
 **Merge priority** (highest wins): operator-injected files > inline `initialFiles` > external `configMapRef` > skill packs.
 
+**Disable operator-managed `BOOTSTRAP.md`:**
+
+`BOOTSTRAP.md` is seeded on first boot to guide first-run agent onboarding (identity, user preferences, persona). OpenClaw deletes the file after applying it, so on every pod restart or config change the init container would re-copy it and the agent would re-run bootstrap. Opt out once bootstrap is done:
+
+```yaml
+spec:
+  workspace:
+    bootstrap:
+      enabled: false
+```
+
+Defaults to `true`. `ENVIRONMENT.md`, self-configure files, and skill-pack files are not affected.
+
 The operator sets a `WorkspaceReady` status condition to `False` when the referenced ConfigMap is missing or contains invalid filenames, and `True` once workspace files are seeded successfully. The controller watches external ConfigMaps for changes and re-reconciles automatically.
 
 **How it works:** Workspace files are seeded once via an init container. The init container copies files from a read-only ConfigMap volume to the PVC. The main container only sees the PVC (writable), so agents can modify their workspace files and changes persist across pod restarts. ConfigMaps are never mounted directly on the main container.

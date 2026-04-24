@@ -4586,6 +4586,52 @@ func TestBuildWorkspaceConfigMap_WithFiles(t *testing.T) {
 	}
 }
 
+// TestBuildWorkspaceConfigMap_BootstrapDisabled verifies that setting
+// spec.workspace.bootstrap.enabled=false suppresses the operator-injected
+// BOOTSTRAP.md. OpenClaw deletes the file after applying it, so re-seeding
+// on every pod start forces the agent to re-run onboarding repeatedly (#463).
+func TestBuildWorkspaceConfigMap_BootstrapDisabled(t *testing.T) {
+	falseVal := false
+	instance := newTestInstance("ws-no-bootstrap")
+	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+		Bootstrap: openclawv1alpha1.BootstrapSpec{
+			Enabled: &falseVal,
+		},
+	}
+
+	cm := BuildWorkspaceConfigMap(instance, nil, nil, nil)
+	if cm == nil {
+		t.Fatal("expected non-nil ConfigMap (ENVIRONMENT.md is still injected)")
+	}
+	if _, ok := cm.Data["BOOTSTRAP.md"]; ok {
+		t.Error("BOOTSTRAP.md should not be injected when spec.workspace.bootstrap.enabled=false")
+	}
+	if _, ok := cm.Data["ENVIRONMENT.md"]; !ok {
+		t.Error("ENVIRONMENT.md should still be injected when bootstrap is disabled")
+	}
+}
+
+// TestBuildWorkspaceConfigMap_BootstrapEnabledExplicitly verifies that an
+// explicit enabled=true produces the same behavior as the default (backward
+// compatibility guarantee for anyone who sets the field explicitly).
+func TestBuildWorkspaceConfigMap_BootstrapEnabledExplicitly(t *testing.T) {
+	trueVal := true
+	instance := newTestInstance("ws-bootstrap-explicit")
+	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+		Bootstrap: openclawv1alpha1.BootstrapSpec{
+			Enabled: &trueVal,
+		},
+	}
+
+	cm := BuildWorkspaceConfigMap(instance, nil, nil, nil)
+	if cm == nil {
+		t.Fatal("expected non-nil ConfigMap")
+	}
+	if _, ok := cm.Data["BOOTSTRAP.md"]; !ok {
+		t.Error("BOOTSTRAP.md should be injected when spec.workspace.bootstrap.enabled=true")
+	}
+}
+
 func TestBuildWorkspaceConfigMap_WithExternalFiles(t *testing.T) {
 	instance := newTestInstance("ws-ext")
 	externalFiles := map[string]string{
@@ -4767,6 +4813,35 @@ func TestBuildInitScript_WorkspaceOnly(t *testing.T) {
 	expected := "cp /config/'openclaw.json' /data/openclaw.json\nmkdir -p /data/workspace/'memory'\nmkdir -p /data/workspace\n[ -f /data/workspace/'BOOTSTRAP.md' ] || cp /workspace-init/'BOOTSTRAP.md' /data/workspace/'BOOTSTRAP.md'\n[ -f /data/workspace/'ENVIRONMENT.md' ] || cp /workspace-init/'ENVIRONMENT.md' /data/workspace/'ENVIRONMENT.md'\n[ -f /data/workspace/'SOUL.md' ] || cp /workspace-init/'SOUL.md' /data/workspace/'SOUL.md'"
 	if script != expected {
 		t.Errorf("unexpected script:\ngot:  %q\nwant: %q", script, expected)
+	}
+}
+
+// TestBuildInitScript_BootstrapDisabled verifies that the init script omits the
+// BOOTSTRAP.md seed line when spec.workspace.bootstrap.enabled=false. Without
+// this, OpenClaw's post-bootstrap cleanup is undone on every pod restart (#463).
+func TestBuildInitScript_BootstrapDisabled(t *testing.T) {
+	falseVal := false
+	instance := newTestInstance("init-no-bootstrap")
+	instance.Spec.Workspace = &openclawv1alpha1.WorkspaceSpec{
+		InitialFiles: map[string]string{
+			"SOUL.md": "content",
+		},
+		Bootstrap: openclawv1alpha1.BootstrapSpec{
+			Enabled: &falseVal,
+		},
+	}
+
+	script := BuildInitScript(instance, nil, nil, nil)
+	if strings.Contains(script, "BOOTSTRAP.md") {
+		t.Errorf("init script should not reference BOOTSTRAP.md when bootstrap disabled:\n%s", script)
+	}
+	// ENVIRONMENT.md must still be seeded.
+	if !strings.Contains(script, "ENVIRONMENT.md") {
+		t.Errorf("init script should still seed ENVIRONMENT.md, got:\n%s", script)
+	}
+	// User workspace files must still be seeded.
+	if !strings.Contains(script, "SOUL.md") {
+		t.Errorf("init script should still seed user workspace files, got:\n%s", script)
 	}
 }
 

@@ -745,7 +745,10 @@ func BuildInitScript(instance *openclawv1alpha1.OpenClawInstance, externalWorksp
 		}
 		// Always inject operator files
 		allFiles["ENVIRONMENT.md"] = true
-		allFiles["BOOTSTRAP.md"] = true
+		// BOOTSTRAP.md injection is opt-out (#463).
+		if bootstrapEnabled(instance) {
+			allFiles["BOOTSTRAP.md"] = true
+		}
 		if instance.Spec.SelfConfigure.Enabled {
 			allFiles["SELFCONFIG.md"] = true
 			allFiles["selfconfig.sh"] = true

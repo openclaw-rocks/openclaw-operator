@@ -89,6 +89,7 @@ Configures initial workspace files seeded into the instance. Files are copied on
 | `initialFiles`         | `map[string]string`       | --      | Maps filenames to their content. Each file is written to the workspace directory only if it does not already exist. Max 50 entries. |
 | `initialDirectories`   | `[]string`                | --      | Directories to create (`mkdir -p`) inside the workspace directory. Nested paths like `tools/scripts` are allowed. Max 20 items. |
 | `additionalWorkspaces` | `[]AdditionalWorkspace`   | --      | Additional agent workspaces for multi-agent setups. Each entry seeds files to `~/.openclaw/workspace-<name>/`. Max 10 items. See sub-fields below. |
+| `bootstrap`            | `BootstrapSpec`           | --      | Controls operator-managed `BOOTSTRAP.md` injection. See sub-fields below. |
 
 #### spec.workspace.configMapRef
 
@@ -103,6 +104,25 @@ The controller watches the referenced ConfigMap for changes and re-reconciles au
 **How seeding works:** The operator merges all workspace file sources into a single operator-managed ConfigMap, which is mounted read-only on the init container. The init container copies files to the PVC (writable) using seed-once semantics (`[ -f target ] || cp source target`). The main container only mounts the PVC -- ConfigMaps are never mounted directly on the main container, so agents can freely modify their workspace files.
 
 **Seed-once, never overwrite:** Files are only written when they don't already exist on the PVC. If an agent modifies its workspace files at runtime (e.g. updating SOUL.md via the self-improvement skill), those changes persist across pod restarts. Updating the ConfigMap or `initialFiles` only affects new instances or files that have been manually deleted from the PVC.
+
+#### spec.workspace.bootstrap
+
+Controls the operator-managed `BOOTSTRAP.md` file, which is seeded into the default workspace to guide first-run agent onboarding (setting identity, meeting the user, picking a persona). The agent deletes `BOOTSTRAP.md` after applying it.
+
+| Field     | Type   | Default | Description |
+|-----------|--------|---------|-------------|
+| `enabled` | `bool` | `true`  | When `false`, the operator does not inject `BOOTSTRAP.md` into the workspace ConfigMap and the init container skips its seeding step. Set this to `false` after the agent has completed bootstrap so it isn't re-run on every pod restart or config change. |
+
+Because the init container seeds via `[ -f target ] || cp source target`, it always re-copies `BOOTSTRAP.md` once the agent deletes it -- which would force the onboarding flow to run again on every restart. Flipping `enabled` to `false` is the clean opt-out.
+
+```yaml
+spec:
+  workspace:
+    bootstrap:
+      enabled: false
+```
+
+`ENVIRONMENT.md`, self-configure files, and skill-pack files are not affected by this field.
 
 #### spec.workspace.additionalWorkspaces[]
 
