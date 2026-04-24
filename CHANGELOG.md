@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.30.0](https://github.com/openclaw-rocks/openclaw-operator/compare/v0.29.0...v0.30.0) (2026-04-24)
+
+
+### Features
+
+* **workspace:** add spec.workspace.bootstrap.enabled disable flag ([#465](https://github.com/openclaw-rocks/openclaw-operator/issues/465)) ([67bbf71](https://github.com/openclaw-rocks/openclaw-operator/commit/67bbf7125d6df23ab62ea6fcb59ce4472f25df66))
+
+
+### Bug Fixes
+
+* **statefulset:** symlink plugin-runtime-deps/node_modules/openclaw to /app ([#464](https://github.com/openclaw-rocks/openclaw-operator/issues/464)) ([c4c5f50](https://github.com/openclaw-rocks/openclaw-operator/commit/c4c5f50f44a12dfc3676923a11a97fdcb3280d01))
+
 ## [0.29.0](https://github.com/openclaw-rocks/openclaw-operator/compare/v0.28.1...v0.29.0) (2026-04-23)
 
 
