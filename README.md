@@ -204,7 +204,10 @@ kubectl get pods
 # NAME         READY   STATUS    AGE
 # my-agent-0   1/1     Running   2m
 ```
-
+### 5. Upgrade(Option)
+```bash
+helm upgrade openclaw-operator oci://ghcr.io/openclaw-rocks/charts/openclaw-operator   --namespace openclaw-operator-system   --atomic
+```
 ## Configuration
 
 ### Inline config (openclaw.json)
