@@ -416,7 +416,7 @@ func buildMainContainer(instance *openclawv1alpha1.OpenClawInstance, gatewayToke
 func buildMainEnv(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecretName string) []corev1.EnvVar {
 	env := []corev1.EnvVar{
 		{Name: "HOME", Value: "/home/openclaw"},
-		// mDNS/Bonjour pairing is unusable in Kubernetes — always disable it
+		// mDNS/Bonjour discovery is unusable in Kubernetes, so disable it.
 		{Name: "OPENCLAW_DISABLE_BONJOUR", Value: "1"},
 		// OpenClaw v2026.3.12 reduced the WebSocket handshake timeout from
 		// ~10s to 3s (GHSA-jv4g-m82p-2j93), which is too short for K8s where
@@ -1864,7 +1864,7 @@ func buildTailscaleBinInitContainer(instance *openclawv1alpha1.OpenClawInstance)
 func buildGatewayProxyContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
 	return corev1.Container{
 		Name:            "gateway-proxy",
-		Image:           ApplyRegistryOverride(DefaultGatewayProxyImage, instance.Spec.Registry),
+		Image:           GetGatewayProxyImage(instance),
 		ImagePullPolicy: corev1.PullIfNotPresent,
 		Ports: []corev1.ContainerPort{
 			{
@@ -1890,16 +1890,7 @@ func buildGatewayProxyContainer(instance *openclawv1alpha1.OpenClawInstance) cor
 				MountPath: "/tmp",
 			},
 		},
-		Resources: corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("10m"),
-				corev1.ResourceMemory: resource.MustParse("16Mi"),
-			},
-			Limits: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("100m"),
-				corev1.ResourceMemory: resource.MustParse("64Mi"),
-			},
-		},
+		Resources: buildGatewayProxyResourceRequirements(instance),
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: Ptr(false),
 			ReadOnlyRootFilesystem:   Ptr(true),
@@ -1915,6 +1906,21 @@ func buildGatewayProxyContainer(instance *openclawv1alpha1.OpenClawInstance) cor
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 	}
+}
+
+// buildGatewayProxyResourceRequirements creates resource requirements for the gateway proxy sidecar.
+func buildGatewayProxyResourceRequirements(instance *openclawv1alpha1.OpenClawInstance) corev1.ResourceRequirements {
+	req := corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{},
+		Limits:   corev1.ResourceList{},
+	}
+
+	req.Requests[corev1.ResourceCPU] = ParseQuantity(instance.Spec.Gateway.Resources.Requests.CPU, "10m")
+	req.Requests[corev1.ResourceMemory] = ParseQuantity(instance.Spec.Gateway.Resources.Requests.Memory, "16Mi")
+	req.Limits[corev1.ResourceCPU] = ParseQuantity(instance.Spec.Gateway.Resources.Limits.CPU, "100m")
+	req.Limits[corev1.ResourceMemory] = ParseQuantity(instance.Spec.Gateway.Resources.Limits.Memory, "64Mi")
+
+	return req
 }
 
 // buildChromiumContainer creates the Chromium sidecar container.
@@ -2263,12 +2269,9 @@ func buildWebTerminalResourceRequirements(instance *openclawv1alpha1.OpenClawIns
 // It receives OTLP metrics from OpenClaw and exposes a Prometheus scrape
 // endpoint on the configured metrics port.
 func buildOTelCollectorContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
-	image := DefaultOTelCollectorImage + ":" + DefaultOTelCollectorTag
-	image = ApplyRegistryOverride(image, instance.Spec.Registry)
-
 	return corev1.Container{
 		Name:                     "otel-collector",
-		Image:                    image,
+		Image:                    getOTelCollectorImage(instance),
 		ImagePullPolicy:          corev1.PullIfNotPresent,
 		Args:                     []string{"--config=/etc/otel-collector/" + OTelCollectorConfigKey},
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
@@ -2291,22 +2294,48 @@ func buildOTelCollectorContainer(instance *openclawv1alpha1.OpenClawInstance) co
 				Protocol:      corev1.ProtocolTCP,
 			},
 		},
-		Resources: corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{
-				corev1.ResourceCPU:    ParseQuantity("", "25m"),
-				corev1.ResourceMemory: ParseQuantity("", "32Mi"),
-			},
-			Limits: corev1.ResourceList{
-				corev1.ResourceCPU:    ParseQuantity("", "100m"),
-				corev1.ResourceMemory: ParseQuantity("", "128Mi"),
-			},
-		},
+		Resources: buildOTelCollectorResourceRequirements(instance),
 		VolumeMounts: []corev1.VolumeMount{
 			{
 				Name:      "otel-collector-config",
 				MountPath: "/etc/otel-collector",
 				ReadOnly:  true,
 			},
+		},
+	}
+}
+
+func getOTelCollectorImage(instance *openclawv1alpha1.OpenClawInstance) string {
+	imageSpec := instance.Spec.Observability.Metrics.Collector.Image
+	repository := imageSpec.Repository
+	if repository == "" {
+		repository = DefaultOTelCollectorImage
+	}
+
+	var image string
+	if imageSpec.Digest != "" {
+		image = repository + "@" + imageSpec.Digest
+	} else {
+		tag := imageSpec.Tag
+		if tag == "" {
+			tag = DefaultOTelCollectorTag
+		}
+		image = repository + ":" + tag
+	}
+
+	return ApplyRegistryOverride(image, instance.Spec.Registry)
+}
+
+func buildOTelCollectorResourceRequirements(instance *openclawv1alpha1.OpenClawInstance) corev1.ResourceRequirements {
+	resources := instance.Spec.Observability.Metrics.Collector.Resources
+	return corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    ParseQuantity(resources.Requests.CPU, "25m"),
+			corev1.ResourceMemory: ParseQuantity(resources.Requests.Memory, "32Mi"),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    ParseQuantity(resources.Limits.CPU, "100m"),
+			corev1.ResourceMemory: ParseQuantity(resources.Limits.Memory, "128Mi"),
 		},
 	}
 }

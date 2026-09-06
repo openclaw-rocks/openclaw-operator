@@ -307,6 +307,24 @@ _Appears in:_
 | `minFree` _string_ | MinFree is the minimum free space the workspace volume must have for the<br />pod to be considered Ready, expressed as a Kubernetes quantity<br />(e.g. "100Mi", "1Gi"). Defaults to "64Mi". |  | Optional: \{\} <br /> |
 
 
+#### GatewayProxyImageSpec
+
+
+
+GatewayProxyImageSpec defines the built-in gateway proxy container image.
+
+
+
+_Appears in:_
+- [GatewaySpec](#gatewayspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `repository` _string_ | Repository is the container image repository. | docker.io/library/nginx | Optional: \{\} <br /> |
+| `tag` _string_ | Tag is the container image tag. | 1.27-alpine | Optional: \{\} <br /> |
+| `digest` _string_ | Digest is the container image digest for supply chain security.<br />When set, it takes precedence over Tag. |  | Optional: \{\} <br /> |
+
+
 #### GatewaySpec
 
 
@@ -321,6 +339,8 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `enabled` _boolean_ | Enabled controls whether the built-in gateway reverse proxy sidecar is<br />injected into the pod. When false, no proxy container is added and health<br />probes target the OpenClaw gateway directly on port 18789.<br />Defaults to true. | true | Optional: \{\} <br /> |
+| `image` _[GatewayProxyImageSpec](#gatewayproxyimagespec)_ | Image configures the built-in gateway proxy container image. |  | Optional: \{\} <br /> |
+| `resources` _[ResourcesSpec](#resourcesspec)_ | Resources specifies compute resources for the built-in gateway proxy. |  | Optional: \{\} <br /> |
 | `existingSecret` _string_ | ExistingSecret is the name of a user-managed Secret containing the gateway token.<br />The Secret must have a key named "token". When set, the operator skips<br />auto-generating a gateway token Secret and uses this Secret instead. |  | Optional: \{\} <br /> |
 | `controlUiOrigins` _string array_ | ControlUiOrigins is a list of additional allowed origins for the Control UI.<br />The operator always auto-injects localhost origins (http://localhost:18789,<br />http://127.0.0.1:18789) and derives origins from ingress hosts. Use this<br />field to add extra origins (e.g., custom reverse proxy URLs). |  | MaxItems: 20 <br />Optional: \{\} <br /> |
 
@@ -605,6 +625,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `enabled` _boolean_ | Enabled enables metrics endpoint | true | Optional: \{\} <br /> |
 | `port` _integer_ | Port is the port to expose metrics on | 9090 | Optional: \{\} <br /> |
+| `collector` _[OTelCollectorSpec](#otelcollectorspec)_ | Collector configures the OpenTelemetry Collector sidecar that receives<br />OTLP metrics from OpenClaw and exposes them for Prometheus scraping. |  | Optional: \{\} <br /> |
 | `serviceMonitor` _[ServiceMonitorSpec](#servicemonitorspec)_ | ServiceMonitor configures the Prometheus ServiceMonitor |  | Optional: \{\} <br /> |
 | `prometheusRule` _[PrometheusRuleSpec](#prometheusrulespec)_ | PrometheusRule configures auto-provisioned PrometheusRule alerts |  | Optional: \{\} <br /> |
 | `grafanaDashboard` _[GrafanaDashboardSpec](#grafanadashboardspec)_ | GrafanaDashboard configures auto-provisioned Grafana dashboard ConfigMaps |  | Optional: \{\} <br /> |
@@ -670,6 +691,7 @@ _Appears in:_
 | `enabled` _boolean_ | Enabled enables network policy creation | true | Optional: \{\} <br /> |
 | `allowedIngressCIDRs` _string array_ | AllowedIngressCIDRs is a list of CIDRs allowed to access this instance |  | Optional: \{\} <br /> |
 | `allowedIngressNamespaces` _string array_ | AllowedIngressNamespaces is a list of namespace names allowed to access this instance |  | Optional: \{\} <br /> |
+| `allowSameNamespaceIngress` _boolean_ | AllowSameNamespaceIngress allows application traffic from all pods in the instance namespace.<br />Disable this when application ingress is fully described by the explicit namespace or CIDR lists.<br />Metrics ingress is configured independently through networking.metricsIngress. | true | Optional: \{\} <br /> |
 | `allowedEgressCIDRs` _string array_ | AllowedEgressCIDRs is a list of CIDRs this instance can reach<br />Default allows all egress on port 443 for AI APIs |  | Optional: \{\} <br /> |
 | `allowDNS` _boolean_ | AllowDNS allows DNS resolution (port 53) | true | Optional: \{\} <br /> |
 | `additionalEgress` _[NetworkPolicyEgressRule](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.31/#networkpolicyegressrule-v1-networking) array_ | AdditionalEgress appends custom egress rules to the default DNS + HTTPS rules.<br />Use this to allow traffic to cluster-internal services on non-standard ports. |  | Optional: \{\} <br /> |
@@ -692,6 +714,41 @@ _Appears in:_
 | `ingress` _[IngressSpec](#ingressspec)_ | Ingress configures the Kubernetes Ingress |  | Optional: \{\} <br /> |
 | `httpRoute` _[HTTPRouteSpec](#httproutespec)_ | HTTPRoute configures a Gateway API HTTPRoute.<br />This is an alternative to Ingress for clusters using the Gateway API<br />(gateway.networking.k8s.io). The Gateway API CRDs must be installed. |  | Optional: \{\} <br /> |
 | `metricsIngress` _[MetricsIngressSpec](#metricsingressspec)_ | MetricsIngress controls who may reach the metrics port in the generated<br />NetworkPolicy, independently of application traffic. When unset, the<br />metrics port stays reachable from the instance's own namespace, which is<br />the pre-existing behavior. |  | Optional: \{\} <br /> |
+
+
+#### OTelCollectorImageSpec
+
+
+
+OTelCollectorImageSpec defines the OpenTelemetry Collector container image.
+
+
+
+_Appears in:_
+- [OTelCollectorSpec](#otelcollectorspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `repository` _string_ | Repository is the container image repository. | otel/opentelemetry-collector | Optional: \{\} <br /> |
+| `tag` _string_ | Tag is the container image tag. | 0.120.0 | Optional: \{\} <br /> |
+| `digest` _string_ | Digest is the container image digest for supply chain security.<br />When set, it takes precedence over Tag. |  | Optional: \{\} <br /> |
+
+
+#### OTelCollectorSpec
+
+
+
+OTelCollectorSpec configures the OpenTelemetry Collector metrics sidecar.
+
+
+
+_Appears in:_
+- [MetricsSpec](#metricsspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `image` _[OTelCollectorImageSpec](#otelcollectorimagespec)_ | Image configures the OpenTelemetry Collector container image. |  | Optional: \{\} <br /> |
+| `resources` _[ResourcesSpec](#resourcesspec)_ | Resources specifies compute resources for the OpenTelemetry Collector. |  | Optional: \{\} <br /> |
 
 
 #### ObservabilitySpec
@@ -1118,7 +1175,9 @@ ResourcesSpec defines compute resource requirements
 
 _Appears in:_
 - [ChromiumSpec](#chromiumspec)
+- [GatewaySpec](#gatewayspec)
 - [NetBirdSpec](#netbirdspec)
+- [OTelCollectorSpec](#otelcollectorspec)
 - [OllamaSpec](#ollamaspec)
 - [OpenClawInstanceSpec](#openclawinstancespec)
 - [TailscaleSpec](#tailscalespec)
