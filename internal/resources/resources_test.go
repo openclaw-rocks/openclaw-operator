@@ -2466,13 +2466,11 @@ func TestBuildConfigMapFromBytes_EnrichesExternalConfig(t *testing.T) {
 		t.Errorf("gateway.bind = %v, want %q", gw["bind"], "loopback")
 	}
 
-	// Verify device auth was injected
-	controlUI, ok := gw["controlUi"].(map[string]interface{})
-	if !ok {
-		t.Fatal("expected gateway.controlUi key after enrichment")
-	}
-	if controlUI["dangerouslyDisableDeviceAuth"] != true {
-		t.Errorf("gateway.controlUi.dangerouslyDisableDeviceAuth = %v, want true", controlUI["dangerouslyDisableDeviceAuth"])
+	// The operator must not emit OpenClaw's retired device-auth bypass.
+	if controlUI, ok := gw["controlUi"].(map[string]interface{}); ok {
+		if _, present := controlUI["dangerouslyDisableDeviceAuth"]; present {
+			t.Error("gateway.controlUi.dangerouslyDisableDeviceAuth should not be emitted")
+		}
 	}
 }
 
@@ -2932,95 +2930,6 @@ func TestEnrichConfigWithGatewayBind_InvalidJSON(t *testing.T) {
 	input := []byte(`not valid json`)
 	instance := newTestInstance("bind-invalid-json")
 	out, err := enrichConfigWithGatewayBind(input, instance)
-	if err != nil {
-		t.Fatal("should not error on invalid JSON")
-	}
-
-	if !bytes.Equal(out, input) {
-		t.Errorf("invalid JSON should be returned unchanged")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// enrichConfigWithDeviceAuth tests
-// ---------------------------------------------------------------------------
-
-func TestEnrichConfigWithDeviceAuth(t *testing.T) {
-	input := []byte(`{}`)
-	out, err := enrichConfigWithDeviceAuth(input)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var cfg map[string]interface{}
-	if err := json.Unmarshal(out, &cfg); err != nil {
-		t.Fatal(err)
-	}
-
-	gw, ok := cfg["gateway"].(map[string]interface{})
-	if !ok {
-		t.Fatal("expected gateway key")
-	}
-	controlUI, ok := gw["controlUi"].(map[string]interface{})
-	if !ok {
-		t.Fatal("expected gateway.controlUi key")
-	}
-	if controlUI["dangerouslyDisableDeviceAuth"] != true {
-		t.Errorf("gateway.controlUi.dangerouslyDisableDeviceAuth = %v, want true", controlUI["dangerouslyDisableDeviceAuth"])
-	}
-}
-
-func TestEnrichConfigWithDeviceAuth_PreservesUserOverride(t *testing.T) {
-	input := []byte(`{"gateway":{"controlUi":{"dangerouslyDisableDeviceAuth":false}}}`)
-	out, err := enrichConfigWithDeviceAuth(input)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var cfg map[string]interface{}
-	if err := json.Unmarshal(out, &cfg); err != nil {
-		t.Fatal(err)
-	}
-
-	gw := cfg["gateway"].(map[string]interface{})
-	controlUI := gw["controlUi"].(map[string]interface{})
-	if controlUI["dangerouslyDisableDeviceAuth"] != false {
-		t.Errorf("gateway.controlUi.dangerouslyDisableDeviceAuth = %v, want false (user override)", controlUI["dangerouslyDisableDeviceAuth"])
-	}
-}
-
-func TestEnrichConfigWithDeviceAuth_PreservesOtherFields(t *testing.T) {
-	input := []byte(`{"gateway":{"auth":{"mode":"token","token":"secret"}}}`)
-	out, err := enrichConfigWithDeviceAuth(input)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var cfg map[string]interface{}
-	if err := json.Unmarshal(out, &cfg); err != nil {
-		t.Fatal(err)
-	}
-
-	gw := cfg["gateway"].(map[string]interface{})
-	controlUI, ok := gw["controlUi"].(map[string]interface{})
-	if !ok {
-		t.Fatal("gateway.controlUi should be created")
-	}
-	if controlUI["dangerouslyDisableDeviceAuth"] != true {
-		t.Errorf("gateway.controlUi.dangerouslyDisableDeviceAuth = %v, want true", controlUI["dangerouslyDisableDeviceAuth"])
-	}
-	auth, ok := gw["auth"].(map[string]interface{})
-	if !ok {
-		t.Fatal("gateway.auth should be preserved")
-	}
-	if auth["token"] != "secret" {
-		t.Errorf("gateway.auth.token = %v, want %q", auth["token"], "secret")
-	}
-}
-
-func TestEnrichConfigWithDeviceAuth_InvalidJSON(t *testing.T) {
-	input := []byte(`not valid json`)
-	out, err := enrichConfigWithDeviceAuth(input)
 	if err != nil {
 		t.Fatal("should not error on invalid JSON")
 	}
@@ -9400,11 +9309,8 @@ func TestBuildConfigMap_ChromiumBrowserConfig(t *testing.T) {
 		t.Errorf("browser.attachOnly = %v, want true", browser["attachOnly"])
 	}
 
-	// remoteCdpTimeoutMs gives the browser service time to become ready,
-	// preventing permanent failure when tool registration fires first.
-	timeout, ok := browser["remoteCdpTimeoutMs"].(float64)
-	if !ok || timeout != 30000 {
-		t.Errorf("browser.remoteCdpTimeoutMs = %v, want 30000", browser["remoteCdpTimeoutMs"])
+	if _, hasRemoteCdpTimeout := browser["remoteCdpTimeoutMs"]; hasRemoteCdpTimeout {
+		t.Error("browser.remoteCdpTimeoutMs is not part of the canonical OpenClaw config")
 	}
 
 	profiles, ok := browser["profiles"].(map[string]interface{})
@@ -9423,8 +9329,8 @@ func TestBuildConfigMap_ChromiumBrowserConfig(t *testing.T) {
 		if p["cdpUrl"] != expectedCDP {
 			t.Errorf("browser.profiles.%s.cdpUrl = %v, want %q", name, p["cdpUrl"], expectedCDP)
 		}
-		if p["color"] != "#4285F4" {
-			t.Errorf("browser.profiles.%s.color = %v, want %q", name, p["color"], "#4285F4")
+		if _, ok := p["color"]; ok {
+			t.Errorf("browser.profiles.%s.color is not part of the canonical OpenClaw config", name)
 		}
 	}
 }
@@ -9547,30 +9453,6 @@ func TestBuildConfigMap_ChromiumUserOverrideCdpPort(t *testing.T) {
 	// cdpPort should be preserved
 	if defaultProfile["cdpPort"] != float64(18800) {
 		t.Errorf("user-set cdpPort should be preserved, got %v", defaultProfile["cdpPort"])
-	}
-}
-
-func TestBuildConfigMap_ChromiumUserOverrideRemoteCdpTimeout(t *testing.T) {
-	instance := newTestInstance("cr-override-timeout")
-	instance.Spec.Chromium.Enabled = true
-	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
-		RawExtension: runtime.RawExtension{
-			Raw: []byte(`{"browser":{"remoteCdpTimeoutMs":60000}}`),
-		},
-	}
-
-	cm := BuildConfigMap(instance, "", nil)
-	content := cm.Data["openclaw.json"]
-
-	var parsed map[string]interface{}
-	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
-		t.Fatalf("failed to parse config JSON: %v", err)
-	}
-
-	browser := parsed["browser"].(map[string]interface{})
-	timeout := browser["remoteCdpTimeoutMs"].(float64)
-	if timeout != 60000 {
-		t.Errorf("user-set remoteCdpTimeoutMs should be preserved, got %v", timeout)
 	}
 }
 
@@ -10193,6 +10075,72 @@ func TestBuildPrometheusRule(t *testing.T) {
 			t.Errorf("rule %d runbook_url = %q, expected default base URL", i, runbook)
 		}
 	}
+}
+
+func TestBuildPrometheusRule_PVCClaimSelection(t *testing.T) {
+	tests := []struct {
+		name     string
+		mutate   func(*openclawv1alpha1.OpenClawInstance)
+		wantExpr string
+	}{
+		{
+			name:     "managed singleton claim",
+			mutate:   func(*openclawv1alpha1.OpenClawInstance) {},
+			wantExpr: `persistentvolumeclaim="my-instance-data"`,
+		},
+		{
+			name: "existing claim",
+			mutate: func(instance *openclawv1alpha1.OpenClawInstance) {
+				instance.Spec.Storage.Persistence.ExistingClaim = "restored-openclaw-data"
+			},
+			wantExpr: `persistentvolumeclaim="restored-openclaw-data"`,
+		},
+		{
+			name: "autoscaled claim templates",
+			mutate: func(instance *openclawv1alpha1.OpenClawInstance) {
+				instance.Spec.Availability.AutoScaling = &openclawv1alpha1.AutoScalingSpec{
+					Enabled: Ptr(true),
+				}
+			},
+			wantExpr: `persistentvolumeclaim=~"data-my-instance-[0-9]+"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			instance := newTestInstance("my-instance")
+			tt.mutate(instance)
+
+			expr, ok := prometheusAlertExpr(buildAlerts(instance, defaultRunbookBaseURL), "OpenClawPVCNearlyFull")
+			if !ok {
+				t.Fatal("missing OpenClawPVCNearlyFull alert")
+			}
+			if !strings.Contains(expr, tt.wantExpr) {
+				t.Errorf("PVC alert expression = %q, want selector %q", expr, tt.wantExpr)
+			}
+		})
+	}
+}
+
+func TestBuildPrometheusRule_PersistenceDisabledOmitsPVCAlert(t *testing.T) {
+	instance := newTestInstance("my-instance")
+	instance.Spec.Storage.Persistence.Enabled = Ptr(false)
+
+	if _, ok := prometheusAlertExpr(buildAlerts(instance, defaultRunbookBaseURL), "OpenClawPVCNearlyFull"); ok {
+		t.Fatal("OpenClawPVCNearlyFull alert should be omitted when persistence is disabled")
+	}
+}
+
+func prometheusAlertExpr(alerts []interface{}, alertName string) (string, bool) {
+	for _, candidate := range alerts {
+		rule, ok := candidate.(map[string]interface{})
+		if !ok || rule["alert"] != alertName {
+			continue
+		}
+		expr, ok := rule["expr"].(string)
+		return expr, ok
+	}
+	return "", false
 }
 
 // ---------------------------------------------------------------------------
